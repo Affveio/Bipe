@@ -1,0 +1,18 @@
+{
+    "versao": "2.2.0",
+    "data": "2026-09-22",
+    "titulo": "Versão 2.2.0 Comercial",
+    "descricao": "Correções de layout e tabelas, multi-cidades e conferência Loggi Aba 3, voz em divergências com nome da cidade bipada e inicialização silenciosa sem CMD.",
+    "arquivos": [
+        "app.py",
+        "app.js",
+        "index.html",
+        "style.css",
+        "dashboard.html",
+        "dashboard.js",
+        "dashboard.css",
+        "licenca.py",
+        "atualizador.py",
+        "config_plataformas.json"
+    ]
+}

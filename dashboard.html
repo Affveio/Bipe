@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Painel de Gestão e Auditoria - Triagem Logística</title>
+    <link rel="stylesheet" href="dashboard.css">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <!-- Chart.JS para gráficos elegantes -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- SheetJS para ler arquivos Excel/CSV no client-side -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <!-- Topo / Cabeçalho -->
+        <header>
+            <div class="header-title">
+                <h1>GALPÃO MONITORED</h1>
+                <p>Dashboard de Gestão, Rendimento e Auditoria de Triagem</p>
+            </div>
+            
+            <div class="header-actions">
+                <!-- Botão de Configurações -->
+                <button id="btn-settings" class="btn-settings" title="Configurações de Motoristas e XPath">
+                    <span>⚙️</span> CONFIGURAÇÕES
+                </button>
+
+                <!-- Botão Conciliar Planilhas -->
+                <button id="btn-toggle-reconciliar" class="btn-nav" style="border-color: #38bdf8; color: #38bdf8;" title="Conciliar planilhas de entrega (Anjun, iMile, Delivered)">
+                    <span>🔄</span> CONCILIAR PLANILHAS
+                </button>
+                
+                <!-- Botão Voltar para Operação -->
+                <a href="index.html" class="btn-nav" title="Ir para a tela do Operador">
+                    <span>🔁</span> TELA OPERAÇÃO
+                </a>
+                
+                <!-- Botão Limpar Histórico -->
+                <button id="btn-clear-history" class="btn-clear" title="Excluir permanentemente o histórico de bips">
+                    <span>🗑️</span> LIMPAR DADOS
+                </button>
+            </div>
+        </header>        <!-- Filtro de Período Geral -->
+        <section class="period-filter-card">
+            <div class="period-row">
+                <div class="period-title">
+                    📅 BUSCAR PERÍODO DE TRIAGEM:
+                </div>
+                <div class="period-inputs">
+                    <div class="period-input-group">
+                        <label for="period-start">De:</label>
+                        <input type="date" id="period-start">
+                    </div>
+                    <div class="period-input-group">
+                        <label for="period-end">Até:</label>
+                        <input type="date" id="period-end">
+                    </div>
+                    <button id="btn-search-period" class="btn-search-period">
+                        🔍 Buscar Dados
+                    </button>
+                </div>
+            </div>
+        </section>
+        <!-- Grid de KPIs Globais (Conciliação e Reconciliação com Split de Gráfico CSS por Empresa) -->
+        <section class="kpi-grid" style="margin-top: 10px;">
+            <!-- 1. Total Triados -->
+            <div class="kpi-card total">
+                <div class="kpi-main">
+                    <h3>Total Triados (Local)</h3>
+                    <div class="kpi-value" id="kpi-total-triados">0</div>
+                </div>
+                <div class="kpi-mini-chart">
+                    <div class="mini-bar">
+                        <div class="mini-segment anjun-seg" id="kpi-triados-anjun-seg" style="width: 0%;"></div>
+                        <div class="mini-segment imile-seg" id="kpi-triados-imile-seg" style="width: 0%;"></div>
+                    </div>
+                    <div class="mini-labels">
+                        <span class="text-anjun">A: <span id="kpi-triados-anjun">0</span></span>
+                        <span class="text-imile">i: <span id="kpi-triados-imile">0</span></span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 2. Entregues -->
+            <div class="kpi-card success">
+                <div class="kpi-main">
+                    <h3>Entregues (Planilha)</h3>
+                    <div class="kpi-value" id="kpi-total-entregues">0</div>
+                </div>
+                <div class="kpi-mini-chart">
+                    <div class="mini-bar">
+                        <div class="mini-segment anjun-seg" id="kpi-entregues-anjun-seg" style="width: 0%;"></div>
+                        <div class="mini-segment imile-seg" id="kpi-entregues-imile-seg" style="width: 0%;"></div>
+                    </div>
+                    <div class="mini-labels">
+                        <span class="text-anjun">A: <span id="kpi-entregues-anjun">0</span></span>
+                        <span class="text-imile">i: <span id="kpi-entregues-imile">0</span></span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 3. Em Rota -->
+            <div class="kpi-card route">
+                <div class="kpi-main">
+                    <h3>Em Rota (Planilha)</h3>
+                    <div class="kpi-value" id="kpi-total-em-rota">0</div>
+                </div>
+                <div class="kpi-mini-chart">
+                    <div class="mini-bar">
+                        <div class="mini-segment anjun-seg" id="kpi-em-rota-anjun-seg" style="width: 0%;"></div>
+                        <div class="mini-segment imile-seg" id="kpi-em-rota-imile-seg" style="width: 0%;"></div>
+                    </div>
+                    <div class="mini-labels">
+                        <span class="text-anjun">A: <span id="kpi-em-rota-anjun">0</span></span>
+                        <span class="text-imile">i: <span id="kpi-em-rota-imile">0</span></span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 4. Com Problema -->
+            <div class="kpi-card error">
+                <div class="kpi-main">
+                    <h3>Com Problema</h3>
+                    <div class="kpi-value" id="kpi-total-problemas">0</div>
+                </div>
+                <div class="kpi-mini-chart">
+                    <div class="mini-bar">
+                        <div class="mini-segment anjun-seg" id="kpi-problemas-anjun-seg" style="width: 0%;"></div>
+                        <div class="mini-segment imile-seg" id="kpi-problemas-imile-seg" style="width: 0%;"></div>
+                    </div>
+                    <div class="mini-labels">
+                        <span class="text-anjun">A: <span id="kpi-problemas-anjun">0</span></span>
+                        <span class="text-imile">i: <span id="kpi-problemas-imile">0</span></span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 5. Não Conciliados -->
+            <div class="kpi-card pending">
+                <div class="kpi-main">
+                    <h3>Não Conciliados</h3>
+                    <div class="kpi-value" id="kpi-total-pendentes">0</div>
+                </div>
+                <div class="kpi-mini-chart">
+                    <div class="mini-bar">
+                        <div class="mini-segment anjun-seg" id="kpi-pendentes-anjun-seg" style="width: 0%;"></div>
+                        <div class="mini-segment imile-seg" id="kpi-pendentes-imile-seg" style="width: 0%;"></div>
+                    </div>
+                    <div class="mini-labels">
+                        <span class="text-anjun">A: <span id="kpi-pendentes-anjun">0</span></span>
+                        <span class="text-imile">i: <span id="kpi-pendentes-imile">0</span></span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 6. Aproveitamento -->
+            <div class="kpi-card efficiency">
+                <div class="kpi-main">
+                    <h3>Aproveitamento</h3>
+                    <div class="kpi-value" id="kpi-taxa-aproveitamento">0%</div>
+                </div>
+                <div class="kpi-mini-chart" style="gap: 2px; justify-content: center;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.65rem; width: 100%;">
+                        <span class="text-anjun" style="font-weight: 700;">A:</span>
+                        <span id="kpi-aproveitamento-anjun" style="color: #cbd5e1; font-weight: 700;">0%</span>
+                    </div>
+                    <div class="mini-bar-flat" style="height: 4px; background: rgba(255,255,255,0.05); border-radius: 2px; overflow: hidden; width: 100%;">
+                        <div id="kpi-aproveitamento-anjun-bar" style="height: 100%; background: #38bdf8; width: 0%;"></div>
+                    </div>
+                    <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.65rem; width: 100%; margin-top: 2px;">
+                        <span class="text-imile" style="font-weight: 700;">i:</span>
+                        <span id="kpi-aproveitamento-imile" style="color: #cbd5e1; font-weight: 700;">0%</span>
+                    </div>
+                    <div class="mini-bar-flat" style="height: 4px; background: rgba(255,255,255,0.05); border-radius: 2px; overflow: hidden; width: 100%;">
+                        <div id="kpi-aproveitamento-imile-bar" style="height: 100%; background: #fb7185; width: 0%;"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Seção do Gráfico de Desempenho dos Motoristas (100% Stacked Horizontal Bar Chart) -->
+        <section style="margin-top: 16px; margin-bottom: 16px;">
+            <div class="chart-card">
+                <h2 style="border-left-color: #10b981;">📊 Gráfico de Rendimento das Entregas por Motorista (%)</h2>
+                <div class="chart-container" style="height: auto; min-height: 380px; position: relative;">
+                    <canvas id="chart-motoristas"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- Grid de Cartões de Motoristas (Painel Visual) -->
+        <section class="driver-cards-section" style="margin-top: 10px; margin-bottom: 10px;">
+            <div class="driver-cards-header">
+                <h2>👤 Monitoramento e Desempenho por Motorista</h2>
+                <p>Taxa de entrega (doughnut gráfico) e quantidade de pacotes controlados em tempo real de cada motorista.</p>
+            </div>
+            <div class="driver-cards-grid" id="driver-cards-container">
+                <div style="grid-column: 1 / -1; text-align: center; color: #94a3b8; padding: 30px;">
+                    Carregando cartões de desempenho dos motoristas...
+                </div>
+            </div>
+        </section>
+
+        <!-- Seção de Gráficos -->
+        <section class="charts-grid">
+            <!-- Gráfico 1: Volume por Cidades -->
+            <div class="chart-card">
+                <h2>Volume de Pacotes por Cidade</h2>
+                <div class="chart-container">
+                    <canvas id="chart-cidades"></canvas>
+                </div>
+            </div>
+            
+            <!-- Gráfico 2: Volume por Plataforma (Empresa) -->
+            <div class="chart-card">
+                <h2>Distribuição por Plataforma</h2>
+                <div class="chart-container">
+                    <canvas id="chart-plataformas"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- Seção de Resumo de Triagem por Motorista -->
+        <section class="history-card" id="driver-summary-card" style="margin-top: 20px; margin-bottom: 20px; border-color: #38bdf8;">
+            <div class="history-card-header">
+                <h2>📋 Resumo de Triagem por Motorista</h2>
+                <p>Quantidade total de pacotes triados localmente por cada motorista no período selecionado (independente de conciliação).</p>
+            </div>
+            
+            <div class="table-container">
+                <table class="audit-table">
+                    <thead>
+                        <tr>
+                            <th>Motorista</th>
+                            <th>Plataforma</th>
+                            <th style="text-align: center;">Total Triados (Local)</th>
+                            <th>Cidades Atendidas</th>
+                        </tr>
+                    </thead>
+                    <tbody id="driver-summary-body">
+                        <tr>
+                            <td colspan="4" style="text-align: center; color: #94a3b8; padding: 20px;">
+                                Nenhum pacote triado encontrado no período selecionado.
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Seção de Controle de Motoristas (Desempenho de Entregas) -->
+        <section class="history-card" id="driver-performance-card" style="margin-top: 20px; margin-bottom: 20px;">
+            <div class="history-card-header">
+                <h2>📈 Controle de Entregas por Motorista (Reconciliação Excel)</h2>
+                <p>Resumo comparativo dos pacotes triados na base vs status final de entrega da planilha importada.</p>
+            </div>
+            
+            <div class="table-container">
+                <table class="audit-table">
+                    <thead>
+                        <tr>
+                            <th>Motorista (Triagem)</th>
+                            <th>Plataforma</th>
+                            <th style="text-align: center;">Triados (Local)</th>
+                            <th style="text-align: center; color: #10b981;">Entregues</th>
+                            <th style="text-align: center; color: #38bdf8;">Em Rota</th>
+                            <th style="text-align: center; color: #f43f5e;">Com Problema</th>
+                            <th style="text-align: center; color: #94a3b8;">Não Conciliados</th>
+                            <th style="width: 200px;">Aproveitamento</th>
+                        </tr>
+                    </thead>
+                    <tbody id="driver-performance-body">
+                        <tr>
+                            <td colspan="8" style="text-align: center; color: #94a3b8; padding: 20px;">
+                                Aguardando importação de planilha de entregas para calcular o desempenho dos motoristas.
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Tabela de Auditoria Completa -->
+        <section class="history-card">
+            <div class="history-card-header">
+                <h2>Auditoria Detalhada de Leituras</h2>
+                
+                <!-- Filtros Dinâmicos -->
+                <div class="filters-row">
+                    <div class="filter-group">
+                        <label for="filter-platform">Plataforma:</label>
+                        <select id="filter-platform">
+                            <option value="">Todas</option>
+                        </select>
+                    </div>
+                    
+                    <div class="filter-group">
+                        <label for="filter-status">Status Triagem:</label>
+                        <select id="filter-status">
+                            <option value="">Todos</option>
+                            <option value="ok">Apenas Sucesso</option>
+                            <option value="falha">Apenas Falhas</option>
+                        </select>
+                    </div>
+                    
+                    <div class="filter-group">
+                        <label for="filter-delivery-status">Status Entrega:</label>
+                        <select id="filter-delivery-status">
+                            <option value="">Todos</option>
+                            <option value="ENTREGUE">Entregues</option>
+                            <option value="EM ROTA">Em Rota</option>
+                            <option value="PROBLEMA">Com Problema</option>
+                            <option value="PENDENTE">Não Conciliados (Pendentes)</option>
+                        </select>
+                    </div>
+                    
+                    <div class="filter-group">
+                        <label for="search-input">Pesquisar:</label>
+                        <input type="text" id="search-input" placeholder="QR Code ou Motorista...">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tabela -->
+            <div class="table-container">
+                <table class="audit-table">
+                    <thead>
+                        <tr>
+                            <th>Data & Horário</th>
+                            <th>Código do Pacote</th>
+                            <th>Plataforma</th>
+                            <th>Cidade Destino</th>
+                            <th>Motorista (Triagem)</th>
+                            <th>Status Triagem</th>
+                            <th>Status Entrega</th>
+                            <th>Motorista (Planilha)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="audit-table-body">
+                        <tr>
+                            <td colspan="6" style="text-align: center; color: #94a3b8;">Carregando histórico de auditoria...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </div>
+
+    <!-- MODAL DE CONCILIAÇÃO DE PLANILHAS (LOCAL) -->
+    <div id="reconcile-modal" class="modal-overlay">
+        <div class="modal-content" style="max-width: 500px;">
+            <header class="modal-header">
+                <h2>🔄 Conciliar Planilhas da Pasta</h2>
+                <button id="btn-close-reconcile-modal" class="btn-close-modal">&times;</button>
+            </header>
+            <p style="font-size: 0.85rem; color: #94a3b8; margin-top: 4px; margin-bottom: 20px;">
+                Selecione qual planilha da pasta do projeto você deseja conciliar para atualizar o status de entrega dos motoristas:
+            </p>
+            <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 12px;">
+                <button id="btn-import-local-anjun" class="btn-local-import" style="padding: 14px; font-size: 0.95rem; border-radius: 8px; display: flex; align-items: center; justify-content: center; gap: 8px;" title="Importar arquivo Anjun.xlsx na pasta do projeto">🔄 Conciliar Anjun.xlsx</button>
+                <button id="btn-import-local-imile" class="btn-local-import" style="padding: 14px; font-size: 0.95rem; border-radius: 8px; display: flex; align-items: center; justify-content: center; gap: 8px;" title="Importar arquivo Imile.xlsx na pasta do projeto">🔄 Conciliar Imile.xlsx</button>
+                <button id="btn-import-local-delivered" class="btn-local-import" style="padding: 14px; font-size: 0.95rem; border-radius: 8px; display: flex; align-items: center; justify-content: center; gap: 8px;" title="Importar arquivo Delivered.xlsx na pasta do projeto">🔄 Conciliar Delivered.xlsx</button>
+            </div>
+            <div id="import-status-text" class="import-status" style="margin-top: 15px; text-align: center; color: #94a3b8; font-size: 0.85rem;">Pronto para sincronização local</div>
+        </div>
+    </div>
+
+    <!-- MODAL DE CONFIGURAÇÕES -->
+    <div id="settings-modal" class="modal-overlay">
+        <div class="modal-content">
+            <header class="modal-header">
+                <h2>PAINEL DE CONFIGURAÇÕES</h2>
+                <button id="btn-close-modal" class="btn-close-modal">&times;</button>
+            </header>
+            
+            <!-- Abas do Modal -->
+            <nav class="modal-tabs">
+                <button class="tab-link active" data-tab="tab-cidades">Cidades</button>
+                <button class="tab-link" data-tab="tab-motoristas">Motoristas</button>
+                <button class="tab-link" data-tab="tab-plataformas">Plataformas & XPath</button>
+            </nav>
+
+            <!-- CONTEÚDO DAS ABAS -->
+            <div class="tab-body">
+                <!-- ABA 1: CIDADES -->
+                <div id="tab-cidades" class="tab-content active">
+                    <div class="settings-grid">
+                        <!-- Lista de Cidades Cadastradas -->
+                        <div class="settings-column">
+                            <h3>Cidades Cadastradas</h3>
+                            <div class="list-container">
+                                <table class="settings-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Cidade</th>
+                                            <th>Ação</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="cidades-list-body">
+                                        <!-- Carregado via JS -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        
+                        <!-- Formulário de Cadastro de Cidade -->
+                        <div class="settings-column form-panel">
+                            <h3>Adicionar Nova Cidade</h3>
+                            <form id="form-cidade">
+                                <div class="form-group">
+                                    <label for="cid-nome">Nome da Cidade (como aparece no comprovante):</label>
+                                    <input type="text" id="cid-nome" placeholder="Ex: Campinas" required>
+                                </div>
+                                <button type="submit" class="btn-submit">Salvar Cidade</button>
+                            </form>
+                            
+                            <div class="tip-box">
+                                <strong>Nota:</strong> Remover uma cidade irá excluir também todos os motoristas mapeados para ela.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ABA 2: MOTORISTAS -->
+                <div id="tab-motoristas" class="tab-content">
+                    <div class="settings-grid">
+                        <!-- Lista de Mapeamentos Existentes -->
+                        <div class="settings-column">
+                            <h3>Mapeamentos Cadastrados</h3>
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label for="motorista-plataforma-select" style="font-weight: 500; font-size: 0.95rem; margin-bottom: 6px; display: block; color: #cbd5e1;">Plataforma:</label>
+                                <select id="motorista-plataforma-select" style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #475569; background: #1e293b; color: #f8fafc; font-size: 0.9rem; outline: none; margin-bottom: 10px;">
+                                    <!-- Carregado via JS -->
+                                </select>
+                            </div>
+                            <div class="list-container">
+                                <table class="settings-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Cidade</th>
+                                            <th>Motorista</th>
+                                            <th>Ação</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="motoristas-list-body">
+                                        <!-- Carregado via JS -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        
+                        <!-- Formulário de Cadastro/Edição de Mapeamento -->
+                        <div class="settings-column form-panel">
+                            <h3>Adicionar Novo Mapeamento</h3>
+                            <form id="form-motorista">
+                                <div class="form-group">
+                                    <label for="mot-cidade-select">Cidade:</label>
+                                    <select id="mot-cidade-select" required>
+                                        <option value="">Carregando cidades...</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label for="mot-nome">Nome do Motorista para Atribuição:</label>
+                                    <input type="text" id="mot-nome" placeholder="Ex: Motorista 2" required>
+                                </div>
+                                <button type="submit" class="btn-submit">Salvar Mapeamento</button>
+                            </form>
+                            
+                            <div class="tip-box">
+                                <strong>Dica:</strong> É permitido cadastrar mais de um motorista para a mesma cidade! Eles ficarão salvos simultaneamente e a triagem aceitará qualquer um deles na rota.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ABA 2: PLATAFORMAS & XPATH -->
+                <div id="tab-plataformas" class="tab-content">
+                    <div class="settings-grid">
+                        <!-- Lista de Plataformas / Cadastro -->
+                        <div class="settings-column list-platforms-col">
+                            <h3>Plataformas Cadastradas</h3>
+                            <div id="platforms-buttons-container" class="platforms-list">
+                                <!-- Botões das plataformas cadastrados via JS -->
+                            </div>
+                            <button id="btn-new-platform" class="btn-add-new-platform">+ Nova Plataforma</button>
+                        </div>
+                        
+                        <!-- Formulário da Plataforma -->
+                        <div class="settings-column form-panel-large">
+                            <h3 id="platform-form-title">Editar Plataforma</h3>
+                            <form id="form-plataforma">
+                                <input type="hidden" id="plat-id">
+                                
+                                <div class="form-row-2">
+                                    <div class="form-group">
+                                        <label for="plat-nome">Nome da Plataforma:</label>
+                                        <input type="text" id="plat-nome" placeholder="Ex: Sequoia" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="plat-id-input">ID da Plataforma (letras minúsculas, sem espaço):</label>
+                                        <input type="text" id="plat-id-input" placeholder="ex: sequoia" required>
+                                    </div>
+                                </div>
+
+                                <div class="form-section-title">ETAPA 0: CREDENCIAIS DE LOGIN (OPCIONAL)</div>
+                                <div class="form-row-2">
+                                    <div class="form-group">
+                                        <label for="plat-login-user">Usuário de Login:</label>
+                                        <input type="text" id="plat-login-user" placeholder="Usuário / E-mail de login">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="plat-login-pass">Senha de Login:</label>
+                                        <input type="password" id="plat-login-pass" placeholder="Senha de login">
+                                    </div>
+                                </div>
+
+                                <div class="form-section-title">ETAPA 1: RECEBIMENTO / LEITURA</div>
+                                <div class="form-group">
+                                    <label for="plat-recebimento-url">URL de Recebimento:</label>
+                                    <input type="url" id="plat-recebimento-url" placeholder="https://..." required>
+                                </div>
+                                <div class="form-row-2">
+                                    <div class="form-group">
+                                        <label for="plat-recebimento-input-xpath">XPath do Input de Entrada (Bip):</label>
+                                        <input type="text" id="plat-recebimento-input-xpath" placeholder="//*[@id='...']" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="plat-recebimento-dados-xpath">XPath da Área de Dados do Pacote (Cidade):</label>
+                                        <input type="text" id="plat-recebimento-dados-xpath" placeholder="//*[@id='...']" required>
+                                    </div>
+                                </div>
+
+                                <div class="form-section-title">ETAPA 2: ATRIBUIÇÃO DE MOTORISTA</div>
+                                <div class="form-group">
+                                    <label for="plat-atribuicao-url">URL de Atribuição:</label>
+                                    <input type="url" id="plat-atribuicao-url" placeholder="https://..." required>
+                                </div>
+                                <div class="form-row-2">
+                                    <div class="form-group">
+                                        <label for="plat-atribuicao-motorista-xpath">XPath do Campo do Motorista:</label>
+                                        <input type="text" id="plat-atribuicao-motorista-xpath" placeholder="//*[@id='...']" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="plat-atribuicao-bip-xpath">XPath do Campo de Bip da Atribuição:</label>
+                                        <input type="text" id="plat-atribuicao-bip-xpath" placeholder="//*[@id='...']" required>
+                                    </div>
+                                </div>
+
+                                <div class="form-actions-row">
+                                    <button type="submit" class="btn-submit">Salvar Plataforma</button>
+                                    <button type="button" id="btn-delete-platform" class="btn-delete">Excluir Plataforma</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL DE ALERTA DE SEGURANÇA (GERÊNCIA) -->
+    <div id="alarm-overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.95); backdrop-filter: blur(10px); z-index: 10000; justify-content: center; align-items: center; transition: all 0.3s ease;">
+        <div style="background: #1e1b4b; border: 3px solid #f43f5e; border-radius: 16px; width: 90%; max-width: 500px; padding: 30px; text-align: center; box-shadow: 0 25px 50px -12px rgba(244, 63, 94, 0.4); animation: pulse-border 1.5s infinite alternate;">
+            <div style="font-size: 4rem; margin-bottom: 15px; animation: bounce-icon 0.8s infinite alternate;">🚨</div>
+            <h2 style="color: #f43f5e; font-size: 1.6rem; font-weight: 800; letter-spacing: 0.5px; margin-bottom: 15px; text-transform: uppercase;">ALERTA DE AUDITORIA</h2>
+            <p style="color: #fda4af; font-size: 1.15rem; font-weight: 600; margin-bottom: 20px;">TENTATIVA DE LANÇAMENTO DUPLICADO!</p>
+            
+            <div style="background: #0f172a; border-radius: 8px; padding: 15px; text-align: left; margin-bottom: 25px; border: 1px solid #312e81; font-size: 0.92rem; line-height: 1.6;">
+                <div style="color: #94a3b8;">Código QR: <strong id="alarm-qr-code" style="color: #f1f5f9; font-family: monospace; font-size: 1.05rem;">-</strong></div>
+                <div style="color: #94a3b8; margin-top: 5px;">Motorista do Lote Anterior: <strong id="alarm-motorista" style="color: #38bdf8;">-</strong></div>
+                <div style="color: #94a3b8; margin-top: 5px;">Cidade de Destino: <strong id="alarm-cidade" style="color: #4ade80;">-</strong></div>
+                <div style="color: #94a3b8; margin-top: 5px;">Bipado Originalmente em: <strong id="alarm-timestamp" style="color: #f472b6;">-</strong></div>
+            </div>
+            
+            <button id="btn-alarm-dismiss" style="background: #f43f5e; color: #fff; border: none; padding: 12px 30px; border-radius: 8px; font-weight: 700; font-size: 1rem; cursor: pointer; transition: all 0.2s; box-shadow: 0 4px 14px 0 rgba(244, 63, 94, 0.4); width: 100%;">
+                CIENTE DO REGISTRO
+            </button>
+        </div>
+    </div>
+    
+    <style>
+        @keyframes pulse-border {
+            0% { border-color: #f43f5e; box-shadow: 0 0 10px rgba(244, 63, 94, 0.2); }
+            100% { border-color: #fda4af; box-shadow: 0 0 30px rgba(244, 63, 94, 0.6); }
+        }
+        @keyframes bounce-icon {
+            0% { transform: translateY(0) scale(1); }
+            100% { transform: translateY(-8px) scale(1.1); }
+        }
+    </style>
+
+    <!-- Script com lógica do dashboard -->
+    <script src="dashboard.js"></script>
+</body>
+</html>

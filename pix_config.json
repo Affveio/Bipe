@@ -1,0 +1,9 @@
+{
+    "chave_pix": "14996405436",
+    "tipo_chave": "TELEFONE",
+    "beneficiario": "GS TRANSPORTES",
+    "cidade": "MARILIA",
+    "valor_padrao_mensalidade": 150.00,
+    "mercado_pago_access_token": "",
+    "permitir_simulacao_teste": true
+}

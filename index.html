@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Painel de Triagem Logística - Multissite</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800;900&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="dashboard">
+        <!-- Linha do Topo -->
+        <header class="top-bar">
+            <div class="logo">GALPÃO MONITORED</div>
+            
+            <div class="top-controls">
+                <!-- Seletor de Plataforma Ativa -->
+                <div class="control-group">
+                    <label for="platform-selector">PLATAFORMA:</label>
+                    <select id="platform-selector">
+                        <option value="">Carregando...</option>
+                    </select>
+                </div>
+
+                <!-- Botão Modo Pacote Solto (Exclusivo iMile) -->
+                <div id="container-pacote-solto" style="display: none;">
+                    <button type="button" id="btn-pacote-solto" class="btn-pacote-solto" title="Clique para alternar entre Pacote Solto e Saca">
+                        <span class="btn-solto-icon">📦</span>
+                        <span class="btn-solto-label">PACOTE SOLTO:</span>
+                        <span id="status-pacote-solto" class="btn-solto-badge badge-off">NÃO</span>
+                    </button>
+                </div>
+
+                <!-- Seletor de Voz -->
+                <div class="control-group">
+                    <label for="voice-selector">VOZ:</label>
+                    <select id="voice-selector">
+                        <option value="">Carregando vozes...</option>
+                    </select>
+                </div>
+                
+                <!-- Modo Consulta Toggle (Ocultado a pedido do usuário) -->
+                <div class="control-group" id="container-consult-toggle" style="display: none;">
+                    <label for="consult-toggle">CONSULTA:</label>
+                    <select id="consult-toggle" style="color: #f87171; font-weight: bold;">
+                        <option value="ativado" style="color: #4ade80;">ATIVADO</option>
+                        <option value="desativado" style="color: #f87171;" selected>DESATIVADO</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Ações e Indicadores à Direita (Contador, Configurações e Reiniciar) -->
+            <div class="top-right-group">
+                <button type="button" id="btn-status-licenca" class="btn-licenca-pill" style="display: none;" title="Status da Licença Comercial (Clique para detalhes ou renovação)">
+                    <span id="icone-status-licenca">🔒</span>
+                    <span id="texto-status-licenca">LICENÇA</span>
+                </button>
+                <div class="counter-box">
+                    <span class="counter-label">PACOTES HOJE</span>
+                    <span id="total-contador" class="counter-value">0</span>
+                </div>
+                <button type="button" id="btn-abrir-configuracoes" class="btn-config-icon" title="Painel de Configurações (Cidades, Motoristas e Credenciais)">⚙️</button>
+                <button type="button" id="btn-reiniciar-sistema" class="btn-reiniciar-sistema" title="Reiniciar Sistema (Fecha o Chrome travado e reinicia o CMD/Servidor)">
+                    🔄 REINICIAR
+                </button>
+            </div>
+        </header>
+
+        <!-- Painel Central Dividido: Status da Triagem e Configuração do Lote de Atribuição -->
+        <!-- Layout Principal: Coluna Esquerda (Operação & Histórico) + Coluna Direita (Bipados por Motorista - Altura Total) -->
+        <div class="workspace-layout">
+            <!-- COLUNA ESQUERDA -->
+            <div class="workspace-left">
+                <!-- Linha Superior: Status e Atribuição de Lote -->
+                <div class="top-row-grids">
+                    <!-- Painel de Destaque Gigante (Triagem) -->
+                    <main id="status-panel" class="status-container awaiting" style="padding: 16px 20px;">
+                        <div class="scanner-laser"></div>
+                        <h2 id="status-label" class="status-title" style="font-size: 2.3rem; letter-spacing: 1px; margin-bottom: 2px;">AGUARDANDO BIP</h2>
+                        <p id="sub-status-label" class="status-subtitle" style="font-size: 0.9rem; margin-top: 2px;">Aponte o leitor para o QR Code do produto</p>
+                        
+                        <!-- Entrada Manual de Código Integrada -->
+                        <div id="manual-input-container" style="margin-top: 14px; display: flex; flex-direction: row; gap: 8px; justify-content: center; align-items: center; width: 90%; max-width: 380px; z-index: 10;">
+                            <input type="text" id="manual-code-input" placeholder="DIGITAR CÓDIGO MANUAL..." style="flex: 1; padding: 7px 12px; font-size: 0.82rem; background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(148, 163, 184, 0.3); border-radius: 6px; color: #fff; text-transform: uppercase; font-weight: 700; outline: none; transition: all 0.2s;" onfocus="this.style.borderColor='#38bdf8'; this.style.boxShadow='0 0 10px rgba(56,189,248,0.2)'" onblur="this.style.borderColor='rgba(148, 163, 184, 0.3)'; this.style.boxShadow='none'">
+                            <button id="btn-manual-enviar" style="background: linear-gradient(135deg, #0284c7, #0369a1); border: none; color: #fff; padding: 7px 16px; font-size: 0.82rem; font-weight: 800; border-radius: 6px; cursor: pointer; transition: all 0.2s; letter-spacing: 0.5px; box-shadow: 0 4px 10px rgba(2, 132, 199, 0.25);" onmouseover="this.style.filter='brightness(1.15)'" onmouseout="this.style.filter='none'">
+                                PROCESSAR
+                            </button>
+                        </div>
+                    </main>
+
+                    <!-- Painel de Atribuição de Lote -->
+                    <section class="history-section" style="display: flex; flex-direction: column; justify-content: flex-start; padding: 12px 16px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid #1e293b; padding-bottom: 6px;">
+                            <h3 style="margin: 0; color: #f1f5f9; font-size: 0.8rem; letter-spacing: 0.5px; display: flex; align-items: center; gap: 6px;">
+                                <span>🚚</span> ATRIBUIÇÃO DE MOTORISTA
+                            </h3>
+                            <div id="atribuicao-counter" style="font-size: 0.8rem; font-weight: 800; color: #38bdf8; background: rgba(56, 189, 248, 0.1); border: 1px solid rgba(56, 189, 248, 0.25); padding: 2px 8px; border-radius: 4px;">
+                                0 pacotes
+                            </div>
+                        </div>
+                        
+                        <div style="display: flex; flex-direction: row; width: 100%; flex: 1; gap: 14px; align-items: stretch;">
+                            <!-- Coluna Esquerda: Controles -->
+                            <div style="flex: 1.1; display: flex; flex-direction: column; justify-content: space-between; gap: 8px; padding-right: 12px; border-right: 1px solid #1e293b;">
+                                <div id="container-driver-standard" style="display: flex; flex-direction: column; gap: 4px;">
+                                    <label for="driver-select" style="font-size: 0.68rem; font-weight: 800; color: #94a3b8; letter-spacing: 0.5px;">MOTORISTA ATIVO:</label>
+                                    <select id="driver-select" style="width: 100%; padding: 6px 10px; border-radius: 6px; background: #0f172a; color: #fff; border: 1px solid #334155; font-size: 0.85rem; font-weight: 700; outline: none; cursor: pointer;">
+                                        <option value="">Apenas Entrada (Sem Atribuição)</option>
+                                    </select>
+                                </div>
+
+                                <!-- Container Multi-Cidades exclusivo Loggi -->
+                                <div id="container-loggi-cities" style="display: none; flex-direction: column; gap: 4px;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                                        <label for="loggi-city-add-select" style="font-size: 0.68rem; font-weight: 800; color: #38bdf8; letter-spacing: 0.5px;">CIDADES DO GRUPO (LOGGI):</label>
+                                        <button type="button" id="btn-limpar-cidades-loggi" style="background: none; border: none; color: #f87171; font-size: 0.62rem; font-weight: 700; cursor: pointer; padding: 0;" title="Limpar todas as cidades selecionadas">✕ Limpar</button>
+                                    </div>
+                                    <select id="loggi-city-add-select" style="width: 100%; padding: 6px 10px; border-radius: 6px; background: #0f172a; color: #fff; border: 1px solid #0284c7; font-size: 0.82rem; font-weight: 700; outline: none; cursor: pointer;">
+                                        <option value="">+ Adicionar Cidade ao Grupo...</option>
+                                    </select>
+                                    <div id="loggi-selected-cities-tags" style="display: flex; flex-wrap: wrap; gap: 4px; max-height: 48px; overflow-y: auto; margin-top: 2px;">
+                                        <!-- Badges gerados dinamicamente via JS -->
+                                    </div>
+                                </div>
+                                
+                                <div id="atribuicao-status-area" style="text-align: center; padding: 2px 0;">
+                                    <p id="atribuicao-feedback" style="font-size: 0.72rem; color: #94a3b8; margin: 0; font-weight: 600;">Aguardando início...</p>
+                                </div>
+                                
+                                <button id="btn-finalizar-lote" style="width: 100%; background: linear-gradient(135deg, #ef4444, #dc2626); border: none; color: #fff; padding: 8px 12px; font-size: 0.8rem; font-weight: 900; border-radius: 6px; cursor: pointer; transition: all 0.2s; text-transform: uppercase; letter-spacing: 0.8px; box-shadow: 0 4px 12px rgba(239, 68, 68, 0.25);" onmouseover="this.style.filter='brightness(1.15)'" onmouseout="this.style.filter='none'">
+                                    ✓ FINALIZAR LOTE
+                                </button>
+                            </div>
+                            
+                            <!-- Coluna Direita: Cidades do Motorista -->
+                            <div style="flex: 1; display: flex; flex-direction: column; gap: 4px; overflow: hidden;">
+                                <span id="driver-cities-label" style="font-size: 0.68rem; font-weight: 800; color: #94a3b8; letter-spacing: 0.5px; text-transform: uppercase;">
+                                    CIDADES VINCULADAS:
+                                </span>
+                                <div id="driver-cities-list-box" style="flex: 1; background: #0a0d14; border: 1px solid #1e293b; border-radius: 6px; padding: 6px 10px; font-size: 0.76rem; color: #38bdf8; overflow-y: auto; line-height: 1.4; font-weight: 600;">
+                                    <span style="color: #64748b; font-style: italic;">Nenhum motorista selecionado</span>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+
+                <!-- Input Camuflado de Foco Eterno da Triagem -->
+                <div class="input-zone">
+                    <input type="text" id="qr-input" autocomplete="off" placeholder="Clique em qualquer lugar e bipe...">
+                </div>
+
+                <!-- Barra de Controle de Histórico e Fechamento -->
+                <div class="fechamento-bar-container" style="background: #11141c; border: 1px solid #1e2638; border-radius: 8px; padding: 4px 12px; display: flex; flex-direction: row; justify-content: space-between; align-items: center; gap: 10px; margin: 0; font-family: 'Outfit', sans-serif; box-shadow: 0 2px 10px rgba(0,0,0,0.15); flex-shrink: 0;">
+                    <div style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
+                        <span style="font-size: 0.78rem; font-weight: 700; color: #f1f5f9; letter-spacing: 0.4px; display: flex; align-items: center; gap: 6px; white-space: nowrap;">
+                            <span>📊</span> FECHAMENTO DIÁRIO / PERÍODO
+                        </span>
+                        <span style="font-size: 0.68rem; color: #64748b; font-weight: 500; white-space: nowrap;">(Consulte motoristas, bipes e exporte relatórios)</span>
+                    </div>
+                    
+                    <div style="display: flex; flex-direction: row; align-items: center; gap: 10px;">
+                        <div style="display: flex; align-items: center; gap: 4px;">
+                            <label for="filter-date-start" style="font-size: 0.66rem; font-weight: 800; color: #94a3b8; letter-spacing: 0.5px;">DE:</label>
+                            <input type="date" id="filter-date-start" style="padding: 2px 6px; border-radius: 5px; background: #0f131a; color: #fff; border: 1px solid #334155; font-size: 0.74rem; font-weight: 600; outline: none; cursor: pointer; height: 26px;">
+                        </div>
+                        
+                        <div style="display: flex; align-items: center; gap: 4px;">
+                            <label for="filter-date-end" style="font-size: 0.66rem; font-weight: 800; color: #94a3b8; letter-spacing: 0.5px;">ATÉ:</label>
+                            <input type="date" id="filter-date-end" style="padding: 2px 6px; border-radius: 5px; background: #0f131a; color: #fff; border: 1px solid #334155; font-size: 0.74rem; font-weight: 600; outline: none; cursor: pointer; height: 26px;">
+                        </div>
+                        
+                        <button id="btn-exportar-csv" style="display: flex; align-items: center; gap: 5px; background: linear-gradient(135deg, #10b981, #059669); border: none; color: #fff; padding: 4px 10px; font-size: 0.72rem; font-weight: 800; border-radius: 5px; cursor: pointer; transition: all 0.2s; box-shadow: 0 2px 8px rgba(16,185,129,0.25); height: 26px; white-space: nowrap;" onmouseover="this.style.filter='brightness(1.15)'" onmouseout="this.style.filter='none'">
+                            <span>📥 EXPORTAR EXCEL</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="bottom-grids">
+                    <!-- Seção do Histórico (Ocupa largura total da coluna esquerda) -->
+                    <section class="history-section">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; border-bottom: 1px solid #1e2638; padding-bottom: 6px;">
+                            <h3 style="margin: 0; color: #f1f5f9; font-size: 0.82rem; letter-spacing: 0.5px; display: flex; align-items: center; gap: 6px;">
+                                <span>🕒</span> ÚLTIMAS MOVIMENTAÇÕES
+                            </h3>
+                            <span style="font-size: 0.72rem; color: #64748b; font-weight: 600;">(Clique em um código para copiar)</span>
+                        </div>
+                        <div class="table-container">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th style="width: 70px;">Horário</th>
+                                        <th style="width: 44%;">Código do Pacote</th>
+                                        <th style="width: 32%;">Cidade Destino</th>
+                                        <th style="width: 95px; text-align: center;">Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="history-log">
+                                    <!-- Inserido dinamicamente via JS -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+
+                    <!-- Seção de Divergências Pendentes (Oculta por padrão quando vazia) -->
+                    <section id="section-divergencias" class="history-section" style="display: none; border-color: #ef4444;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; border-bottom: 1px solid rgba(239, 68, 68, 0.3); padding-bottom: 6px;">
+                            <h3 style="margin: 0; color: #f87171; font-size: 0.82rem; letter-spacing: 0.5px; display: flex; align-items: center; gap: 6px;">
+                                <span>⚠️</span> PENDÊNCIAS DE DIVERGÊNCIA
+                            </h3>
+                        </div>
+                        <div class="table-container">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th style="width: 38%;">Código</th>
+                                        <th style="width: 30%;">Estava em</th>
+                                        <th style="width: 32%;">Deveria ir para</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="divergencias-log">
+                                    <!-- Inserido dinamicamente via JS -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                </div>
+            </div>
+
+            <!-- COLUNA DIREITA: BIPADOS POR MOTORISTA (HOJE) - PUXADO ATÉ EMBAIXO -->
+            <aside class="workspace-right">
+                <section class="history-section section-bipados-totais" style="display: flex; flex-direction: column; height: 100%; padding: 14px 16px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid #1e293b; padding-bottom: 8px;">
+                        <h3 style="margin: 0; color: #38bdf8; font-size: 0.95rem; font-weight: 800; letter-spacing: 0.5px; display: flex; align-items: center; gap: 8px;">
+                            <span>📋</span> BIPADOS POR MOTORISTA (HOJE)
+                        </h3>
+                    </div>
+                    <div class="table-container table-bipados-container" style="text-align: left; flex: 1; overflow-y: auto;">
+                        <table style="width: 100%;">
+                            <thead>
+                                <tr>
+                                    <th id="th-motorista" style="cursor: pointer; user-select: none;" onclick="ordenarTabela('motorista')">Motorista <span id="sort-icon-motorista">⇅</span></th>
+                                    <th id="th-cidades" style="cursor: pointer; user-select: none;" onclick="ordenarTabela('cidades')">Cidades <span id="sort-icon-cidades">⇅</span></th>
+                                    <th id="th-plataforma" style="cursor: pointer; user-select: none; width: 65px;" onclick="ordenarTabela('plataforma')">Plat <span id="sort-icon-plataforma">⇅</span></th>
+                                    <th id="th-quantidade" style="cursor: pointer; user-select: none; text-align: right; width: 75px;" onclick="ordenarTabela('quantidade')">Qtd <span id="sort-icon-quantidade">⇅</span></th>
+                                </tr>
+                            </thead>
+                            <tbody id="lotes-finalizados-log">
+                                <!-- Inserido dinamicamente via JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </aside>
+        </div>
+    </div>
+
+    <!-- Modal de Bloqueio por Divergência -->
+    <div id="divergencia-overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.95); z-index: 9999; justify-content: center; align-items: center; text-align: center; padding: 20px;">
+        <div style="background: #1e293b; border: 3px solid #ef4444; border-radius: 12px; padding: 40px; max-width: 600px; width: 100%; box-shadow: 0 0 30px rgba(239, 68, 68, 0.3);">
+            <div style="font-size: 5rem; color: #ef4444; margin-bottom: 20px;">⚠️</div>
+            <h2 style="color: #fff; font-size: 2.2rem; margin-bottom: 15px; font-weight: 800;">DIVERGÊNCIA DETECTADA!</h2>
+            <p id="divergencia-texto" style="color: #cbd5e1; font-size: 1.25rem; line-height: 1.6; margin-bottom: 30px;"></p>
+            
+            <div style="background: #ef4444; color: #fff; font-weight: 800; font-size: 1.3rem; padding: 15px; border-radius: 8px; margin-bottom: 30px; letter-spacing: 0.5px;">
+                RETIRE O PACOTE DA PILHA ATUAL IMEDIATAMENTE!
+            </div>
+            
+            <button id="btn-destravar" style="padding: 15px 40px; font-size: 1.2rem; background: #22c55e; border: none; color: #fff; border-radius: 8px; font-weight: 800; cursor: pointer; box-shadow: 0 4px 15px rgba(34, 197, 94, 0.4); transition: transform 0.2s;">
+                [ CONTINUAR ] (Pressione ENTER ou ESC)
+            </button>
+        </div>
+    </div>
+
+    <!-- MODAL DE CONFIGURAÇÕES (Cidades, Motoristas e Credenciais) -->
+    <div id="settings-modal" class="modal-overlay">
+        <div class="modal-content">
+            <header class="modal-header">
+                <h2>PAINEL DE CONFIGURAÇÕES</h2>
+                <button id="btn-close-modal" class="btn-close-modal" title="Fechar">&times;</button>
+            </header>
+            
+            <!-- Abas do Modal -->
+            <nav class="modal-tabs">
+                <button class="tab-link active" data-tab="tab-cidades">🏙️ Cidades</button>
+                <button class="tab-link" data-tab="tab-motoristas">🚚 Motoristas</button>
+                <button class="tab-link" data-tab="tab-credenciais">🔑 Credenciais</button>
+                <button class="tab-link" data-tab="tab-sistema">☁️ Sistema & Nuvem</button>
+            </nav>
+
+            <!-- CONTEÚDO DAS ABAS -->
+            <div class="tab-body">
+                <!-- ABA 1: CIDADES -->
+                <div id="tab-cidades" class="tab-content active">
+                    <div class="settings-grid">
+                        <!-- Lista de Cidades Cadastradas -->
+                        <div class="settings-column">
+                            <h3>Cidades Cadastradas</h3>
+                            <div class="list-container">
+                                <table class="settings-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Cidade</th>
+                                            <th style="width: 130px; text-align: right;">Ação</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="cidades-list-body">
+                                        <!-- Carregado via JS -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        
+                        <!-- Formulário de Cadastro de Cidade -->
+                        <div class="settings-column form-panel">
+                            <h3>Adicionar Nova Cidade</h3>
+                            <form id="form-cidade">
+                                <div class="form-group">
+                                    <label for="cid-nome">Nome da Cidade (como aparece no comprovante):</label>
+                                    <input type="text" id="cid-nome" placeholder="Ex: Campinas" required autocomplete="off">
+                                </div>
+                                <button type="submit" class="btn-submit">Salvar Cidade</button>
+                            </form>
+                            
+                            <div class="tip-box">
+                                <strong>Nota:</strong> Remover uma cidade irá excluir também todos os motoristas mapeados para ela.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ABA 2: MOTORISTAS -->
+                <div id="tab-motoristas" class="tab-content">
+                    <div class="settings-grid">
+                        <!-- Lista de Mapeamentos Existentes -->
+                        <div class="settings-column">
+                            <h3>Mapeamentos Cadastrados</h3>
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label for="motorista-plataforma-select" style="font-weight: 500; font-size: 0.95rem; margin-bottom: 6px; display: block; color: #cbd5e1;">Plataforma:</label>
+                                <select id="motorista-plataforma-select" style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #475569; background: #1e293b; color: #f8fafc; font-size: 0.9rem; outline: none; margin-bottom: 10px;">
+                                    <!-- Carregado via JS -->
+                                </select>
+                            </div>
+                            <div class="list-container">
+                                <table class="settings-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Cidade</th>
+                                            <th>Motorista</th>
+                                            <th style="width: 130px; text-align: right;">Ação</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="motoristas-list-body">
+                                        <!-- Carregado via JS -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        
+                        <!-- Formulário de Cadastro/Edição de Mapeamento -->
+                        <div class="settings-column form-panel">
+                            <h3>Adicionar Novo Mapeamento</h3>
+                            <form id="form-motorista">
+                                <div class="form-group">
+                                    <label for="mot-cidade-select">Cidade:</label>
+                                    <select id="mot-cidade-select" required style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #334155; background: #161920; color: #f8fafc; font-size: 0.9rem;">
+                                        <option value="">Carregando cidades...</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label for="mot-nome">Nome do Motorista para Atribuição:</label>
+                                    <input type="text" id="mot-nome" placeholder="Ex: Motorista 2" required autocomplete="off">
+                                </div>
+                                <button type="submit" class="btn-submit">Salvar Mapeamento</button>
+                            </form>
+                            
+                            <div class="tip-box">
+                                <strong>Dica:</strong> É permitido cadastrar mais de um motorista para a mesma cidade! Eles ficarão salvos simultaneamente e a triagem aceitará qualquer um deles na rota.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ABA 3: CREDENCIAIS -->
+                <div id="tab-credenciais" class="tab-content">
+                    <div style="max-width: 520px; margin: 20px auto; background: #11141a; border: 1px solid #222730; border-radius: 8px; padding: 24px;">
+                        <h3 style="margin-top: 0; margin-bottom: 20px; color: #f8fafc; display: flex; align-items: center; gap: 8px;">🔑 Credenciais de Login das Plataformas</h3>
+                        
+                        <div style="display: flex; flex-direction: column; gap: 16px; margin-bottom: 25px;">
+                            <div class="form-group">
+                                <label for="modal-plat-selector">PLATAFORMA:</label>
+                                <select id="modal-plat-selector" style="width: 100%; padding: 10px 12px; border-radius: 6px; background: #161920; color: #fff; border: 1px solid #334155; font-size: 0.9rem;">
+                                    <!-- Populado dinamicamente -->
+                                </select>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="modal-login-user">USUÁRIO DE LOGIN:</label>
+                                <input type="text" id="modal-login-user" placeholder="Usuário ou e-mail de login">
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="modal-login-pass">SENHA DE LOGIN:</label>
+                                <input type="password" id="modal-login-pass" placeholder="Senha da plataforma" style="background: #161920; border: 1px solid #334155; border-radius: 6px; padding: 10px 14px; color: #f8fafc; font-size: 0.9rem; outline: none;">
+                            </div>
+                        </div>
+                        
+                        <button type="button" id="btn-modal-salvar" class="btn-submit" style="width: 100%; padding: 12px; font-size: 0.95rem;">
+                            Salvar Credenciais
+                        </button>
+                    </div>
+                </div>
+
+                <!-- ABA 4: SISTEMA & NUVEM -->
+                <div id="tab-sistema" class="tab-content">
+                    <div style="display: flex; flex-direction: column; gap: 14px; padding: 6px 0;">
+                        <!-- Card de Versão e Auto-Update -->
+                        <div style="background: #141822; border: 1px solid #222b3d; border-radius: 10px; padding: 16px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid #1e2638; padding-bottom: 10px;">
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    <span style="font-size: 1.5rem;">☁️</span>
+                                    <div>
+                                        <h3 style="margin: 0; font-size: 1.05rem; font-weight: 800; color: #f8fafc;">ATUALIZAÇÃO PELA NUVEM</h3>
+                                        <span style="font-size: 0.75rem; color: #94a3b8;">Repositório: github.com/Affveio/Bipe</span>
+                                    </div>
+                                </div>
+                                <span id="badge-versao-sistema" style="background: rgba(56, 189, 248, 0.15); border: 1px solid #38bdf8; color: #38bdf8; padding: 4px 10px; border-radius: 20px; font-size: 0.8rem; font-weight: 800;">
+                                    v2.2.0
+                                </span>
+                            </div>
+
+                            <p style="font-size: 0.82rem; color: #cbd5e1; line-height: 1.5; margin-bottom: 14px;">
+                                O sistema consulta a nuvem para manter as rotinas e seletores de plataformas atualizados. Suas configurações e dados locais permanecem sempre seguros.
+                            </p>
+
+                            <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                                <button type="button" id="btn-checar-atualizacao" class="btn-submit" style="padding: 9px 16px; font-size: 0.84rem; display: inline-flex; align-items: center; gap: 6px;">
+                                    <span>🔄</span> Verificar Atualizações
+                                </button>
+                                <button type="button" id="btn-aplicar-atualizacao" class="btn-submit" style="display: none; background: linear-gradient(135deg, #10b981, #059669); border-color: #34d399; padding: 9px 16px; font-size: 0.84rem; display: inline-flex; align-items: center; gap: 6px;">
+                                    <span>⬇️</span> Baixar e Atualizar Agora
+                                </button>
+                            </div>
+
+                            <div id="status-atualizacao-msg" style="display: none; margin-top: 12px; padding: 10px 14px; border-radius: 8px; font-size: 0.82rem; font-weight: 600;">
+                                <!-- Feedback dinâmico -->
+                            </div>
+                        </div>
+
+                        <!-- Card de Licença Comercial -->
+                        <div style="background: #141822; border: 1px solid #222b3d; border-radius: 10px; padding: 16px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid #1e2638; padding-bottom: 10px;">
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    <span style="font-size: 1.5rem;">🔒</span>
+                                    <div>
+                                        <h3 style="margin: 0; font-size: 1.05rem; font-weight: 800; color: #f8fafc;">LICENÇA COMERCIAL</h3>
+                                        <span id="tab-sistema-hwid" style="font-size: 0.75rem; color: #94a3b8; font-family: monospace;">HWID: Carregando...</span>
+                                    </div>
+                                </div>
+                                <span id="tab-sistema-status-licenca" style="padding: 4px 10px; border-radius: 20px; font-size: 0.8rem; font-weight: 800; background: rgba(34, 197, 94, 0.15); border: 1px solid #22c55e; color: #4ade80;">
+                                    ATIVA
+                                </span>
+                            </div>
+
+                            <p style="font-size: 0.82rem; color: #cbd5e1; line-height: 1.5; margin-bottom: 14px;">
+                                Terminal protegido por assinatura única de hardware. Para consultar validade, plano contratado ou inserir nova chave, clique abaixo.
+                            </p>
+
+                            <button type="button" id="btn-abrir-modal-licenca-sistema" class="btn-submit" style="background: #1e293b; border: 1px solid #334155; padding: 9px 16px; font-size: 0.84rem;">
+                                ⚙️ Detalhes da Licença / Renovar Chave
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Confirmação de Motorista ao Reabrir Chrome / Retomar Pendentes -->
+    <div id="modal-confirmar-motorista" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.92); backdrop-filter: blur(8px); z-index: 10000; justify-content: center; align-items: center; padding: 20px;">
+        <div style="background: #1e293b; border: 3px solid #f59e0b; border-radius: 14px; padding: 28px; max-width: 520px; width: 100%; box-shadow: 0 10px 30px rgba(245, 158, 11, 0.35); font-family: 'Outfit', sans-serif; text-align: left; box-sizing: border-box;">
+            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px; border-bottom: 1px solid #334155; padding-bottom: 12px;">
+                <span style="font-size: 2.4rem; color: #f59e0b;">⚠️</span>
+                <div>
+                    <h3 id="modal-confirm-titulo" style="color: #fff; font-size: 1.3rem; font-weight: 800; margin: 0; letter-spacing: 0.5px;">
+                        CONFIRMAR MOTORISTA PENDENTE
+                    </h3>
+                    <span id="modal-confirm-subtitulo" style="font-size: 0.8rem; color: #94a3b8;">
+                        O Chrome foi fechado com pacotes na fila
+                    </span>
+                </div>
+            </div>
+
+            <p id="modal-confirm-desc" style="color: #cbd5e1; font-size: 0.95rem; line-height: 1.5; margin-bottom: 18px;">
+                Existem pacotes pendentes para processar. Verifique se o motorista selecionado está correto antes de prosseguir com a bipagem:
+            </p>
+
+            <!-- Informações do Lote -->
+            <div style="background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 14px; margin-bottom: 20px; display: flex; flex-direction: column; gap: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-size: 0.8rem; font-weight: 800; color: #94a3b8; text-transform: uppercase;">Plataforma:</span>
+                    <strong id="modal-confirm-plat" style="color: #38bdf8; font-size: 0.95rem;">Anjun Express</strong>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-size: 0.8rem; font-weight: 800; color: #94a3b8; text-transform: uppercase;">Pacotes na Fila:</span>
+                    <strong id="modal-confirm-qtd" style="color: #f59e0b; font-size: 1.1rem; font-weight: 800;">1 pacote</strong>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 6px; margin-top: 6px; border-top: 1px solid #1e293b; padding-top: 10px;">
+                    <label for="modal-confirm-driver-select" style="font-size: 0.78rem; font-weight: 800; color: #f8fafc; letter-spacing: 0.5px;">
+                        MOTORISTA / DESTINO DESTE LOTE:
+                    </label>
+                    <select id="modal-confirm-driver-select" style="width: 100%; padding: 10px 12px; border-radius: 6px; background: #1e293b; color: #fff; border: 2px solid #f59e0b; font-size: 0.95rem; font-weight: 700; outline: none; cursor: pointer;">
+                        <!-- Populado dinamicamente -->
+                    </select>
+                </div>
+            </div>
+
+            <!-- Botões de Ação -->
+            <div style="display: flex; flex-direction: column; gap: 10px;">
+                <button id="btn-modal-confirm-continuar" style="width: 100%; padding: 12px; font-weight: 800; font-size: 1rem; background: linear-gradient(135deg, #10b981, #059669); border: none; color: #fff; border-radius: 8px; cursor: pointer; transition: all 0.2s; box-shadow: 0 4px 12px rgba(16,185,129,0.3); text-transform: uppercase; letter-spacing: 0.5px;">
+                    ✓ Confirmar Motorista e Prosseguir
+                </button>
+                <button id="btn-modal-confirm-limpar" style="width: 100%; padding: 10px; font-weight: 700; font-size: 0.85rem; background: transparent; border: 1px solid #ef4444; color: #f87171; border-radius: 8px; cursor: pointer; transition: all 0.2s; text-transform: uppercase;">
+                    🗑️ Descartar / Limpar Pendências
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Overlay de Reinicialização do Sistema -->
+    <div id="overlay-reiniciando" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(11, 12, 15, 0.94); backdrop-filter: blur(8px); z-index: 99999; flex-direction: column; align-items: center; justify-content: center; text-align: center;">
+        <div style="background: #111827; border: 2px solid #ef4444; border-radius: 12px; padding: 36px 44px; max-width: 460px; box-shadow: 0 20px 50px rgba(0,0,0,0.8); display: flex; flex-direction: column; align-items: center; gap: 16px;">
+            <div style="font-size: 3.2rem; animation: spin 1.5s linear infinite; display: inline-block;">🔄</div>
+            <h2 style="color: #f87171; font-size: 1.5rem; font-weight: 900; margin: 0; letter-spacing: 0.5px;">REINICIANDO O SISTEMA</h2>
+            <p id="overlay-reiniciando-msg" style="color: #cbd5e1; font-size: 0.92rem; margin: 0; line-height: 1.5;">
+                Fechando o navegador Chrome, limpando conexões e reiniciando o servidor...
+            </p>
+            <div style="display: flex; align-items: center; gap: 8px; color: #38bdf8; font-size: 0.85rem; font-weight: 700; margin-top: 6px;">
+                <span>Aguardando o servidor voltar online...</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Licenciamento & Ativação de Máquina (HWID) -->
+    <div id="modal-licenca" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(11, 12, 15, 0.95); backdrop-filter: blur(10px); z-index: 999999; align-items: center; justify-content: center;">
+        <div class="modal-licenca-card">
+            <div class="modal-licenca-header">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span style="font-size: 1.6rem;">🔒</span>
+                    <div>
+                        <h2 style="margin: 0; font-size: 1.25rem; font-weight: 900; letter-spacing: 0.5px; color: #f8fafc;">LICENCIAMENTO DO SISTEMA</h2>
+                        <span id="modal-licenca-subtitulo" style="font-size: 0.75rem; color: #94a3b8; font-weight: 600;">Galpão Monitored - Controle de Acesso</span>
+                    </div>
+                </div>
+                <button type="button" id="btn-fechar-modal-licenca" class="btn-fechar-licenca" style="display: none;" title="Fechar">✕</button>
+            </div>
+
+            <div id="licenca-status-banner" class="banner-bloqueio">
+                <div id="licenca-status-icon" style="font-size: 1.3rem;">⚠️</div>
+                <div style="flex: 1;">
+                    <strong id="licenca-status-titulo" style="display: block; font-size: 0.88rem;">SISTEMA BLOQUEADO</strong>
+                    <span id="licenca-status-desc" style="font-size: 0.78rem; opacity: 0.9;">Ativação necessária para utilizar o sistema de triagem.</span>
+                </div>
+            </div>
+
+            <!-- Box com ID da Máquina -->
+            <div class="box-hwid-area">
+                <label style="font-size: 0.68rem; font-weight: 800; color: #94a3b8; letter-spacing: 0.5px; display: block; margin-bottom: 6px;">
+                    ID DESTA MÁQUINA (HARDWARE ID):
+                </label>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <input type="text" id="input-hwid-display" readonly value="Carregando ID..." style="flex: 1; font-family: monospace; font-size: 0.95rem; font-weight: 800; color: #38bdf8; background: #0b0f19; border: 1px solid #1e293b; border-radius: 6px; padding: 8px 12px; outline: none; letter-spacing: 1px;">
+                    <button type="button" id="btn-copiar-hwid" class="btn-copiar-hwid" title="Copiar ID da Máquina para Área de Transferência">
+                        📋 COPIAR
+                    </button>
+                </div>
+                <span style="font-size: 0.72rem; color: #64748b; margin-top: 6px; display: block;">
+                    Envie este código ao administrador para gerar ou renovar a sua chave de ativação.
+                </span>
+            </div>
+
+            <!-- Box com Campo para Inserir a Chave -->
+            <div class="box-chave-area">
+                <label for="input-chave-licenca" style="font-size: 0.68rem; font-weight: 800; color: #94a3b8; letter-spacing: 0.5px; display: block; margin-bottom: 6px;">
+                    CHAVE DE ATIVAÇÃO:
+                </label>
+                <textarea id="input-chave-licenca" placeholder="Cole aqui a chave enviada pelo administrador (ex: GSKEY-eyJ...)" rows="3" style="width: 100%; box-sizing: border-box; background: #0b0f19; border: 1px solid #334155; border-radius: 6px; padding: 8px 10px; color: #f8fafc; font-family: monospace; font-size: 0.78rem; outline: none; resize: none;"></textarea>
+                
+                <button type="button" id="btn-ativar-licenca" class="btn-ativar-chave">
+                    🔓 ATIVAR / RENOVAR SISTEMA
+                </button>
+
+                <div id="feedback-ativacao-msg" style="display: none; margin-top: 8px; font-size: 0.8rem; font-weight: 700; text-align: center; padding: 8px; border-radius: 6px;"></div>
+            </div>
+
+            <div id="info-licenca-ativa-box" style="display: none; border-top: 1px solid #1e293b; padding-top: 12px; font-size: 0.78rem; color: #94a3b8;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                    <span>Cliente:</span> <strong id="info-licenca-cliente" style="color: #f8fafc;">---</strong>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                    <span>Válido até:</span> <strong id="info-licenca-expiracao" style="color: #4ade80;">---</strong>
+                </div>
+                <div style="display: flex; justify-content: space-between;">
+                    <span>Dias restantes:</span> <strong id="info-licenca-dias" style="color: #38bdf8;">---</strong>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,41 @@
+{
+    "imile": {
+        "id": "imile",
+        "nome": "iMile",
+        "recebimento_url": "https://ds.imile.com/#/DSOperation/OperationManagement/ArrivalScan",
+        "recebimento_input_xpath": "//*[@id=\"scanNumber\"]/div/div[2]/div/div[1]/div/input",
+        "recebimento_dados_xpath": "//*[@id=\"waterMark-wrap\"]/div[2]/div/div/div/div/div/div/div[2]/div/div[1]/form/div/div/div[2]/div",
+        "descarregamento_url": "https://ds.imile.com/#/DSOperation/OperationManagement/dsOffloadingScan",
+        "descarregamento_input_xpath": "//*[@id=\"scanNumber\"]/div/div[2]/div/div[1]/div/input",
+        "atribuicao_url": "https://ds.imile.com/#/DSOperation/DSDelivery/assignDA",
+        "atribuicao_motorista_xpath": "//*[@id=\"daCode\"]/div[2]/div/div[1]/div/div",
+        "atribuicao_bip_xpath": "//*[@id=\"scanNumber\"]/div/div[2]/div/div[1]/div/input",
+        "login_usuario": "2106085001",
+        "login_senha": "@Imile2026"
+    },
+    "anjun": {
+        "id": "anjun",
+        "nome": "Anjun Express",
+        "recebimento_url": "https://newsupplier.anjunexpress.com/#/views/operatingCenter/netEntryScanning",
+        "recebimento_input_xpath": "//*[@id=\"el-id-3945-407\"]",
+        "recebimento_dados_xpath": "//*[@id=\"el-id-3945-487\"]/div[2]/div/div[2]/div[2]/div[2]",
+        "atribuicao_url": "https://newsupplier.anjunexpress.com/#/views/packageCenter/packageQuery",
+        "atribuicao_motorista_xpath": "",
+        "atribuicao_bip_xpath": "",
+        "login_usuario": "FERNANDAGOMEZAVA",
+        "login_senha": "anjun2026@"
+    },
+    "loggi": {
+        "id": "loggi",
+        "nome": "Loggi (Arco)",
+        "recebimento_url": "https://arco.loggi.com/AV3/na-base/colecoes",
+        "recebimento_input_xpath": "//*[@id=\"_r_5_\"]",
+        "recebimento_dados_xpath": "//*[@id=\"root\"]/div[2]/div[2]/div/div/div[1]/div/div[2]/div/div/div/div[3]/div[2]/div[3]/p",
+        "consulta_url": "https://arco.loggi.com/AV3/hoje",
+        "atribuicao_url": "https://arco.loggi.com/AV3/na-base/grupos",
+        "atribuicao_motorista_xpath": "",
+        "atribuicao_bip_xpath": "//*[@id=\"root\"]/div[1]/div[2]/div[2]/div[1]/form/div/div[2]/input",
+        "login_usuario": "",
+        "login_senha": ""
+    }
+}
