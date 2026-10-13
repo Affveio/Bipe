@@ -2002,22 +2002,6 @@ async function processarProximoDaFila() {
             
             // Alerta visual/sonoro em vermelho sem bloquear a tela (igual divergência)
             // travarSistemaDuplicado(codigo, resultado.timestamp, resultado.motorista, resultado.cidade);
-        } else if (resultado.status === 'erro_rede') {
-            processandoFila = false;
-            statusPanel.className = 'status-container error';
-            statusLabel.innerText = "FALHA DE INTERNET";
-            subStatusLabel.innerText = `⛔ Conexão com o servidor da ${resultado.plataforma ? resultado.plataforma.toUpperCase() : 'transportadora'} perdida! Verifique a internet e bipe novamente.`;
-            emitirSomDivergencia();
-            falarCidade("Atenção: Queda de internet! Verifique a conexão e bipe o pacote novamente.");
-            adicionarAoHistorico(codigo, "---", "---", `FALHA: ${resultado.mensagem}`, "badge-err");
-            if (motorista) {
-                atribuicaoFeedback.innerText = `Queda de Internet: ${resultado.mensagem}`;
-                atribuicaoFeedback.style.color = "#ef4444";
-            }
-            // Remove o pacote da fila para que o operador possa bipá-lo novamente com a internet restabelecida
-            filaBipes.shift();
-            salvarFilaNoLocalStorage();
-            return;
         } else if (resultado.status === 'chrome_fechado') {
             processandoFila = false;
             await prepararSessaoEMostrarConfirmacao(motorista, plataforma, filaBipes.length, false);
@@ -2118,32 +2102,31 @@ async function processarProximoDaFila() {
         }
 
         // Proteção contra perda de pacote em caso de oscilação momentânea de internet:
-        const ehOscilacaoRede = msgErro.includes("internet") || msgErro.includes("oscilação") || msgErro.includes("oscilacao") || msgErro.includes("timed out") || msgErro.includes("timeout") || msgErro.includes("urlopen error") || msgErro.includes("connection reset") || msgErro.includes("failed to fetch");
-        if (ehOscilacaoRede) {
-            processandoFila = false;
-            statusPanel.className = 'status-container error';
-            statusLabel.innerText = "FALHA DE INTERNET";
-            subStatusLabel.innerText = `⛔ Conexão com o servidor perdida! Verifique sua internet antes de continuar.`;
-            emitirSomDivergencia();
-            falarCidade("Atenção: Falha de internet. Verifique a conexão e bipe o pacote novamente.");
-            adicionarAoHistorico(codigo, "---", "---", `FALHA DE INTERNET`, "badge-err");
-            if (motorista) {
-                atribuicaoFeedback.innerText = `Erro de Internet: ${erro.message}`;
-                atribuicaoFeedback.style.color = "#ef4444";
+        // Mantém o pacote na fila e realiza 1 retentativa automática extra antes de descartar
+        const ehOscilacaoRede = msgErro.includes("internet lenta") || msgErro.includes("oscilação") || msgErro.includes("timed out") || msgErro.includes("timeout") || msgErro.includes("urlopen error") || msgErro.includes("connection reset");
+        if (ehOscilacaoRede && filaBipes[0]) {
+            const itemRede = filaBipes[0];
+            itemRede.tentativasRede = (itemRede.tentativasRede || 0) + 1;
+            if (itemRede.tentativasRede <= 1) {
+                statusPanel.className = 'status-container awaiting';
+                statusLabel.innerText = "RECONECTANDO INTERNET...";
+                subStatusLabel.innerText = `Oscilação de rede detectada. Retentando pacote ${codigo} automaticamente...`;
+                await new Promise(r => setTimeout(r, 650));
+                processarProximoDaFila();
+                return;
             }
-            filaBipes.shift();
-            salvarFilaNoLocalStorage();
-            return;
         }
 
         statusPanel.className = 'status-container error';
-        statusLabel.innerText = "ERRO";
+        statusLabel.innerText = ehOscilacaoRede ? "FALHA DE INTERNET" : "ERRO";
         subStatusLabel.innerText = `${erro.message}${textoFila}`;
         
         emitirBeepErro();
         
         let falhaFalada = erro.message || "Falha na triagem";
-        if (falhaFalada.toLowerCase().includes("o pacote não existe")) {
+        if (ehOscilacaoRede) {
+            falhaFalada = "Atenção: Falha de internet. Bipe o pacote novamente";
+        } else if (falhaFalada.toLowerCase().includes("o pacote não existe")) {
             falhaFalada = "Pacote não existe";
         } else if (falhaFalada.startsWith("Alerta Anjun: ")) {
             falhaFalada = falhaFalada.replace("Alerta Anjun: ", "");
@@ -2269,15 +2252,13 @@ function popularDropdownCidadesLoggi() {
     const cidadesOrdenadas = Array.from(new Set(todasCidades)).sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }));
     const cidadesDisponiveis = cidadesOrdenadas.filter(c => !cidadesLoggiSelecionadas.includes(c));
     
-    let placeholder = "+ Adicionar Outra Cidade a este Grupo...";
-    if (cidadesLoggiSelecionadas.length > 0) {
-        placeholder = `+ Adicionar Cidade Secundária ao Grupo (${cidadesLoggiSelecionadas[0]})...`;
-    } else {
+    let placeholder = "+ Adicionar Cidade Secundária ao Grupo...";
+    if (cidadesLoggiSelecionadas.length === 0) {
         placeholder = "⭐ Selecione a Cidade Principal do Grupo...";
     }
     
     loggiCityAddSelect.innerHTML = `<option value="">${placeholder}</option>` +
-        cidadesDisponiveis.map(c => `<option value="${c}">+ ${c}</option>`).join('');
+        cidadesDisponiveis.map(c => `<option value="${c}">${c}</option>`).join('');
 }
 
 function renderizarBadgesCidadesLoggi() {
@@ -2311,14 +2292,14 @@ function renderizarBadgesCidadesLoggi() {
         if (idx === 0) {
             return `
                 <div class="loggi-city-pill primary" title="1ª Cidade Principal (Nome do Grupo na Loggi)">
-                    <span>⭐ ${cidade} <small style="opacity: 0.8; font-weight: 600;">(Principal)</small></span>
+                    <span>⭐ 1ª ${cidade} (Principal)</span>
                     <span class="pill-remove" onclick="removerCidadeLoggi(0)" title="Remover cidade do grupo">✕</span>
                 </div>
             `;
         } else {
             return `
                 <div class="loggi-city-pill" title="${idx + 1}ª Cidade autorizada neste grupo">
-                    <span>✓ ${cidade}</span>
+                    <span>✓ ${idx + 1}ª ${cidade}</span>
                     <span class="pill-remove" onclick="removerCidadeLoggi(${idx})" title="Remover cidade do grupo">✕</span>
                 </div>
             `;
@@ -2366,7 +2347,6 @@ window.removerCidadeLoggi = async function(index) {
             body: JSON.stringify({
                 modo: modoGrupoLoggi,
                 cidade_principal: cidadesLoggiSelecionadas[0] || null,
-                cidades: cidadesLoggiSelecionadas,
                 reset: eraPrincipal
             })
         }).catch(() => {});
@@ -2525,24 +2505,6 @@ if (filtroBuscaGrupoLoggi) {
     });
 }
 
-function extrairCidadeDeTagLoggi(tag) {
-    if (!tag) return "";
-    let limpa = tag.replace(/\s*\d{1,2}[-\/]\d{1,2}.*$/, '').trim();
-    const norm = (str) => (str || '').normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
-    const limpaNorm = norm(limpa);
-    
-    if (Array.isArray(todasCidades)) {
-        for (const c of todasCidades) {
-            if (norm(c) === limpaNorm) return c;
-        }
-        for (const c of todasCidades) {
-            const cNorm = norm(c);
-            if (limpaNorm.includes(cNorm) || cNorm.includes(limpaNorm)) return c;
-        }
-    }
-    return limpa;
-}
-
 if (loggiGrupoExistenteSelect) {
     loggiGrupoExistenteSelect.addEventListener('change', async () => {
         loggiGrupoExistenteSelect.blur();
@@ -2554,22 +2516,11 @@ if (loggiGrupoExistenteSelect) {
                 const cidAnterior = (cidadesLoggiSelecionadas && cidadesLoggiSelecionadas.length > 0) ? cidadesLoggiSelecionadas[0] : null;
                 if (cidAnterior) {
                     await finalizarLoteLoggiAutomatico(cidAnterior);
-                }
-                
-                // Auto-detecta a cidade do grupo para o operador não precisar ir em "Novo Grupo":
-                const tagAlvo = grupo.tag_display || (grupo.tags && grupo.tags[0]) || "";
-                const cidAuto = extrairCidadeDeTagLoggi(tagAlvo);
-                if (cidAuto) {
-                    cidadesLoggiSelecionadas = [cidAuto];
-                } else {
                     cidadesLoggiSelecionadas = [];
+                    salvarCidadesLoggiLocalStorage();
+                    popularDropdownCidadesLoggi();
+                    renderizarBadgesCidadesLoggi();
                 }
-                salvarCidadesLoggiLocalStorage();
-                popularDropdownCidadesLoggi();
-                renderizarBadgesCidadesLoggi();
-                atualizarCidadesDoMotoristaSelecionado();
-                atualizarContagemAoMudarMotorista();
-
                 const res = await fetch(`${API_URL}/loggi/definir-grupo`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -2577,13 +2528,13 @@ if (loggiGrupoExistenteSelect) {
                         modo: 'existente',
                         licensePlate: grupo.licensePlate,
                         tags: grupo.tags,
-                        cidade: cidAuto || grupo.tag_display
+                        cidade: grupo.tag_display
                     })
                 });
                 if (res.ok) {
                     atualizarBadgeGrupoLoggi(grupo);
                     atribuicaoCounter.innerText = `${grupo.quantity || 0} PACOTES BIPADOS`;
-                    atribuicaoFeedback.innerText = `Grupo ${grupo.tag_display} [${cidAuto || 'Ativo'}] pronto para bipar!`;
+                    atribuicaoFeedback.innerText = `Grupo ${grupo.tag_display} ativado! Bipe os pacotes.`;
                     atribuicaoFeedback.style.color = "#4ade80";
                     renderizarListaAbertaSidebar();
                 }
@@ -2663,7 +2614,6 @@ if (loggiCityAddSelect) {
                 body: JSON.stringify({ 
                     modo: modoGrupoLoggi, 
                     cidade_principal: cidadesLoggiSelecionadas[0],
-                    cidades: cidadesLoggiSelecionadas,
                     reset: false 
                 })
             }).catch(() => {});
@@ -3174,15 +3124,15 @@ function renderizarLotesFinalizados(lista) {
     const thQtd = document.getElementById('th-quantidade');
     if (thPlat && thQtd) {
         if (ehAnjun) {
-            thPlat.innerHTML = `Lote <span id="sort-icon-plataforma">${colunaOrdenacaoAtual === 'plataforma' ? (ordenacaoAscendente ? " ▲" : " ▼") : " ⇅"}</span>`;
-            thPlat.style.width = '100px';
+            thPlat.innerHTML = `Lote Aberto <span id="sort-icon-plataforma">${colunaOrdenacaoAtual === 'plataforma' ? (ordenacaoAscendente ? " ▲" : " ▼") : " ⇅"}</span>`;
+            thPlat.style.width = '145px';
             thQtd.innerHTML = `Total <span id="sort-icon-quantidade">${colunaOrdenacaoAtual === 'quantidade' ? (ordenacaoAscendente ? " ▲" : " ▼") : " ⇅"}</span>`;
-            thQtd.style.width = '68px';
+            thQtd.style.width = '55px';
         } else {
             thPlat.innerHTML = `Plat <span id="sort-icon-plataforma">${colunaOrdenacaoAtual === 'plataforma' ? (ordenacaoAscendente ? " ▲" : " ▼") : " ⇅"}</span>`;
-            thPlat.style.width = '70px';
-            thQtd.innerHTML = `Total <span id="sort-icon-quantidade">${colunaOrdenacaoAtual === 'quantidade' ? (ordenacaoAscendente ? " ▲" : " ▼") : " ⇅"}</span>`;
-            thQtd.style.width = '68px';
+            thPlat.style.width = '65px';
+            thQtd.innerHTML = `Qtd <span id="sort-icon-quantidade">${colunaOrdenacaoAtual === 'quantidade' ? (ordenacaoAscendente ? " ▲" : " ▼") : " ⇅"}</span>`;
+            thQtd.style.width = '65px';
         }
     }
 
@@ -3240,7 +3190,9 @@ function renderizarLotesFinalizados(lista) {
 
         const itemEhAnjun = ehAnjun && ((item.plataforma || '').toLowerCase().includes('anjun') || (item.qtd_pendente || 0) > 0);
         const btnTransferRow = `
-            <button type="button" onclick="event.stopPropagation(); abrirModalTransferenciaMotorista('${motoristaEscaped}', '${platEscaped}', ${item.quantidade || 0})" style="background: rgba(56, 189, 248, 0.12); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 3px; padding: 0 3px; font-size: 0.65rem; font-weight: 800; cursor: pointer; margin-left: 3px; line-height: 1.1; vertical-align: middle;" title="Transferir pacotes de ${motoristaEscaped} para outro motorista">⇄</button>
+            <button type="button" onclick="event.stopPropagation(); abrirModalTransferenciaMotorista('${motoristaEscaped}', '${platEscaped}', ${item.quantidade || 0})" style="background: rgba(56, 189, 248, 0.14); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 4px; padding: 1px 5px; font-size: 0.7rem; font-weight: 900; cursor: pointer; margin-left: 5px; line-height: 1.2;" title="Transferir pacotes de ${motoristaEscaped} para outro motorista">
+                ⇄
+            </button>
         `;
 
         let col3Html = '';
@@ -3255,7 +3207,7 @@ function renderizarLotesFinalizados(lista) {
                                 🟢 ${qtdPend}
                             </span>
                             <button type="button" onclick="event.stopPropagation(); finalizarLoteDireto('${motoristaEscaped}')" style="background: linear-gradient(135deg, #ef4444, #dc2626); color: #fff; border: none; border-radius: 4px; padding: 2px 6px; font-size: 0.62rem; font-weight: 800; cursor: pointer; text-transform: uppercase;" title="Finalizar grupo aberto de ${motoristaEscaped}">
-                                Fin
+                                Finalizar
                             </button>
                             <button type="button" onclick="event.stopPropagation(); cancelarLoteDireto('${motoristaEscaped}')" style="background: rgba(148, 163, 184, 0.18); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 4px; padding: 1px 5px; font-size: 0.65rem; font-weight: 900; cursor: pointer; line-height: 1.2;" title="Cancelar/limpar lote aberto de ${motoristaEscaped} sem emitir folha no site">
                                 ✕
@@ -3270,10 +3222,10 @@ function renderizarLotesFinalizados(lista) {
                     </td>
                 `;
             }
-            col4Html = `<td class="bipados-col-qtd"><span class="bipados-numero">${item.quantidade}</span>${btnTransferRow}</td>`;
+            col4Html = `<td class="bipados-col-qtd" style="text-align: right; font-weight: 800; white-space: nowrap;">${item.quantidade}${btnTransferRow}</td>`;
         } else {
             col3Html = `<td class="bipados-col-plat">${item.plataforma || '---'}</td>`;
-            col4Html = `<td class="bipados-col-qtd"><span class="bipados-numero">${item.quantidade}</span>${btnTransferRow}</td>`;
+            col4Html = `<td class="bipados-col-qtd" style="white-space: nowrap;">${item.quantidade}${btnTransferRow}</td>`;
         }
 
         return `
