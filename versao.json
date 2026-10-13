@@ -1,8 +1,8 @@
 {
-    "versao": "2.2.0",
-    "data": "2026-09-22",
-    "titulo": "Versão 2.2.0 Comercial",
-    "descricao": "Correções de layout e tabelas, multi-cidades e conferência Loggi Aba 3, voz em divergências com nome da cidade bipada e inicialização silenciosa sem CMD.",
+    "versao": "2.4.0",
+    "data": "2026-10-13",
+    "titulo": "TurboScan v2.4.0 - Multi-Cidades Loggi e Otimização Visual",
+    "descricao": "Correção de proporção das cidades e grupos na Loggi para telas compactas, retentativa automática na iMile e melhorias de performance.",
     "arquivos": [
         "app.py",
         "app.js",
@@ -13,6 +13,7 @@
         "dashboard.css",
         "licenca.py",
         "atualizador.py",
-        "config_plataformas.json"
+        "pix_config.json",
+        "pix_service.py"
     ]
 }
