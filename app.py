@@ -1,12 +1,47 @@
 import os
 import sys
 
-# Garante saída UTF-8 no Windows prevenindo erro: 'charmap' codec can't encode characters
+def get_base_dir():
+    raw_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+    try:
+        test_file = os.path.join(raw_dir, ".write_test_app.tmp")
+        with open(test_file, "w") as f:
+            f.write("1")
+        os.remove(test_file)
+        return raw_dir
+    except Exception:
+        import shutil
+        appdata = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+        fallback_dir = os.path.join(appdata, "TurboScan", "core-engine")
+        os.makedirs(fallback_dir, exist_ok=True)
+        for cfg_name in ["config_plataformas.json", "cloud_config.json", "pix_config.json", "versao.json"]:
+            src_cfg = os.path.join(raw_dir, cfg_name)
+            dst_cfg = os.path.join(fallback_dir, cfg_name)
+            if os.path.exists(src_cfg) and not os.path.exists(dst_cfg):
+                try:
+                    shutil.copy2(src_cfg, dst_cfg)
+                except Exception:
+                    pass
+        return fallback_dir
+
+BASE_DIR = get_base_dir()
+try:
+    os.chdir(BASE_DIR)
+except Exception:
+    pass
+
+# Garante saída UTF-8 no Windows e redireciona para log se executado sem console
 if sys.platform.startswith('win'):
     try:
-        if hasattr(sys.stdout, 'reconfigure'):
+        log_file_path = os.path.join(BASE_DIR, 'app_engine.log')
+        if sys.stdout is None:
+            sys.stdout = open(log_file_path, 'a', encoding='utf-8', buffering=1)
+        elif hasattr(sys.stdout, 'reconfigure'):
             sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-        if hasattr(sys.stderr, 'reconfigure'):
+            
+        if sys.stderr is None:
+            sys.stderr = open(log_file_path, 'a', encoding='utf-8', buffering=1)
+        elif hasattr(sys.stderr, 'reconfigure'):
             sys.stderr.reconfigure(encoding='utf-8', errors='replace')
     except Exception:
         pass
@@ -21,10 +56,7 @@ import sqlite3
 from functools import wraps
 from flask import Flask, request, jsonify, send_from_directory, send_file
 from flask_cors import CORS
-try:
-    from license_client import obter_hwid, checar_status_licenca as validar_licenca, ativar_licenca_terminal as salvar_licenca
-except Exception:
-    from licenca import obter_hwid, validar_licenca, salvar_licenca
+from licenca import obter_hwid, validar_licenca, salvar_licenca, salvar_override_plataformas_local, _obter_config_supabase
 try:
     import pix_service
 except Exception as e_pix:
@@ -76,7 +108,14 @@ def normalizar_texto(texto):
         return str(texto).strip().lower()
 
 def conectar_banco():
-    return sqlite3.connect(DATABASE_PATH, timeout=30.0)
+    conn = sqlite3.connect(DATABASE_PATH, timeout=30.0)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("PRAGMA busy_timeout=30000;")
+    except Exception:
+        pass
+    return conn
 
 # Estado Global do Selenium
 driver = None
@@ -85,6 +124,7 @@ aba_descarregamento = None
 aba_atribuicao = None
 aba_atribuicao_anjun = None
 plataforma_ativa = None
+conta_ativa = None
 
 # Estado da Atribuição Sequencial
 motorista_atribuicao_ativa = None
@@ -96,6 +136,7 @@ ultimo_motorista_bipado = None
 primeiro_bip_validado = False
 total_bipes_processados = 0
 switches_imile_ativados = False
+bipes_ok_sessao = {}
 
 import threading
 driver_lock = threading.Lock()
@@ -122,39 +163,30 @@ def inicializar_db():
             status_pacote TEXT,
             valor_declarado TEXT,
             negocios TEXT,
-            bairro TEXT
+            bairro TEXT,
+            cep TEXT,
+            endereco TEXT,
+            produto TEXT
         )
     ''')
     
     # Executa de forma segura a adição de colunas caso elas não existam
-    try:
-        cursor.execute("ALTER TABLE historico ADD COLUMN email TEXT")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        cursor.execute("ALTER TABLE historico ADD COLUMN valor_declarado TEXT")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        cursor.execute("ALTER TABLE historico ADD COLUMN negocios TEXT")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        cursor.execute("ALTER TABLE historico ADD COLUMN bairro TEXT")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        cursor.execute("ALTER TABLE historico ADD COLUMN status_entrega TEXT")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        cursor.execute("ALTER TABLE historico ADD COLUMN motorista_entrega TEXT")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        cursor.execute("ALTER TABLE historico ADD COLUMN tempo_atraso REAL")
-    except sqlite3.OperationalError:
-        pass
+    for col_sql in [
+        "ALTER TABLE historico ADD COLUMN email TEXT",
+        "ALTER TABLE historico ADD COLUMN valor_declarado TEXT",
+        "ALTER TABLE historico ADD COLUMN negocios TEXT",
+        "ALTER TABLE historico ADD COLUMN bairro TEXT",
+        "ALTER TABLE historico ADD COLUMN status_entrega TEXT",
+        "ALTER TABLE historico ADD COLUMN motorista_entrega TEXT",
+        "ALTER TABLE historico ADD COLUMN tempo_atraso REAL",
+        "ALTER TABLE historico ADD COLUMN cep TEXT",
+        "ALTER TABLE historico ADD COLUMN endereco TEXT",
+        "ALTER TABLE historico ADD COLUMN produto TEXT"
+    ]:
+        try:
+            cursor.execute(col_sql)
+        except sqlite3.OperationalError:
+            pass
     try:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_historico_dup ON historico (codigo, status, timestamp)")
     except Exception:
@@ -190,9 +222,14 @@ def inicializar_db():
             cidade TEXT,
             plataforma TEXT,
             motorista TEXT,
+            faixa_cep TEXT DEFAULT '',
             PRIMARY KEY (cidade, plataforma, motorista)
         )
     ''')
+    try:
+        cursor.execute("ALTER TABLE motoristas_plataforma ADD COLUMN faixa_cep TEXT DEFAULT ''")
+    except Exception:
+        pass
     
     # 5. Tabela Divergências Pendentes
     cursor.execute('''
@@ -201,9 +238,14 @@ def inicializar_db():
             motorista_lote TEXT,
             motorista_esperado TEXT,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            status TEXT DEFAULT 'pendente'
+            status TEXT DEFAULT 'pendente',
+            cidade TEXT
         )
     ''')
+    try:
+        cursor.execute("ALTER TABLE divergencias_pendentes ADD COLUMN cidade TEXT")
+    except Exception:
+        pass
     
     # 6. Tabela Lotes Finalizados
     cursor.execute('''
@@ -213,6 +255,15 @@ def inicializar_db():
             cidades TEXT,
             quantidade INTEGER,
             plataforma TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    # 7. Tabela Lote Pendente Anjun
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS lote_pendente_anjun (
+            waybill TEXT PRIMARY KEY,
+            motorista TEXT,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
@@ -230,10 +281,11 @@ def inicializar_db():
                     cidade TEXT,
                     plataforma TEXT,
                     motorista TEXT,
+                    faixa_cep TEXT DEFAULT '',
                     PRIMARY KEY (cidade, plataforma, motorista)
                 )
             ''')
-            cursor.execute("INSERT OR IGNORE INTO motoristas_plataforma_temp SELECT cidade, plataforma, motorista FROM motoristas_plataforma")
+            cursor.execute("INSERT OR IGNORE INTO motoristas_plataforma_temp (cidade, plataforma, motorista) SELECT cidade, plataforma, motorista FROM motoristas_plataforma")
             cursor.execute("DROP TABLE motoristas_plataforma")
             cursor.execute("ALTER TABLE motoristas_plataforma_temp RENAME TO motoristas_plataforma")
             conn.commit()
@@ -276,7 +328,7 @@ def inicializar_db():
                 motoristas_legacy = json.load(f)
             
             # Detecta formatos:
-            # Novo: {"anjun": [{"cidade": "...", "motorista": "..."}, ...]}
+            # Novo: {"anjun": [{"cidade": "...", "motorista": "...", "faixa_cep": "..."}, ...]}
             # Intermediário: {"anjun": {"Cidade": "Mot" ou ["Mot1", "Mot2"]}}
             # Legado: {"Cidade": "Mot"}
             if isinstance(motoristas_legacy, dict):
@@ -288,9 +340,12 @@ def inicializar_db():
                             if isinstance(item, dict):
                                 cid = (item.get("cidade") or "").strip()
                                 mot = (item.get("motorista") or "").strip()
+                                f_cep = (item.get("faixa_cep") or "").strip()
                                 if cid and mot:
                                     cursor.execute("INSERT OR IGNORE INTO cidades (cidade) VALUES (?)", (cid,))
-                                    cursor.execute("INSERT OR IGNORE INTO motoristas_plataforma (cidade, plataforma, motorista) VALUES (?, ?, ?)", (cid, plat, mot))
+                                    cursor.execute("INSERT OR IGNORE INTO motoristas_plataforma (cidade, plataforma, motorista, faixa_cep) VALUES (?, ?, ?, ?)", (cid, plat, mot, f_cep))
+                                    if f_cep:
+                                        cursor.execute("UPDATE motoristas_plataforma SET faixa_cep = ? WHERE LOWER(cidade) = LOWER(?) AND LOWER(plataforma) = LOWER(?) AND LOWER(motorista) = LOWER(?) AND (faixa_cep IS NULL OR faixa_cep = '')", (f_cep, cid, plat, mot))
                     elif isinstance(v, dict):
                         # Formato intermediário com dicionário por plataforma
                         plat = k
@@ -370,30 +425,88 @@ def inicializar_db():
                 item.get("tempo_criacao", "---"),
                 item.get("status_pacote", "---")
             ))
-        conn.commit()
-        
+    # Auto-limpeza silenciosa: preserva os últimos 90 dias de histórico e compacta o arquivo com VACUUM
+    try:
+        import datetime
+        limite_90_dias = (datetime.datetime.now() - datetime.timedelta(days=90)).strftime('%Y-%m-%d')
+        cursor.execute("SELECT COUNT(*) FROM historico WHERE timestamp < ?", (limite_90_dias,))
+        antigos_qtd = cursor.fetchone()[0]
+        if antigos_qtd > 0:
+            cursor.execute("DELETE FROM historico WHERE timestamp < ?", (limite_90_dias,))
+            conn.commit()
+            cursor.execute("VACUUM")
+            print(f"[+] [Banco de Dados] Auto-limpeza concluída: {antigos_qtd} pacotes antigos (>90 dias) limpos e banco compactado!")
+    except Exception as e_clean:
+        print(f"[Aviso] Rotina de auto-limpeza do banco: {e_clean}")
+
     conn.close()
 
-    # 3. Sincronização Automática com Motoristas_Cidades.xlsx na inicialização
-    excel_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), EXCEL_MOTORISTAS)
+def obter_caminho_excel():
+    caminho_padrao = os.path.join(BASE_DIR, EXCEL_MOTORISTAS)
+    if os.path.exists(caminho_padrao):
+        return caminho_padrao
+
+    candidatos = [
+        caminho_padrao,
+        os.path.abspath(os.path.join(BASE_DIR, '..', '..', EXCEL_MOTORISTAS)),
+        os.path.join(os.getcwd(), EXCEL_MOTORISTAS),
+        os.path.abspath(os.path.join(BASE_DIR, '..', EXCEL_MOTORISTAS))
+    ]
+    if 'sistema de bipagem' in BASE_DIR.lower():
+        candidatos.extend([
+            os.path.abspath(os.path.join(BASE_DIR, '..', '..', '..', EXCEL_MOTORISTAS)),
+            os.path.abspath(os.path.join(BASE_DIR, '..', '..', '..', '..', EXCEL_MOTORISTAS)),
+            os.path.abspath(os.path.join(BASE_DIR, '..', '..', '..', '..', 'core-engine', EXCEL_MOTORISTAS)),
+            os.path.join(os.path.expanduser('~'), 'Desktop', 'Sistema de Bipagem', 'core-engine', EXCEL_MOTORISTAS),
+            os.path.join(os.path.expanduser('~'), 'Desktop', 'Sistema de Bipagem', EXCEL_MOTORISTAS)
+        ])
+    existentes = []
+    vistos = set()
+    for c in candidatos:
+        c_abs = os.path.normcase(os.path.abspath(c))
+        if c_abs not in vistos and os.path.exists(c):
+            vistos.add(c_abs)
+            existentes.append(c)
+    if existentes:
+        existentes.sort(key=lambda p: (os.path.getsize(p) > 6500, os.path.getmtime(p)), reverse=True)
+        return existentes[0]
+    return caminho_padrao
+
+def sincronizar_excel_na_inicializacao():
+    """
+    Garante que a planilha Motoristas_Cidades.xlsx exista na pasta e seja sincronizada
+    automaticamente no boot (especialmente em instalações novas ou quando editada).
+    """
+    excel_path = obter_caminho_excel()
+    if not os.path.exists(excel_path):
+        try:
+            gerar_planilha_motoristas_excel(excel_path)
+        except Exception as e_gen:
+            print(f"[Aviso] Não foi possível gerar planilha inicial: {e_gen}")
+            return
+
     if os.path.exists(excel_path):
         try:
             mtime = os.path.getmtime(excel_path)
-            meta_mtime_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.excel_sync_meta')
+            meta_mtime_file = os.path.join(BASE_DIR, '.excel_sync_meta')
             deve_sincronizar = True
+
             if os.path.exists(meta_mtime_file):
                 try:
                     with open(meta_mtime_file, 'r') as f_meta:
-                        if float(f_meta.read().strip()) == mtime:
+                        if abs(float(f_meta.read().strip()) - mtime) < 1.0:
                             deve_sincronizar = False
                 except Exception:
                     pass
             if deve_sincronizar:
                 ok, c_qtd, m_qtd, msg = sincronizar_motoristas_excel(excel_path)
-                if ok:
+                try:
                     with open(meta_mtime_file, 'w') as f_meta:
                         f_meta.write(str(mtime))
-                    print(f"[+] Inicialização: Motoristas_Cidades.xlsx sincronizado automaticamente ({c_qtd} cidades, {m_qtd} mapeamentos)!")
+                except Exception:
+                    pass
+                if ok:
+                    print(f"[+] Inicialização: Motoristas_Cidades.xlsx sincronizado automaticamente ({c_qtd} cidades, {m_qtd} mapeamentos) de {excel_path}!")
         except Exception as e_boot_excel:
             print(f"[Aviso] Sincronização automática do Excel no boot: {str(e_boot_excel)}")
 
@@ -404,7 +517,7 @@ def sincronizar_motoristas_excel(caminho_arquivo=None):
     Garante sincronização total entre o Excel, o banco SQLite e os arquivos JSON de compatibilidade.
     """
     if not caminho_arquivo:
-        caminho_arquivo = os.path.join(os.path.dirname(os.path.abspath(__file__)), EXCEL_MOTORISTAS)
+        caminho_arquivo = obter_caminho_excel()
         
     if not os.path.exists(caminho_arquivo):
         return False, 0, 0, f"Planilha '{EXCEL_MOTORISTAS}' não encontrada na pasta."
@@ -414,85 +527,173 @@ def sincronizar_motoristas_excel(caminho_arquivo=None):
         wb = openpyxl.load_workbook(caminho_arquivo, data_only=True)
         ws = wb.active
         
+        cidades_para_inserir = set()
+        mapeamentos_para_inserir = []
         col_cidade = -1
         col_motorista = -1
         col_plat = -1
+        col_cep = -1
+        col_plat_map = {}
         
-        primeira_linha = [str(cell.value or '').strip().upper() for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+        primeira_linha = [str(cell.value or '').strip() for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+        primeira_linha_upper = [v.upper() for v in primeira_linha]
         
-        for idx, val in enumerate(primeira_linha):
-            if 'CIDADE' in val:
+        # 1. Suporte especial se o usuário importar a planilha de mapeamento de nomes (Motoristas.xlsx)
+        if any('USUARIO IMILE' in v or 'MOTORISTA IMILE' in v or 'USUARIO ANJUN' in v for v in primeira_linha_upper):
+            path_map = os.path.join(BASE_DIR, "Motoristas.xlsx")
+            if os.path.abspath(caminho_arquivo) != os.path.abspath(path_map):
+                import shutil
+                shutil.copyfile(caminho_arquivo, path_map)
+            imile_m, anjun_m = carregar_mapeamento_motoristas()
+            return True, 0, len(imile_m) + len(anjun_m), f"Planilha de nomes de motoristas (Motoristas.xlsx) sincronizada com sucesso ({len(imile_m) + len(anjun_m)} mapeamentos)!"
+
+        # 2. Busca aba dedicada de Cidades caso exista na planilha
+        for sheetname in wb.sheetnames:
+            if sheetname.strip().upper() in ['CIDADE', 'CIDADES']:
+                try:
+                    ws_cid = wb[sheetname]
+                    for r in ws_cid.iter_rows(min_row=1, values_only=True):
+                        if r and len(r) > 0 and r[0]:
+                            val_c = str(r[0]).strip()
+                            if val_c and val_c.upper() not in ['CIDADE', 'CIDADES', 'MUNICÍPIO', 'MUNICIPIO', 'NOME DA CIDADE', 'NONE', 'CIDADE CADASTRADA', 'SEM CIDADE', 'GERAL']:
+                                cidades_para_inserir.add(val_c)
+                except Exception:
+                    pass
+
+        # 3. Busca colunas padrão de Cidade, Motorista, Plataforma e CEP (Opcional) na aba ativa
+        for idx, val in enumerate(primeira_linha_upper):
+            if any(k in val for k in ['CIDADE', 'MUNICIP', 'DESTINO', 'PRAÇA', 'ROTA']):
                 col_cidade = idx
-            elif 'MOTORISTA' in val:
+            elif any(k in val for k in ['MOTORISTA', 'ENTREGADOR', 'CONDUTOR', 'NOME DO MOTORISTA']):
                 col_motorista = idx
-            elif 'PLATAFORMA' in val or 'PLAT' in val:
+            elif any(k in val for k in ['PLATAFORMA', 'PLAT', 'EMPRESA', 'TRANSPORTADORA']):
                 col_plat = idx
+            elif any(k in val for k in ['CEP', 'FAIXA']):
+                col_cep = idx
+
+        # 4. Se não tem coluna única 'MOTORISTA', mas tem colunas por plataforma ('ANJUN', 'IMILE', 'LOGGI')
+        if col_cidade != -1 and col_motorista == -1:
+            for idx, val in enumerate(primeira_linha_upper):
+                if idx == col_cidade:
+                    continue
+                if 'ANJUN' in val:
+                    col_plat_map['anjun'] = idx
+                elif 'IMILE' in val:
+                    col_plat_map['imile'] = idx
+                elif 'LOGGI' in val:
+                    col_plat_map['loggi'] = idx
+
+        if col_cidade != -1:
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                if not row or not any(row):
+                    continue
+                cidade = str(row[col_cidade] or '').strip() if col_cidade < len(row) and row[col_cidade] is not None else ''
+                if not cidade or cidade.upper() in ['NONE', 'CIDADE', 'SEM CIDADE', 'GERAL']:
+                    continue
+                    
+                cidades_para_inserir.add(cidade)
+                faixa_cep_row = str(row[col_cep] or '').strip() if col_cep != -1 and col_cep < len(row) and row[col_cep] is not None else ''
+                if faixa_cep_row.upper() == 'NONE':
+                    faixa_cep_row = ''
                 
-        if col_cidade == -1 or col_motorista == -1:
-            return False, 0, 0, "A planilha deve conter as colunas 'CIDADE' e 'MOTORISTA' no cabeçalho."
-            
-        cidades_para_inserir = set()
-        mapeamentos_para_inserir = []
-        
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            if not row or not any(row):
-                continue
-            cidade = str(row[col_cidade] or '').strip() if col_cidade < len(row) and row[col_cidade] is not None else ''
-            motorista = str(row[col_motorista] or '').strip() if col_motorista < len(row) and row[col_motorista] is not None else ''
-            plat_raw = str(row[col_plat] or '').strip().lower() if col_plat != -1 and col_plat < len(row) and row[col_plat] is not None else 'todas'
-            
-            if not cidade or not motorista:
-                continue
+                if col_plat_map:
+                    for p_nome, c_idx in col_plat_map.items():
+                        if c_idx < len(row) and row[c_idx]:
+                            m_val = str(row[c_idx]).strip()
+                            if m_val and m_val.upper() != 'NONE':
+                                mapeamentos_para_inserir.append((cidade, p_nome, m_val, faixa_cep_row))
+                elif col_motorista != -1:
+                    motorista = str(row[col_motorista] or '').strip() if col_motorista < len(row) and row[col_motorista] is not None else ''
+                    plat_raw = str(row[col_plat] or '').strip().lower() if col_plat != -1 and col_plat < len(row) and row[col_plat] is not None else 'todas'
+                    
+                    if not motorista or motorista.upper() == 'NONE':
+                        continue
+                        
+                    if plat_raw in ['todas', 'geral', 'ambas', '', 'todos', 'none']:
+                        platas = ['anjun', 'imile', 'loggi']
+                    elif 'anjun' in plat_raw:
+                        platas = ['anjun']
+                    elif 'imile' in plat_raw:
+                        platas = ['imile']
+                    elif 'loggi' in plat_raw:
+                        platas = ['loggi']
+                    else:
+                        platas = [plat_raw]
+                        
+                    for p in platas:
+                        mapeamentos_para_inserir.append((cidade, p, motorista, faixa_cep_row))
+
+        # 5. Suporte extra: se existir um arquivo Cidades.xlsx separado na pasta do sistema
+        path_cidades_avulso = os.path.join(BASE_DIR, "Cidades.xlsx")
+        if os.path.exists(path_cidades_avulso) and os.path.abspath(caminho_arquivo) != os.path.abspath(path_cidades_avulso):
+            try:
+                wb_c = openpyxl.load_workbook(path_cidades_avulso, data_only=True)
+                for sheet in wb_c.worksheets:
+                    for r in sheet.iter_rows(min_row=1, values_only=True):
+                        if r and len(r) > 0 and r[0]:
+                            c_val = str(r[0]).strip()
+                            if c_val and c_val.upper() not in ['CIDADE', 'CIDADES', 'MUNICÍPIO', 'MUNICIPIO', 'NONE', 'SEM CIDADE', 'GERAL']:
+                                cidades_para_inserir.add(c_val)
+                wb_c.close()
+            except Exception as e_cid_avulso:
+                print(f"[Aviso] Leitura de Cidades.xlsx avulso: {str(e_cid_avulso)}")
                 
-            cidades_para_inserir.add(cidade)
-            
-            if plat_raw in ['todas', 'geral', 'ambas', '', 'todos']:
-                platas = ['anjun', 'imile', 'loggi']
-            else:
-                platas = [plat_raw]
-                
-            for p in platas:
-                mapeamentos_para_inserir.append((cidade, p, motorista))
-                
-        if not cidades_para_inserir or not mapeamentos_para_inserir:
-            return False, 0, 0, "A planilha está vazia ou não contém registros válidos de Cidade e Motorista."
+        if not cidades_para_inserir and not mapeamentos_para_inserir:
+            return False, 0, 0, "A planilha não contém registros válidos de Cidade ou Motorista."
             
         conn = conectar_banco()
         cursor = conn.cursor()
         
-        cursor.execute("DELETE FROM cidades")
-        cursor.execute("DELETE FROM motoristas_plataforma")
-        cursor.execute("DELETE FROM motoristas")
-        
-        for cid in sorted(cidades_para_inserir):
-            cursor.execute("INSERT OR IGNORE INTO cidades (cidade) VALUES (?)", (cid,))
+        if cidades_para_inserir:
+            cursor.execute("DELETE FROM cidades")
+            for cid in sorted(cidades_para_inserir):
+                cursor.execute("INSERT OR IGNORE INTO cidades (cidade) VALUES (?)", (cid,))
             
-        for cid, plat, mot in mapeamentos_para_inserir:
-            cursor.execute("""
-                INSERT OR REPLACE INTO motoristas_plataforma (cidade, plataforma, motorista)
-                VALUES (?, ?, ?)
-            """, (cid, plat, mot))
-            if plat == 'anjun':
-                cursor.execute("INSERT OR REPLACE INTO motoristas (cidade, motorista) VALUES (?, ?)", (cid, mot))
+        if mapeamentos_para_inserir:
+            # Preserva faixas de CEP existentes caso a planilha importada não tenha coluna de CEP
+            faixas_existentes = {}
+            if col_cep == -1:
+                try:
+                    cursor.execute("SELECT LOWER(cidade), LOWER(plataforma), LOWER(motorista), COALESCE(faixa_cep, '') FROM motoristas_plataforma WHERE faixa_cep IS NOT NULL AND faixa_cep != ''")
+                    for c_old, p_old, m_old, f_old in cursor.fetchall():
+                        faixas_existentes[(c_old, p_old, m_old)] = f_old
+                except Exception:
+                    pass
+            cursor.execute("DELETE FROM motoristas_plataforma")
+            cursor.execute("DELETE FROM motoristas")
+            for cid, plat, mot, f_cep in mapeamentos_para_inserir:
+                f_final = f_cep if col_cep != -1 else faixas_existentes.get((cid.lower(), plat.lower(), mot.lower()), "")
+                cursor.execute("""
+                    INSERT OR REPLACE INTO motoristas_plataforma (cidade, plataforma, motorista, faixa_cep)
+                    VALUES (?, ?, ?, ?)
+                """, (cid, plat, mot, f_final))
+                if plat == 'anjun':
+                    cursor.execute("INSERT OR REPLACE INTO motoristas (cidade, motorista) VALUES (?, ?)", (cid, mot))
                 
         conn.commit()
         conn.close()
         
         try:
-            with open(CONFIG_CIDADES, 'w', encoding='utf-8') as f_c:
-                json.dump(sorted(list(cidades_para_inserir)), f_c, indent=4, ensure_ascii=False)
-                
-            mapeamento_completo = {}
-            for cid, plat, mot in mapeamentos_para_inserir:
-                if plat not in mapeamento_completo:
-                    mapeamento_completo[plat] = []
-                mapeamento_completo[plat].append({"cidade": cid, "motorista": mot})
-                
-            with open(CONFIG_MOTORISTAS, 'w', encoding='utf-8') as f_m:
-                json.dump(mapeamento_completo, f_m, indent=4, ensure_ascii=False)
+            if cidades_para_inserir:
+                with open(CONFIG_CIDADES, 'w', encoding='utf-8') as f_c:
+                    json.dump(sorted(list(cidades_para_inserir)), f_c, indent=4, ensure_ascii=False)
+                    
+            if mapeamentos_para_inserir:
+                mapeamento_completo = {}
+                for cid, plat, mot, f_cep in mapeamentos_para_inserir:
+                    if plat not in mapeamento_completo:
+                        mapeamento_completo[plat] = []
+                    item_json = {"cidade": cid, "motorista": mot}
+                    if f_cep:
+                        item_json["faixa_cep"] = f_cep
+                    mapeamento_completo[plat].append(item_json)
+                    
+                with open(CONFIG_MOTORISTAS, 'w', encoding='utf-8') as f_m:
+                    json.dump(mapeamento_completo, f_m, indent=4, ensure_ascii=False)
         except Exception as e_json_sync:
             print(f"[Aviso] Falha ao atualizar JSONs no sync do Excel: {str(e_json_sync)}")
             
+        invalidar_cache_ram_cidades_motoristas()
         print(f"[+] Sincronização Excel: {len(cidades_para_inserir)} cidades e {len(mapeamentos_para_inserir)} mapeamentos sincronizados com sucesso!")
         return True, len(cidades_para_inserir), len(mapeamentos_para_inserir), f"{len(cidades_para_inserir)} cidades e {len(mapeamentos_para_inserir)} mapeamentos sincronizados com sucesso!"
     except Exception as e:
@@ -501,91 +702,323 @@ def sincronizar_motoristas_excel(caminho_arquivo=None):
 
 def gerar_planilha_motoristas_excel(caminho_destino=None):
     """
-    Gera/atualiza o arquivo Motoristas_Cidades.xlsx com os dados atuais do banco SQLite.
+    Gera/atualiza o arquivo Motoristas_Cidades.xlsx com:
+    Aba 1: 'Motoristas e Cidades' -> Lista de cidades e motoristas (incluindo motoristas sem cidade para o usuário preencher).
+    Aba 2: 'Nomes de Motoristas do Sistema' -> Todos os nomes exatos do sistema (iMile e Anjun) prontos para copiar e colar.
     """
     if not caminho_destino:
-        caminho_destino = os.path.join(os.path.dirname(os.path.abspath(__file__)), EXCEL_MOTORISTAS)
+        caminho_destino = obter_caminho_excel()
         
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment
     
     conn = conectar_banco()
     cursor = conn.cursor()
-    cursor.execute("SELECT cidade, motorista, plataforma FROM motoristas_plataforma ORDER BY cidade ASC, plataforma ASC")
-    rows = cursor.fetchall()
+    cursor.execute("""
+        SELECT cidade, motorista, plataforma, COALESCE(faixa_cep, '')
+        FROM motoristas_plataforma 
+        WHERE cidade NOT IN ('iMile', 'Anjun', 'Geral', 'Sem Cidade', '')
+        ORDER BY plataforma ASC, cidade ASC, motorista ASC
+    """)
+    rows_mapeados = cursor.fetchall()
     conn.close()
-    
+
+    # Coleta todos os motoristas oficiais conhecidos de cada plataforma (cache em memória + bases salvas em disco)
+    todos_motoristas_imile = []
+    todos_motoristas_anjun = []
+    try:
+        for m in (globals().get('cache_motoristas_imile', {}).get("lista") or []):
+            if m.get("daName"):
+                todos_motoristas_imile.append(m["daName"].strip())
+    except Exception:
+        pass
+    try:
+        for m in (globals().get('cache_motoristas_anjun', {}).get("lista") or []):
+            if m.get("username"):
+                todos_motoristas_anjun.append(m["username"].strip())
+    except Exception:
+        pass
+    try:
+        dados_bases = carregar_motoristas_por_base_disco()
+        for k_base, v_base in (dados_bases or {}).items():
+            if not isinstance(v_base, dict):
+                continue
+            mots_b = v_base.get("motoristas") or []
+            if str(k_base).startswith("imile:"):
+                for mb in mots_b:
+                    if mb and str(mb).strip():
+                        todos_motoristas_imile.append(str(mb).strip())
+            elif str(k_base).startswith("anjun:"):
+                for mb in mots_b:
+                    if mb and str(mb).strip():
+                        todos_motoristas_anjun.append(str(mb).strip())
+    except Exception:
+        pass
+
+    # Carrega também os do Motoristas.xlsx caso as APIs não tenham retornado tudo
+    path_xlsx = os.path.join(BASE_DIR, "Motoristas.xlsx")
+    if os.path.exists(path_xlsx):
+        try:
+            wb_ref = openpyxl.load_workbook(path_xlsx, data_only=True)
+            ws_ref = wb_ref.active
+            for r in list(ws_ref.iter_rows(values_only=True))[1:]:
+                if r and len(r) > 0 and r[0] and str(r[0]).strip() and str(r[0]).strip() not in todos_motoristas_imile:
+                    todos_motoristas_imile.append(str(r[0]).strip())
+                if r and len(r) > 2 and r[2] and str(r[2]).strip() and str(r[2]).strip() not in todos_motoristas_anjun:
+                    todos_motoristas_anjun.append(str(r[2]).strip())
+            wb_ref.close()
+        except Exception:
+            pass
+
+    todos_motoristas_imile = sorted(list(set(todos_motoristas_imile)), key=lambda s: s.lower())
+    todos_motoristas_anjun = sorted(list(set(todos_motoristas_anjun)), key=lambda s: s.lower())
+
     wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Motoristas e Cidades"
+    
+    # ----------------------------------------------------
+    # ABA 1: Motoristas e Cidades (Planilha Principal)
+    # ----------------------------------------------------
+    ws1 = wb.active
+    ws1.title = "Motoristas e Cidades"
     
     header_font = Font(name="Arial", size=11, bold=True, color="FFFFFF")
     header_fill = PatternFill(start_color="0284C7", end_color="0284C7", fill_type="solid")
     
-    headers = ["CIDADE", "MOTORISTA", "PLATAFORMA"]
-    ws.append(headers)
-    
-    for cell in ws[1]:
+    ws1.append(["CIDADE", "MOTORISTA", "PLATAFORMA", "FAIXA DE CEP (OPCIONAL)"])
+    for cell in ws1[1]:
         cell.font = header_font
         cell.fill = header_fill
         cell.alignment = Alignment(horizontal="center", vertical="center")
-        
-    for r in rows:
-        ws.append([r[0], r[1], (r[2] or "TODAS").capitalize()])
-        
-    ws.column_dimensions['A'].width = 32
-    ws.column_dimensions['B'].width = 30
-    ws.column_dimensions['C'].width = 20
+
+    mots_imile_mapeados = set()
+    mots_anjun_mapeados = set()
     
+    for cid, mot, plat, f_cep in rows_mapeados:
+        plat_cap = (plat or "TODAS").capitalize()
+        ws1.append([cid, mot, plat_cap, f_cep or ""])
+        if (plat or '').lower() == 'imile':
+            mots_imile_mapeados.add(mot.strip().lower())
+        elif (plat or '').lower() == 'anjun':
+            mots_anjun_mapeados.add(mot.strip().lower())
+
+    # Motoristas do sistema que ainda NÃO têm cidade definida
+    # Adiciona com a coluna de cidade vazia para o usuário apenas digitar a cidade correspondente!
+    mots_pendentes_imile = [m for m in todos_motoristas_imile if m.lower() not in mots_imile_mapeados]
+    mots_pendentes_anjun = [m for m in todos_motoristas_anjun if m.lower() not in mots_anjun_mapeados]
+
+    fill_pendente = PatternFill(start_color="FFFBEB", end_color="FFFBEB", fill_type="solid")
+
+    for mot in mots_pendentes_imile:
+        row_idx = ws1.max_row + 1
+        ws1.append(["", mot, "Imile", ""])
+        ws1.cell(row=row_idx, column=1).fill = fill_pendente
+
+    for mot in mots_pendentes_anjun:
+        row_idx = ws1.max_row + 1
+        ws1.append(["", mot, "Anjun", ""])
+        ws1.cell(row=row_idx, column=1).fill = fill_pendente
+
+    ws1.column_dimensions['A'].width = 32
+    ws1.column_dimensions['B'].width = 34
+    ws1.column_dimensions['C'].width = 18
+    ws1.column_dimensions['D'].width = 28
+
+    # ----------------------------------------------------
+    # ABA 2: Lista Completa de Motoristas do Sistema
+    # ----------------------------------------------------
+    ws2 = wb.create_sheet(title="Nomes do Sistema")
+    ws2.append(["NOME EXATO NO SISTEMA", "PLATAFORMA", "STATUS NO SISTEMA"])
+    for cell in ws2[1]:
+        cell.font = header_font
+        cell.fill = PatternFill(start_color="0F766E", end_color="0F766E", fill_type="solid")
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    for mot in todos_motoristas_imile:
+        tem_cid = mot.lower() in mots_imile_mapeados
+        status = "Cidade Já Vinculada" if tem_cid else "Pendente de Cidade"
+        ws2.append([mot, "iMile", status])
+
+    for mot in todos_motoristas_anjun:
+        tem_cid = mot.lower() in mots_anjun_mapeados
+        status = "Cidade Já Vinculada" if tem_cid else "Pendente de Cidade"
+        ws2.append([mot, "Anjun", status])
+
+    ws2.column_dimensions['A'].width = 36
+    ws2.column_dimensions['B'].width = 18
+    ws2.column_dimensions['C'].width = 24
+
+    # ----------------------------------------------------
+    # ABA 3: Lista de Cidades Cadastradas (Edição e Inclusão Fácil)
+    # ----------------------------------------------------
+    ws3 = wb.create_sheet(title="Cidades")
+    ws3.append(["CIDADE CADASTRADA"])
+    for cell in ws3[1]:
+        cell.font = header_font
+        cell.fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    try:
+        conn_c = conectar_banco()
+        cursor_c = conn_c.cursor()
+        cursor_c.execute("SELECT cidade FROM cidades WHERE cidade NOT IN ('Sem Cidade', 'Geral', 'iMile', 'Anjun', '') ORDER BY cidade ASC")
+        cidades_todas = [r[0] for r in cursor_c.fetchall() if r[0]]
+        conn_c.close()
+        for c_item in cidades_todas:
+            ws3.append([c_item])
+    except Exception as e_c_tab:
+        print(f"[Aviso] Falha ao preencher aba Cidades no Excel: {e_c_tab}")
+
+    ws3.column_dimensions['A'].width = 38
+
     wb.save(caminho_destino)
+
+    # Espelha automaticamente a planilha salva em todos os caminhos do projeto para facilitar cópia para outros computadores
+    try:
+        import shutil
+        espelhos = [
+            os.path.join(BASE_DIR, EXCEL_MOTORISTAS),
+            os.path.abspath(os.path.join(BASE_DIR, '..', '..', EXCEL_MOTORISTAS))
+        ]
+        if 'sistema de bipagem' in BASE_DIR.lower():
+            espelhos.extend([
+                os.path.abspath(os.path.join(BASE_DIR, '..', '..', '..', '..', EXCEL_MOTORISTAS)),
+                os.path.abspath(os.path.join(BASE_DIR, '..', '..', '..', '..', 'core-engine', EXCEL_MOTORISTAS)),
+                os.path.join(os.path.expanduser('~'), 'Desktop', 'Sistema de Bipagem', EXCEL_MOTORISTAS),
+                os.path.join(os.path.expanduser('~'), 'Desktop', 'Sistema de Bipagem', 'core-engine', EXCEL_MOTORISTAS)
+            ])
+        orig_abs = os.path.normcase(os.path.abspath(caminho_destino))
+        vistos_esp = {orig_abs}
+        for esp in espelhos:
+            esp_abs = os.path.normcase(os.path.abspath(esp))
+            if esp_abs not in vistos_esp and os.path.isdir(os.path.dirname(esp)):
+                vistos_esp.add(esp_abs)
+                try:
+                    shutil.copy2(caminho_destino, esp)
+                except Exception:
+                    pass
+        meta_mtime_file = os.path.join(BASE_DIR, '.excel_sync_meta')
+        with open(meta_mtime_file, 'w') as f_meta:
+            f_meta.write(str(os.path.getmtime(caminho_destino)))
+    except Exception as e_esp:
+        print(f"[Aviso] Espelhamento de planilha Excel: {e_esp}")
+
     return caminho_destino
 
+
+# --- CACHE DE ULTRA-ALTA VELOCIDADE EM MEMÓRIA RAM (0.0001ms de latência) ---
+_CACHE_RAM_CIDADES = None
+_CACHE_RAM_CIDADES_NORM_DICT = None
+_CACHE_RAM_CIDADES_ORDENADAS = None
+_CACHE_RAM_MOTORISTAS_CIDADE = {}
+_CACHE_RAM_CEP = None
+
+def invalidar_cache_ram_cidades_motoristas():
+    global _CACHE_RAM_CIDADES, _CACHE_RAM_CIDADES_NORM_DICT, _CACHE_RAM_CIDADES_ORDENADAS, _CACHE_RAM_MOTORISTAS_CIDADE
+    _CACHE_RAM_CIDADES = None
+    _CACHE_RAM_CIDADES_NORM_DICT = None
+    _CACHE_RAM_CIDADES_ORDENADAS = None
+    _CACHE_RAM_MOTORISTAS_CIDADE = {}
+    print("[Cache RAM] Cache de Cidades e Motoristas invalidado e atualizado.")
 
 def remover_acentos(txt):
     if not txt:
         return ""
     return "".join(c for c in unicodedata.normalize('NFD', txt) if unicodedata.category(c) != 'Mn')
 
-def encontrar_cidade_mapeada(cidade_resolvida, lista_cidades):
-    if not cidade_resolvida or not lista_cidades:
+def normalizar_cidade_estrita(nome):
+    """
+    Normaliza um nome de cidade ou tag de grupo para comparação estrita:
+    - Remove acentos, colchetes/parênteses (ex: [Placa: ...]), datas/números (ex: 06-10) e sufixo de UF (ex: - SP, /SP).
+    - Preserva o nome completo da cidade para nunca confundir 'Itararé' com 'Bom Sucesso de Itararé' ou 'Ribeira' com 'Ribeirão Branco'.
+    """
+    if not nome:
+        return ""
+    s = remover_acentos(str(nome).strip().lower())
+    s = re.sub(r'\[.*?\]|\(.*?\)', ' ', s)
+    s = re.sub(r'\b\d{1,4}(?:[-/]\d{1,4})*\b', ' ', s)
+    s = re.sub(r'(?:[\s,\-/]+)(?:sp|pr|mg|rj|sc|rs|ms|mt|go|df|ba|pe|ce|pa|am|ma|es|pb|rn|al|pi|se|ro|to|ac|ap|rr)$', '', s)
+    s = re.sub(r'[\s\-_]+', ' ', s).strip()
+    return s
+
+def cidades_sao_iguais(cid_a, cid_b):
+    """
+    Compara se duas cidades (ou cidade e tag de grupo Loggi) são exatamente a mesma cidade,
+    suportando múltiplas cidades separadas por vírgula ou barra, sem falsos positivos por substring.
+    """
+    if not cid_a or not cid_b:
+        return False
+    partes_a = [normalizar_cidade_estrita(p) for p in re.split(r'[,/;]+', str(cid_a)) if normalizar_cidade_estrita(p)]
+    partes_b = [normalizar_cidade_estrita(p) for p in re.split(r'[,/;]+', str(cid_b)) if normalizar_cidade_estrita(p)]
+    if not partes_a or not partes_b:
+        return False
+    return any(pa == pb for pa in partes_a for pb in partes_b)
+
+def encontrar_cidade_mapeada(cidade_resolvida, lista_cidades=None):
+    if not cidade_resolvida:
         return None
         
-    cidade_res_clean = remover_acentos(str(cidade_resolvida).strip().lower())
+    global _CACHE_RAM_CIDADES_NORM_DICT, _CACHE_RAM_CIDADES_ORDENADAS
+    if _CACHE_RAM_CIDADES_NORM_DICT is None or _CACHE_RAM_CIDADES_ORDENADAS is None:
+        carregar_cidades()
+        
+    texto_raw = str(cidade_resolvida).strip()
+    cidade_res_clean = remover_acentos(texto_raw.lower())
+    cidade_res_estrita = normalizar_cidade_estrita(texto_raw)
     
-    # Ordena as cidades cadastradas pelo comprimento do nome de forma decrescente
-    # Ex: "Bom Sucesso de Itarare" vem antes de "Itarare"
-    cidades_ordenadas = sorted(lista_cidades, key=lambda c: len(c), reverse=True)
-    
-    # 1. Tenta correspondência exata primeiro (ignorando acentos e espaços extras)
+    # 1. Correspondência exata instantânea via Dicionário Hash O(1) na Memória RAM (0.00001ms!)
+    if _CACHE_RAM_CIDADES_NORM_DICT:
+        if cidade_res_clean in _CACHE_RAM_CIDADES_NORM_DICT:
+            return _CACHE_RAM_CIDADES_NORM_DICT[cidade_res_clean]
+        if cidade_res_estrita and cidade_res_estrita in _CACHE_RAM_CIDADES_NORM_DICT:
+            return _CACHE_RAM_CIDADES_NORM_DICT[cidade_res_estrita]
+        
+    # 2. Se a lista de cidades recebida por parâmetro for diferente da do banco, usa ela ordenada
+    cidades_ordenadas = _CACHE_RAM_CIDADES_ORDENADAS
+    if not cidades_ordenadas:
+        cidades_ordenadas = sorted(lista_cidades or [], key=lambda c: len(c), reverse=True)
+        
+    # 3. Correspondência exata na lista ordenada
     for cidade in cidades_ordenadas:
         cidade_clean = remover_acentos(cidade.strip().lower())
-        if cidade_clean == cidade_res_clean:
+        cidade_est = normalizar_cidade_estrita(cidade)
+        if cidade_clean == cidade_res_clean or (cidade_est and cidade_est == cidade_res_estrita):
             return cidade
             
-    # 2. Tenta correspondência com limites de palavra (word boundaries)
-    # A cidade cadastrada (cidade_clean) precisa aparecer inteira como palavra no texto/endereço resolvido
-    # Ex: "Itarare" nunca baterá se o endereço for apenas "Bom Sucesso de Itarare"
+    # 4. Se a entrada já é o nome isolado de uma cidade (sem quebras de linha e curta),
+    # NÃO faz busca parcial por palavra interna para jamais confundir 'Bom Sucesso de Itararé' com 'Itararé'!
+    if "\n" not in texto_raw and len(texto_raw) <= 45:
+        return None
+
+    # 5. Apenas quando texto_raw é um bloco longo de endereço (fallback Selenium):
+    # procura com limites de palavra, mas ignorando ocorrências precedidas de preposição ('de ', 'do ', 'da ', 'dos ', 'das ')
     for cidade in cidades_ordenadas:
         cidade_clean = remover_acentos(cidade.strip().lower())
-        padrao = r'(?:\b|^)' + re.escape(cidade_clean) + r'(?:\b|$)'
+        padrao = r'(?<!\bde\s)(?<!\bdo\s)(?<!\bda\s)(?<!\bdos\s)(?<!\bdas\s)(?:\b|^)' + re.escape(cidade_clean) + r'(?:\b|$)'
         if re.search(padrao, cidade_res_clean):
             return cidade
             
     return None
 
-# --- HELPERS PARA CONSULTA DE CEP E VIA CEP (OTIMIZADO COM CACHE LOCAL) ---
+# --- HELPERS PARA CONSULTA DE CEP E VIA CEP (OTIMIZADO COM CACHE LOCAL NA RAM) ---
 def carregar_cep_cache():
+    global _CACHE_RAM_CEP
+    if _CACHE_RAM_CEP is not None:
+        return _CACHE_RAM_CEP
     try:
         conn = conectar_banco()
         cursor = conn.cursor()
         cursor.execute("SELECT cep, cidade FROM cep_cache")
         rows = cursor.fetchall()
         conn.close()
-        return {r[0]: r[1] for r in rows}
+        _CACHE_RAM_CEP = {str(r[0]).strip(): str(r[1]).strip() for r in rows if r[0] and r[1]}
+        return _CACHE_RAM_CEP
     except Exception:
-        return {}
+        _CACHE_RAM_CEP = {}
+        return _CACHE_RAM_CEP
 
 def salvar_cep_cache(cache):
+    global _CACHE_RAM_CEP
+    _CACHE_RAM_CEP = dict(cache)
     try:
         conn = conectar_banco()
         cursor = conn.cursor()
@@ -599,64 +1032,102 @@ def salvar_cep_cache(cache):
         print(f"[Erro] Falha ao salvar CEP cache no SQLite: {str(e)}")
 
 def obter_cidade_por_cep(cep):
-    cep_limpo = "".join(filter(str.isdigit, str(cep)))
+    cep_limpo = "".join(filter(str.isdigit, str(cep or "")))
+    if len(cep_limpo) == 7:
+        cep_limpo = "0" + cep_limpo
     if len(cep_limpo) != 8:
         return None
         
-    # 1. Tenta obter do cache local (0ms de latência!)
+    # 1. Tenta obter do cache em memória RAM (Instantâneo 0.00001ms!)
     cache = carregar_cep_cache()
     if cep_limpo in cache:
-        print(f"[Cache] CEP {cep_limpo} resolvido instantaneamente do cache local: {cache[cep_limpo]}")
         return cache[cep_limpo]
+    cep_geral_municipio = cep_limpo[:5] + "000"
+    if cep_geral_municipio in cache:
+        return cache[cep_geral_municipio]
         
-    # 2. Se não está no cache, consulta APIs brasileiras de alta velocidade (CDN Cloudflare)
-    cidade = None
-    
-    # API 1: BrasilAPI (Super rápida)
-    try:
-        url = f"https://brasilapi.com.br/api/cep/v1/{cep_limpo}"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=1.2) as response:
-            dados = json.loads(response.read().decode('utf-8'))
-            if "city" in dados:
-                cidade = dados["city"]
-                print(f"[API] CEP {cep_limpo} resolvido pela BrasilAPI: {cidade}")
-    except Exception as e:
-        print(f"[Aviso] Falha na BrasilAPI para o CEP {cep_limpo}: {str(e)}")
+    def _consultar_apis_cep(c_alvo):
+        # API 1: BrasilAPI (Super rápida via CDN Cloudflare)
+        try:
+            url = f"https://brasilapi.com.br/api/cep/v1/{c_alvo}"
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=1.0) as response:
+                dados = json.loads(response.read().decode('utf-8'))
+                if dados.get("city"):
+                    print(f"[API] CEP {c_alvo} resolvido pela BrasilAPI: {dados['city']}")
+                    return dados["city"]
+        except Exception:
+            pass
 
-    # API 2: AwesomeAPI (Segunda opção rápida)
+        # API 2: ViaCEP
+        try:
+            url = f"https://viacep.com.br/ws/{c_alvo}/json/"
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=1.0) as response:
+                dados = json.loads(response.read().decode('utf-8'))
+                if dados.get("localidade"):
+                    print(f"[API] CEP {c_alvo} resolvido pelo ViaCEP: {dados['localidade']}")
+                    return dados["localidade"]
+        except Exception:
+            pass
+
+        # API 3: AwesomeAPI
+        try:
+            url = f"https://cep.awesomeapi.com.br/json/{c_alvo}"
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=1.0) as response:
+                dados = json.loads(response.read().decode('utf-8'))
+                if dados.get("city"):
+                    print(f"[API] CEP {c_alvo} resolvido pela AwesomeAPI: {dados['city']}")
+                    return dados["city"]
+        except Exception:
+            pass
+
+        # API 4: OpenCEP (CDN estática ultra-rápida)
+        try:
+            url = f"https://opencep.com/v1/{c_alvo}.json"
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=1.0) as response:
+                dados = json.loads(response.read().decode('utf-8'))
+                if dados.get("localidade"):
+                    print(f"[API] CEP {c_alvo} resolvido pelo OpenCEP: {dados['localidade']}")
+                    return dados["localidade"]
+        except Exception:
+            pass
+        return None
+
+    # 2. Consulta o CEP exato nas APIs de alta velocidade
+    cidade = _consultar_apis_cep(cep_limpo)
+
+    # 3. Se for uma rua nova ainda não indexada nas APIs, consulta o CEP geral da cidade (XXXXX-000)
+    if not cidade and cep_geral_municipio != cep_limpo:
+        cidade = _consultar_apis_cep(cep_geral_municipio)
+
+    # 4. Fallback local pelas faixas de CEP cadastradas nos motoristas
     if not cidade:
         try:
-            url = f"https://cep.awesomeapi.com.br/json/{cep_limpo}"
-            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=1.2) as response:
-                dados = json.loads(response.read().decode('utf-8'))
-                if "city" in dados:
-                    cidade = dados["city"]
-                    print(f"[API] CEP {cep_limpo} resolvido pela AwesomeAPI: {cidade}")
-        except Exception as e:
-            print(f"[Aviso] Falha na AwesomeAPI para o CEP {cep_limpo}: {str(e)}")
+            conn_f = conectar_banco()
+            cur_f = conn_f.cursor()
+            cur_f.execute("SELECT cidade, faixa_cep FROM motoristas_plataforma WHERE faixa_cep IS NOT NULL AND faixa_cep != ''")
+            for cid_db, f_cep_db in cur_f.fetchall():
+                if cid_db and f_cep_db and cep_bate_com_regra(cep_limpo, f_cep_db):
+                    cidade = str(cid_db).strip()
+                    print(f"[+] CEP {cep_limpo} resolvido pela faixa de CEP local: {cidade}")
+                    break
+            conn_f.close()
+        except Exception:
+            pass
 
-    # API 3: ViaCEP (Último recurso, mais lenta)
-    if not cidade:
-        try:
-            url = f"https://viacep.com.br/ws/{cep_limpo}/json/"
-            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=2.0) as response:
-                dados = json.loads(response.read().decode('utf-8'))
-                if "localidade" in dados:
-                    cidade = dados["localidade"]
-                    print(f"[API] CEP {cep_limpo} resolvido pelo ViaCEP: {cidade}")
-        except Exception as e:
-            print(f"[Erro] Falha no ViaCEP para o CEP {cep_limpo}: {str(e)}")
-
-    # Se encontrou a cidade em qualquer uma das APIs, salva no cache local
     if cidade:
+        # Salva imediatamente no Cache RAM e persiste no SQLite em background
         cache[cep_limpo] = cidade
-        salvar_cep_cache(cache)
-        return cidade
-        
-    return None
+        import threading
+        try:
+            threading.Thread(target=salvar_cep_cache, args=(cache,), daemon=True).start()
+        except Exception:
+            salvar_cep_cache(cache)
+    return cidade
+
 
 def normalizar_texto(texto):
     if not texto:
@@ -817,7 +1288,7 @@ def obter_input_imile_html(driver, timeout=2.0):
     - Aba 1: ArrivalScan (Entrada)
     - Aba 2: dsOffloadingScan (Descarregamento)
     - Aba 4: assignDA (Atribuição)
-    Clica em 'Começar Leitura' se necessário e evita estritamente inputs do dropdown de motorista (#daCode).
+    Evita estritamente inputs do dropdown de motorista (#daCode, menus e popovers).
     """
     if not driver:
         return None
@@ -825,22 +1296,7 @@ def obter_input_imile_html(driver, timeout=2.0):
     inicio_busca = time.time()
     while time.time() - inicio_busca < max(0.5, timeout):
         try:
-            # 1. Se houver botão 'Começar Leitura' / 'Start Scan' fechando a tela de scan na Aba 2, clica para abrir
-            try:
-                driver.execute_script("""
-                    var btns = document.querySelectorAll("button, .ImileButton, .MuiButton-root, [role='button'], .ant-btn");
-                    for (var i = 0; i < btns.length; i++) {
-                        var t = (btns[i].innerText || btns[i].textContent || '').trim().toLowerCase();
-                        if (t === 'começar leitura' || t === 'comecar leitura' || t === 'start scan' || t === 'iniciar leitura' || t === 'começar') {
-                            btns[i].click();
-                            break;
-                        }
-                    }
-                """)
-            except Exception:
-                pass
-
-            # 2. Busca o input diretamente no DOM via JS com seletores robustos
+            # 1. Busca o input diretamente no DOM via JS com seletores robustos
             el_js = driver.execute_script("""
                 // 1. Procura pelo container padrão #scanNumber
                 var container = document.querySelector("#scanNumber");
@@ -861,7 +1317,7 @@ def obter_input_imile_html(driver, timeout=2.0):
                 var allInputs = document.querySelectorAll("input[type='text']:not([readonly]):not([disabled]), input:not([type]):not([readonly]):not([disabled])");
                 for (var i = 0; i < allInputs.length; i++) {
                     var el = allInputs[i];
-                    if (el.closest && (el.closest("#daCode") || el.closest(".popover") || el.closest(".popper") || el.closest(".dropdown") || el.closest(".Language") || el.closest("header"))) {
+                    if (el.closest && (el.closest("#daCode") || el.closest(".popover") || el.closest(".popper") || el.closest(".dropdown") || el.closest(".Language") || el.closest("header") || el.closest(".MuiAutocomplete-root"))) {
                         continue;
                     }
                     var ph = (el.getAttribute("placeholder") || "").toLowerCase();
@@ -879,7 +1335,7 @@ def obter_input_imile_html(driver, timeout=2.0):
                 var uiInputs = document.querySelectorAll("input.ImileInput-input:not([readonly]):not([disabled]), input.ant-input:not([readonly]):not([disabled]), input.MuiInputBase-input:not([readonly]):not([disabled])");
                 for (var k = 0; k < uiInputs.length; k++) {
                     var elM = uiInputs[k];
-                    if (elM.closest && (elM.closest("#daCode") || elM.closest(".popover") || elM.closest(".popper") || elM.closest(".dropdown") || elM.closest(".Language") || elM.closest("header"))) {
+                    if (elM.closest && (elM.closest("#daCode") || elM.closest(".popover") || elM.closest(".popper") || elM.closest(".dropdown") || elM.closest(".Language") || elM.closest("header") || elM.closest(".MuiAutocomplete-root"))) {
                         continue;
                     }
                     if (elM.offsetParent !== null || elM.offsetWidth > 0 || elM.offsetHeight > 0) {
@@ -891,10 +1347,10 @@ def obter_input_imile_html(driver, timeout=2.0):
             """)
             if el_js:
                 return el_js
-        except Exception as e_find:
+        except Exception:
             pass
 
-        # 3. Fallbacks clássicos por XPath dentro do loop de tolerância
+        # 2. Fallbacks clássicos por XPath dentro do loop de tolerância
         candidatos = [
             "//*[@id='scanNumber']//input",
             "//*[@id='scanNumber']/div/div[2]/div/div[1]/div/input",
@@ -921,10 +1377,12 @@ def obter_input_imile_html(driver, timeout=2.0):
 
 def enviar_bipe_imile_html(driver, campo, codigo_qr):
     """
-    Garante que o código seja efetivamente digitado/colado e submetido com Enter
-    no campo de input da iMile em qualquer uma das abas (Aba 1, Aba 2, Aba 4).
-    Combina digitação nativa estilo leitor de código de barras USB com
-    fallback reativo via JavaScript (Native Property Setter + KeyboardEvents de Enter).
+    Insere o código e envia exatamente 1 único Enter no campo de input da iMile (Aba 1, Aba 2, Aba 4).
+    1. Reseta o _valueTracker e injeta o código via protótipo nativo para o React 18 / Material-UI.
+    2. Dispara eventos input e change para atualizar o estado interno do componente.
+    3. Envia 1 único Enter nativo via Selenium (sem disparos paralelos de Enter no JS),
+       garantindo que o site processe a leitura com sucesso e sem submissão dupla.
+    4. Conclui instantaneamente (50ms) sem travas ou esperas artificiais.
     """
     if not driver:
         return False
@@ -934,88 +1392,80 @@ def enviar_bipe_imile_html(driver, campo, codigo_qr):
         print("[Aviso] Campo de bipe iMile não encontrado para envio.")
         return False
 
-    codigo_qr = str(codigo_qr).strip()
-    if not codigo_qr:
+    codigo_limpo = str(codigo_qr or '').strip()
+    if not codigo_limpo:
         return False
 
+    # 1. Injeção direta reativa com suporte a React / Material-UI _valueTracker e eventos input/change
     try:
-        # 1. Garante visibilidade, foco e clique no campo
+        sucesso_js = driver.execute_script("""
+            var el = arguments[0];
+            var codigo = (arguments[1] || '').trim();
+            if (!el) return false;
+
+            try {
+                el.scrollIntoView({ block: 'center' });
+                el.focus();
+                el.click();
+            } catch(e) {}
+
+            // Reseta o _valueTracker do React para garantir que a mudança seja detectada
+            if (el._valueTracker) {
+                el._valueTracker.setValue('');
+            }
+
+            // Atribui o valor pelo protótipo nativo do HTMLInputElement
+            var nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
+            if (nativeSetter && nativeSetter.set) {
+                nativeSetter.set.call(el, codigo);
+            } else {
+                el.value = codigo;
+            }
+
+            // Dispara evento InputEvent para o React atualizar seu estado interno
+            try {
+                var evInput = new InputEvent('input', {
+                    bubbles: true,
+                    cancelable: true,
+                    inputType: 'insertText',
+                    data: codigo
+                });
+                el.dispatchEvent(evInput);
+            } catch(e) {
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+
+            return (el.value === codigo);
+        """, campo, codigo_limpo)
+        print(f"[*] [iMile] Inserção reativa no campo: valor={codigo_limpo}, conferido={sucesso_js}")
+    except Exception as e_js:
+        print(f"[Aviso] Falha no preenchimento JS iMile: {str(e_js)}")
+
+    # 2. Confirmação nativa via Selenium se o valor não foi retido pelo JS
+    try:
+        val_atual = campo.get_attribute('value')
+        if not val_atual:
+            print("[*] [iMile] Valor não retido via JS. Digitando via Selenium nativo...")
+            campo.click()
+            campo.send_keys(codigo_limpo)
+    except Exception as e_sel:
+        print(f"[Aviso] Falha na digitação Selenium iMile: {str(e_sel)}")
+
+    # 3. Dispara exatamente 1 único Enter nativo (sem disparos concorrentes no JS para evitar bipe duplo)
+    try:
+        campo.send_keys(Keys.ENTER)
+        print("[+] [iMile] Tecla Enter única enviada com sucesso!")
+    except Exception:
         try:
-            driver.execute_script("""
-                var el = arguments[0];
-                if (el) {
-                    try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch(e) {}
-                    try { el.focus(); } catch(e) {}
-                    try { el.click(); } catch(e) {}
-                }
-            """, campo)
-        except Exception:
-            pass
-        time.sleep(0.05)
+            webdriver.ActionChains(driver).send_keys(Keys.ENTER).perform()
+            print("[+] [iMile] Tecla Enter única enviada via ActionChains!")
+        except Exception as e_ent:
+            print(f"[Aviso] Falha ao enviar Enter iMile: {str(e_ent)}")
 
-        # 2. Digitação nativa estilo leitor de código de barras USB (Ctrl+A, Backspace, Código + Enter)
-        digitado = False
-        try:
-            campo.send_keys(Keys.CONTROL + "a", Keys.BACKSPACE, codigo_qr + Keys.ENTER)
-            digitado = True
-        except Exception as e_send_keys:
-            print(f"[*] Tentando clique direto no campo antes do send_keys: {str(e_send_keys)}")
-            try:
-                campo.click()
-                campo.send_keys(Keys.CONTROL + "a", Keys.BACKSPACE, codigo_qr + Keys.ENTER)
-                digitado = True
-            except Exception:
-                pass
-
-        time.sleep(0.06)
-
-        # 3. Fallback inteligente: se o send_keys falhou ou se o valor não foi processado pela página,
-        # injeta o valor usando o prototype setter nativo (compatível com React, Ant Design e Vue)
-        # e dispara a sequência completa de eventos de teclado Enter
-        val_atual = ""
-        try:
-            val_atual = campo.get_attribute("value") or ""
-        except Exception:
-            pass
-
-        # Se o campo não recebeu o valor ou não limpou (no iMile bem-sucedido o input pode limpar automaticamente após processar)
-        if not digitado or (val_atual != "" and val_atual != codigo_qr):
-            print(f"[*] Injetando código {codigo_qr} via Native Setter + Enter Event...")
-            driver.execute_script("""
-                var el = arguments[0];
-                var val = arguments[1];
-                if (el) {
-                    try { el.focus(); } catch(e) {}
-                    var nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
-                    if (nativeSetter && nativeSetter.set) {
-                        nativeSetter.set.call(el, val);
-                    } else {
-                        el.value = val;
-                    }
-                    el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-                    el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
-                    ['keydown', 'keypress', 'keyup'].forEach(function(evName) {
-                        el.dispatchEvent(new KeyboardEvent(evName, {
-                            key: 'Enter', code: 'Enter', keyCode: 13, which: 13, charCode: 13,
-                            bubbles: true, cancelable: true, composed: true
-                        }));
-                    });
-                    if (el.form) {
-                        try { el.form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); } catch(e) {}
-                    }
-                }
-            """, campo, codigo_qr)
-            try:
-                campo.send_keys(Keys.ENTER)
-            except Exception:
-                pass
-
-        # 4. Pequeno delay de segurança para a requisição de rede/bipagem ser disparada pela página antes da troca de aba
-        time.sleep(0.15)
-        return True
-    except Exception as e_send:
-        print(f"[Erro] Falha ao enviar bipe iMile: {str(e_send)}")
-        return False
+    # 4. Breve margem ultra-rápida (50ms) sem atraso artificial
+    time.sleep(0.05)
+    return True
 
 def obter_input_anjun_html(driver):
     """
@@ -1110,6 +1560,186 @@ def enviar_bipe_anjun_html(driver, campo, codigo_qr):
         pass
 
     return True
+
+def bipar_pacote_atribuicao_anjun(driver, codigo_qr):
+    """
+    Localiza o campo de bipe de pacote na Aba 3 (TaskAssignment) da Anjun Express,
+    garantindo que não seja confundido com o dropdown do entregador.
+    Digita o código nativamente e via Native Setter, submete com Enter,
+    trata popups de reatribuição e aguarda confirmação.
+    Retorna (sucesso: bool, contagem_site: int or None, erro_msg: str or None).
+    """
+    if not driver:
+        return False, None, "Driver Selenium ausente."
+
+    # 1. Garante que qualquer dropdown residual do entregador esteja fechado e sem foco
+    try:
+        driver.execute_script("""
+            if (document.activeElement && (document.activeElement.classList.contains('el-select__input') || document.activeElement.getAttribute('role') === 'combobox')) {
+                document.activeElement.blur();
+            }
+            var poppers = document.querySelectorAll('.el-select__popper, .el-popper');
+            for (var p = 0; p < poppers.length; p++) {
+                if (poppers[p].querySelector('.el-select-dropdown')) {
+                    poppers[p].style.display = 'none';
+                }
+            }
+        """)
+    except Exception:
+        pass
+
+    # 2. Localiza o input de pacote com espera ativa de até 2.5s
+    campo_pacote = None
+    t0_find = time.time()
+    while time.time() - t0_find < 2.5:
+        try:
+            campo_pacote = driver.execute_script("""
+                function getAba3Input() {
+                    // 1. Procura por placeholder específico de bipe (que NÃO seja do entregador)
+                    var inputs = document.querySelectorAll("input:not([type='hidden'])");
+                    for (var j = 0; j < inputs.length; j++) {
+                        var el = inputs[j];
+                        if (el.classList.contains('el-select__input') || el.getAttribute('role') === 'combobox') continue;
+                        if (el.closest && (el.closest('.el-select') || el.closest('.el-select__wrapper'))) continue;
+                        
+                        var ph = (el.getAttribute('placeholder') || '').toLowerCase();
+                        if (ph.includes('digitalizar') || ph.includes('digitar') || ph.includes('favor') || ph.includes('pacote') || ph.includes('rastreio')) {
+                            if (el.offsetWidth > 0 || el.offsetHeight > 0 || el.offsetParent !== null) {
+                                return el;
+                            }
+                        }
+                    }
+
+                    // 2. Procura por qualquer input.el-input__inner visível fora de el-select
+                    var elInners = document.querySelectorAll("input.el-input__inner, input[type='text']:not([readonly])");
+                    for (var k = 0; k < elInners.length; k++) {
+                        var el2 = elInners[k];
+                        if (el2.classList.contains('el-select__input') || el2.getAttribute('role') === 'combobox') continue;
+                        if (el2.closest && (el2.closest('.el-select') || el2.closest('.el-select__wrapper') || el2.closest('.el-date-editor'))) continue;
+                        if (el2.offsetWidth > 0 || el2.offsetHeight > 0 || el2.offsetParent !== null) {
+                            return el2;
+                        }
+                    }
+                    return null;
+                }
+                return getAba3Input();
+            """)
+        except Exception:
+            pass
+
+        if campo_pacote:
+            break
+        time.sleep(0.08)
+
+    # Fallback via seletores Selenium clássicos
+    if not campo_pacote:
+        candidatos_pacote = [
+            "//input[contains(@placeholder, 'digitalizar') or contains(@placeholder, 'digitar')][not(@role='combobox') and not(contains(@class, 'el-select__input'))]",
+            "//input[@placeholder='Favor digitalizar ou digitar']",
+            "//input[contains(@class, 'el-input__inner') and not(ancestor::*[contains(@class, 'el-select')])]",
+            "//div[not(contains(@class, 'el-select'))]//input[contains(@class, 'el-input__inner') and not(@readonly)]"
+        ]
+        for xpath in candidatos_pacote:
+            try:
+                el = driver.find_element(By.XPATH, xpath)
+                if el.is_displayed():
+                    campo_pacote = el
+                    break
+            except Exception:
+                continue
+
+    if not campo_pacote:
+        return False, None, "Não foi possível localizar o campo de input de bipe de pacote na Aba 3 da Anjun."
+
+    # 3. Foco seguro no campo de pacote
+    try:
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'}); arguments[0].focus();", campo_pacote)
+    except Exception:
+        pass
+
+    try:
+        campo_pacote.click()
+    except Exception:
+        try:
+            driver.execute_script("arguments[0].click();", campo_pacote)
+        except Exception:
+            pass
+
+    # 4. Envio do pacote: DIGITAÇÃO NATIVA + DISPARO DE EVENTOS VUE 3 / ELEMENT PLUS
+    print(f"[*] Digitando e enviando pacote {codigo_qr} na Aba 3 da Anjun...")
+    try:
+        campo_pacote.send_keys(Keys.CONTROL + "a", Keys.BACKSPACE, codigo_qr + Keys.ENTER)
+    except Exception as e_send_err:
+        print(f"[Aviso] Falha no send_keys nativo da Aba 3: {e_send_err}")
+
+    # Garante injeção direta no modelo do Vue e disparos de teclado (Enter keyCode: 13)
+    try:
+        driver.execute_script("""
+            var el = arguments[0];
+            var cod = arguments[1];
+            if (el) {
+                var nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+                if (nativeSetter) { nativeSetter.call(el, cod); } else { el.value = cod; }
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                
+                var keDown = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
+                el.dispatchEvent(keDown);
+                var kePress = new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
+                el.dispatchEvent(kePress);
+                var keUp = new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
+                el.dispatchEvent(keUp);
+            }
+        """, campo_pacote, codigo_qr)
+    except Exception as e_typ:
+        print(f"[Aviso] Falha ao disparar eventos JS na Aba 3: {e_typ}")
+
+    # 5. Confirma modais de reatribuição se houverem (ex: pacote já em outra tarefa)
+    time.sleep(0.2)
+    try:
+        driver.execute_script("""
+            var dialogs = document.querySelectorAll("div[role='dialog'], .el-dialog, .el-message-box, .el-overlay-dialog");
+            for (var d = 0; d < dialogs.length; d++) {
+                var dlg = dialogs[d];
+                if (dlg && (dlg.offsetWidth > 0 || dlg.offsetHeight > 0 || dlg.offsetParent !== null)) {
+                    var btn = dlg.querySelector(".el-button--primary, button.el-button--primary");
+                    if (btn) { btn.click(); return; }
+                    var allBtns = dlg.querySelectorAll("button");
+                    for (var b = 0; b < allBtns.length; b++) {
+                        var txt = (allBtns[b].innerText || allBtns[b].textContent || '').toLowerCase().trim();
+                        if (txt === 'confirmar' || txt === 'sim' || txt === 'ok' || txt === '确定') {
+                            allBtns[b].click();
+                            return;
+                        }
+                    }
+                }
+            }
+        """)
+    except Exception:
+        pass
+
+    # 6. Espera ativa para o site registrar o pacote e ler a contagem real
+    time.sleep(0.3)
+    contagem_site = None
+    try:
+        for _ in range(5):
+            el_cont = driver.execute_script("""
+                var el = document.querySelector("span.hasScan i, .hasScan, span[class*='hasScan'] i");
+                if (el && (el.offsetWidth > 0 || el.offsetHeight > 0 || el.offsetParent !== null)) {
+                    var txt = (el.innerText || el.textContent || '').trim();
+                    var match = txt.match(/\\d+/);
+                    if (match) return parseInt(match[0], 10);
+                }
+                return null;
+            """)
+            if el_cont is not None:
+                contagem_site = int(el_cont)
+                break
+            time.sleep(0.08)
+    except Exception:
+        pass
+
+    return True, contagem_site, None
 
 def obter_input_loggi_html(driver, modo='recebimento'):
     """
@@ -1596,7 +2226,7 @@ def carregar_historico():
     try:
         conn = conectar_banco()
         cursor = conn.cursor()
-        cursor.execute("SELECT timestamp, codigo, plataforma, cidade, motorista, status, recebedor, telefone, email, tempo_criacao, status_pacote, valor_declarado, negocios, bairro, status_entrega, motorista_entrega, tempo_atraso FROM historico")
+        cursor.execute("SELECT timestamp, codigo, plataforma, cidade, motorista, status, recebedor, telefone, email, tempo_criacao, status_pacote, valor_declarado, negocios, bairro, status_entrega, motorista_entrega, tempo_atraso, cep, endereco FROM historico")
         rows = cursor.fetchall()
         conn.close()
         
@@ -1619,7 +2249,9 @@ def carregar_historico():
                 "bairro": r[13] if len(r) > 13 else "---",
                 "status_entrega": r[14] if len(r) > 14 and r[14] is not None else "",
                 "motorista_entrega": r[15] if len(r) > 15 and r[15] is not None else "",
-                "tempo_atraso": r[16] if len(r) > 16 and r[16] is not None else 0.0
+                "tempo_atraso": r[16] if len(r) > 16 and r[16] is not None else 0.0,
+                "cep": r[17] if len(r) > 17 and r[17] is not None else "",
+                "endereco": r[18] if len(r) > 18 and r[18] is not None else ""
             })
         return historico
     except Exception:
@@ -1642,7 +2274,7 @@ def realizar_backup_db():
         import shutil
         import datetime
         
-        backup_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backups')
+        backup_dir = os.path.join(BASE_DIR, 'backups')
         if not os.path.exists(backup_dir):
             os.makedirs(backup_dir)
             
@@ -1678,96 +2310,529 @@ def otimizar_memoria():
     except Exception as e_otim:
         print(f"[Aviso] Falha ao otimizar memória: {str(e_otim)}")
 
-def salvar_entrada_historico(codigo, plataforma, cidade, motorista, status, recebedor="---", telefone="---", email="---", tempo_criacao="---", status_pacote="---", valor_declarado="---", negocios="---", bairro="---"):
+detalhes_extras_pacote = {}
+
+def formatar_nome_empresa_remetente(empresa_raw, codigo="", plataforma=""):
+    emp = str(empresa_raw or "").strip()
+    if emp in ["---", "None", "null", "****"]:
+        emp = ""
+    emp_up = emp.upper()
+    # Traduz siglas corporativas conhecidas da Loggi / iMile / Anjun para nomes claros
+    mapa_siglas = {
+        "SHPS": "Shopee (SHPS)",
+        "SHOPEE": "Shopee",
+        "EBAZAR": "Mercado Livre (EBAZAR)",
+        "MELI": "Mercado Livre",
+        "MERCADO LIVRE": "Mercado Livre",
+        "MERCADOLIVRE": "Mercado Livre",
+        "TIKTOK": "TikTok Shop",
+        "TIK TOK": "TikTok Shop",
+        "TTS": "TikTok Shop",
+        "SHEIN": "Shein",
+        "SHN": "Shein",
+        "TEMU": "Temu",
+        "ALIEXPRESS": "AliExpress",
+        "CN": "AliExpress / Cainiao",
+        "CAINIAO": "AliExpress / Cainiao",
+        "MAGALU": "Magazine Luiza",
+        "MAGAZINE LUIZA": "Magazine Luiza",
+        "AMAZON": "Amazon"
+    }
+    if emp_up in mapa_siglas:
+        return mapa_siglas[emp_up]
+    for k, v in mapa_siglas.items():
+        if k in emp_up and len(k) >= 4:
+            return f"{v} ({emp})" if emp.upper() != v.upper() else v
+    if emp and emp.lower() not in ["loggi", "imile", "anjun"]:
+        return emp
+    # Inferência pelo prefixo do código de rastreio quando a API omite o remetente
+    cod_up = str(codigo or "").strip().upper()
+    if cod_up.startswith("TT"):
+        return "TikTok Shop"
+    return emp
+
+def registrar_detalhes_extras_pacote(codigos, bairro="", telefone="", negocios="", produto="", valor_declarado="", recebedor="", cep="", endereco=""):
+    if isinstance(codigos, (str, int)):
+        codigos = [codigos]
+    def _limpar(val):
+        s = str(val or "").strip()
+        return "" if s in ["---", "None", "null", "****"] else s
+    b_val = _limpar(bairro)
+    t_val = _limpar(telefone)
+    n_val = _limpar(negocios)
+    p_val = _limpar(produto)
+    v_val = _limpar(valor_declarado)
+    r_val = _limpar(recebedor)
+    c_val = _limpar(cep)
+    e_val = _limpar(endereco)
+    for cod in (codigos or []):
+        chave = str(cod or "").strip().upper()
+        if not chave:
+            continue
+        atual = detalhes_extras_pacote.get(chave, {})
+        detalhes_extras_pacote[chave] = {
+            "bairro": b_val or atual.get("bairro", ""),
+            "telefone": t_val or atual.get("telefone", ""),
+            "negocios": formatar_nome_empresa_remetente(n_val or atual.get("negocios", ""), chave),
+            "produto": p_val or atual.get("produto", ""),
+            "valor_declarado": v_val or atual.get("valor_declarado", ""),
+            "recebedor": r_val or atual.get("recebedor", ""),
+            "cep": c_val or atual.get("cep", ""),
+            "endereco": e_val or atual.get("endereco", "")
+        }
+
+def salvar_entrada_historico(codigo, plataforma, cidade, motorista, status, recebedor="---", telefone="---", email="---", tempo_criacao="---", status_pacote="---", valor_declarado="---", negocios="---", bairro="---", cep="", endereco="", produto="---"):
+    global bipes_ok_sessao
+    import datetime
+    agora = datetime.datetime.now().isoformat()
+    mot_salvar = motorista if motorista else "Sem Motorista"
+    chave_cod = str(codigo or "").strip().upper()
+    if str(status or "").upper() == "OK" and chave_cod:
+        bipes_ok_sessao[chave_cod] = (agora, mot_salvar, cidade or "---")
+
+    # Enriquecimento automático a partir dos detalhes capturados na API da transportadora
+    extras = detalhes_extras_pacote.get(chave_cod, {})
+    if extras:
+        if (not recebedor or recebedor in ["---", "****"]) and extras.get("recebedor"):
+            recebedor = extras["recebedor"]
+        if (not telefone or telefone in ["---", "****"]) and extras.get("telefone"):
+            telefone = extras["telefone"]
+        if (not valor_declarado or valor_declarado == "---") and extras.get("valor_declarado"):
+            valor_declarado = extras["valor_declarado"]
+        if (not negocios or negocios == "---") and extras.get("negocios"):
+            negocios = extras["negocios"]
+        if (not bairro or bairro == "---") and extras.get("bairro"):
+            bairro = extras["bairro"]
+        if (not produto or produto == "---") and extras.get("produto"):
+            produto = extras["produto"]
+        if not cep and extras.get("cep"):
+            cep = extras["cep"]
+        if not endereco and extras.get("endereco"):
+            endereco = extras["endereco"]
+
+    negocios_fmt = formatar_nome_empresa_remetente(negocios if negocios != "---" else "", chave_cod, plataforma)
+    if negocios_fmt:
+        negocios = negocios_fmt
+
     try:
         conn = conectar_banco()
         cursor = conn.cursor()
-        import datetime
-        agora = datetime.datetime.now().isoformat()
-        cursor.execute('''
-            INSERT INTO historico (timestamp, codigo, plataforma, cidade, motorista, status, recebedor, telefone, email, tempo_criacao, status_pacote, valor_declarado, negocios, bairro)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (agora, codigo, plataforma, cidade, motorista if motorista else "Sem Motorista", status, recebedor, telefone, email, tempo_criacao, status_pacote, valor_declarado, negocios, bairro))
+        try:
+            cursor.execute('''
+                INSERT INTO historico (timestamp, codigo, plataforma, cidade, motorista, status, recebedor, telefone, email, tempo_criacao, status_pacote, valor_declarado, negocios, bairro, cep, endereco, produto)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (agora, codigo, plataforma, cidade, mot_salvar, status, recebedor, telefone, email, tempo_criacao, status_pacote, valor_declarado, negocios, bairro, cep, endereco, produto))
+        except sqlite3.OperationalError:
+            for col_add in ["cep", "endereco", "produto", "bairro", "negocios", "valor_declarado", "telefone"]:
+                try:
+                    cursor.execute(f"ALTER TABLE historico ADD COLUMN {col_add} TEXT")
+                except Exception:
+                    pass
+            cursor.execute('''
+                INSERT INTO historico (timestamp, codigo, plataforma, cidade, motorista, status, recebedor, telefone, email, tempo_criacao, status_pacote, valor_declarado, negocios, bairro, cep, endereco, produto)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (agora, codigo, plataforma, cidade, mot_salvar, status, recebedor, telefone, email, tempo_criacao, status_pacote, valor_declarado, negocios, bairro, cep, endereco, produto))
         conn.commit()
         conn.close()
     except Exception as e:
         print(f"[Erro] Falha ao salvar entrada de histórico no SQLite: {str(e)}")
 
 def carregar_cidades():
+    global _CACHE_RAM_CIDADES, _CACHE_RAM_CIDADES_NORM_DICT, _CACHE_RAM_CIDADES_ORDENADAS
+    if _CACHE_RAM_CIDADES is not None and len(_CACHE_RAM_CIDADES) > 0:
+        return _CACHE_RAM_CIDADES
+        
     try:
         conn = conectar_banco()
         cursor = conn.cursor()
-        cursor.execute("SELECT cidade FROM cidades ORDER BY cidade COLLATE NOCASE ASC")
+        cursor.execute("SELECT cidade FROM cidades WHERE LOWER(TRIM(cidade)) NOT IN ('sem cidade', 'geral', 'imile', 'anjun', '') ORDER BY cidade COLLATE NOCASE ASC")
         rows = cursor.fetchall()
+        if not rows:
+            conn.close()
+            try:
+                sincronizar_motoristas_excel(obter_caminho_excel())
+            except Exception:
+                pass
+            conn = conectar_banco()
+            cursor = conn.cursor()
+            cursor.execute("INSERT OR IGNORE INTO cidades (cidade) SELECT DISTINCT cidade FROM motoristas_plataforma WHERE cidade IS NOT NULL AND LOWER(TRIM(cidade)) NOT IN ('sem cidade', 'geral', 'imile', 'anjun', '')")
+            conn.commit()
+            cursor.execute("SELECT cidade FROM cidades WHERE LOWER(TRIM(cidade)) NOT IN ('sem cidade', 'geral', 'imile', 'anjun', '') ORDER BY cidade COLLATE NOCASE ASC")
+            rows = cursor.fetchall()
         conn.close()
         cidades_unicas = []
+        norm_dict = {}
         for r in rows:
-            if r[0] and r[0].strip() and r[0].strip() not in cidades_unicas:
-                cidades_unicas.append(r[0].strip())
-        return cidades_unicas
+            if r[0] and r[0].strip():
+                cid = r[0].strip()
+                chave_norm = remover_acentos(cid.lower())
+                if cid.lower() not in ('sem cidade', 'geral', 'imile', 'anjun') and chave_norm not in norm_dict:
+                    cidades_unicas.append(cid)
+                    norm_dict[chave_norm] = cid
+        _CACHE_RAM_CIDADES = cidades_unicas
+        _CACHE_RAM_CIDADES_NORM_DICT = norm_dict
+        _CACHE_RAM_CIDADES_ORDENADAS = sorted(cidades_unicas, key=lambda c: len(c), reverse=True)
+        return _CACHE_RAM_CIDADES
     except Exception:
         return []
 
-def carregar_motoristas(plataforma=None):
+CONFIG_MOTORISTAS_POR_BASE = os.path.join(BASE_DIR, 'config_motoristas_por_base.json')
+CONFIG_IMILE_TOKENS = os.path.join(BASE_DIR, 'config_imile_tokens.json')
+cache_motoristas_anjun_por_conta = {}
+cache_motoristas_imile_por_conta = {}
+
+def obter_conta_ativa_plataforma(plataforma_id, conta_id_override=None):
+    plat_key = str(plataforma_id or plataforma_ativa or "anjun").strip().lower()
+    todas_contas = carregar_contas_plataformas()
+    plat_info = todas_contas.get(plat_key, {})
+    contas = plat_info.get("contas", [])
+    c_id = str(conta_id_override or "").strip()
+    if not c_id or c_id == "padrao":
+        if plat_key == str(plataforma_ativa or "").strip().lower() and conta_ativa:
+            c_id = conta_ativa
+        else:
+            c_id = plat_info.get("conta_ativa") or ""
+    conta_obj = None
+    for c in contas:
+        if c.get("id") == c_id:
+            conta_obj = c
+            break
+    if not conta_obj and contas:
+        conta_obj = contas[0]
+        c_id = conta_obj.get("id") or "conta_1"
+    if not c_id:
+        c_id = "conta_1"
+    return c_id, (conta_obj or {})
+
+def carregar_motoristas_por_base_disco():
+    try:
+        if os.path.exists(CONFIG_MOTORISTAS_POR_BASE):
+            with open(CONFIG_MOTORISTAS_POR_BASE, 'r', encoding='utf-8') as f:
+                return json.load(f) or {}
+    except Exception:
+        pass
+    return {}
+
+def salvar_motoristas_da_base(plat_id, conta_id, lista_nomes):
+    try:
+        if not plat_id or not conta_id or not isinstance(lista_nomes, list):
+            return
+        plat_clean = str(plat_id).strip().lower()
+        conta_clean = str(conta_id).strip()
+        chave = f"{plat_clean}:{conta_clean}"
+        dados = carregar_motoristas_por_base_disco()
+        atuais_salvos = []
+        if isinstance(dados.get(chave), dict) and isinstance(dados[chave].get("motoristas"), list):
+            atuais_salvos = dados[chave]["motoristas"]
+        nomes_limpos = []
+        vistos = set()
+        for n in (list(lista_nomes) + list(atuais_salvos)):
+            ns = str(n or "").strip()
+            if ns and ns.lower() not in vistos:
+                vistos.add(ns.lower())
+                nomes_limpos.append(ns)
+        dados[chave] = {
+            "plataforma": plat_clean,
+            "conta_id": conta_clean,
+            "motoristas": nomes_limpos,
+            "timestamp": time.time()
+        }
+        with open(CONFIG_MOTORISTAS_POR_BASE, 'w', encoding='utf-8') as f:
+            json.dump(dados, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[Aviso] Falha ao salvar motoristas da base {plat_id}:{conta_id}: {e}")
+
+def obter_motoristas_da_base_salvos(plat_id, conta_id):
+    chave = f"{str(plat_id).strip().lower()}:{str(conta_id).strip()}"
+    dados = carregar_motoristas_por_base_disco()
+    item = dados.get(chave)
+    if isinstance(item, dict) and isinstance(item.get("motoristas"), list):
+        return item["motoristas"]
+    return []
+
+def _normalizar_nome_base_comp(nome):
+    return remover_acentos(str(nome or "").strip().lower()).replace('-', '').replace('_', '').replace(' ', '')
+
+def obter_nomes_oficiais_base_ativa(plat_id, conta_id=None, forcar=False):
+    plat_key = str(plat_id or plataforma_ativa or "anjun").strip().lower()
+    cid, _ = obter_conta_ativa_plataforma(plat_key, conta_id)
+    nomes_oficiais = []
+
+    if not forcar:
+        nomes_oficiais = obter_motoristas_da_base_salvos(plat_key, cid)
+
+    if not nomes_oficiais and (forcar or driver is not None):
+        if plat_key == 'anjun':
+            try:
+                fn_an = globals().get('carregar_motoristas_anjun_api')
+                if fn_an:
+                    lista_an, _ = fn_an(forcar=forcar, conta_id=cid)
+                    nomes_oficiais = [(m.get("username") or "").strip() for m in (lista_an or []) if (m.get("username") or "").strip()]
+            except Exception as e_an:
+                print(f"[Aviso] Erro ao obter motoristas Anjun da base {cid}: {e_an}")
+        elif plat_key == 'imile':
+            try:
+                fn_im = globals().get('carregar_motoristas_imile_api')
+                if fn_im:
+                    lista_im, _ = fn_im(forcar=forcar, conta_id=cid)
+                    nomes_oficiais = [(m.get("daName") or "").strip() for m in (lista_im or []) if (m.get("daName") or "").strip()]
+            except Exception as e_im:
+                print(f"[Aviso] Erro ao obter motoristas iMile da base {cid}: {e_im}")
+
+    if not nomes_oficiais:
+        nomes_oficiais = obter_motoristas_da_base_salvos(plat_key, cid)
+
+    # Também coleta nomes das OUTRAS bases da mesma plataforma para exclusão caso a base atual ainda não tenha sincronizado
+    dados_disco = carregar_motoristas_por_base_disco()
+    prefixo = f"{plat_key}:"
+    nomes_outras_bases = []
+    for k, v in dados_disco.items():
+        if k.startswith(prefixo) and k != f"{plat_key}:{cid}" and isinstance(v, dict):
+            nomes_outras_bases.extend(v.get("motoristas") or [])
+
+    return cid, nomes_oficiais, nomes_outras_bases
+
+def motorista_pertence_a_base_ativa(mot_nome, nomes_base_oficiais, nomes_outras_bases, plat_key):
+    mot_norm = _normalizar_nome_base_comp(mot_nome)
+    if not mot_norm:
+        return False
+    if not nomes_base_oficiais and not nomes_outras_bases:
+        return True
+
+    # Se a plataforma tem apenas 1 conta configurada (ou nenhuma outra base registrada), todos os motoristas mapeados pertencem a ela
+    try:
+        todas_contas = carregar_contas_plataformas()
+        contas_plat = (todas_contas.get(str(plat_key or "").strip().lower(), {}) or {}).get("contas", [])
+        if len(contas_plat) <= 1 and not nomes_outras_bases:
+            return True
+    except Exception:
+        pass
+
+    # Carrega apelidos da planilha Motoristas.xlsx caso haja tradução
+    apelidos_norm = {mot_norm}
+    try:
+        imile_map, anjun_map = carregar_mapeamento_motoristas()
+        mapa_plat = anjun_map if plat_key == 'anjun' else (imile_map if plat_key == 'imile' else {})
+        for k_orig, v_trad in mapa_plat.items():
+            kn = _normalizar_nome_base_comp(k_orig)
+            vn = _normalizar_nome_base_comp(v_trad)
+            if mot_norm in (kn, vn):
+                apelidos_norm.add(kn)
+                apelidos_norm.add(vn)
+    except Exception:
+        pass
+
+    if nomes_base_oficiais:
+        set_base = {_normalizar_nome_base_comp(x) for x in nomes_base_oficiais if x}
+        for ap in apelidos_norm:
+            if ap in set_base:
+                return True
+        if nomes_outras_bases:
+            set_outras = {_normalizar_nome_base_comp(x) for x in nomes_outras_bases if x}
+            for ap in apelidos_norm:
+                if ap in set_outras:
+                    return False
+            return True
+        return False
+
+    if nomes_outras_bases:
+        set_outras = {_normalizar_nome_base_comp(x) for x in nomes_outras_bases if x}
+        for ap in apelidos_norm:
+            if ap in set_outras:
+                return False
+
+    return True
+
+def cep_bate_com_regra(cep_pacote, regra_cep):
+    """
+    Verifica se o CEP do pacote (ex: '18701-700' ou '18701700') bate com a regra configurada
+    para o motorista (ex: '18700-000 a 18705-999', '18700 a 18705', '070, 071', '18701-700').
+    Retorna True se bater, False caso contrário.
+    """
+    if not cep_pacote or not regra_cep:
+        return False
+    cep_limpo = re.sub(r'\D', '', str(cep_pacote))
+    if not cep_limpo:
+        return False
+    cep_8 = cep_limpo.ljust(8, '0')[:8]
+    try:
+        cep_num = int(cep_8)
+    except Exception:
+        return False
+
+    # Primeiro unifica hifens de formato de CEP padrão (ex: 18700-000 -> 18700000)
+    # para não confundir com hífen separador de faixa (ex: 18700000 - 18705999)
+    regra_norm = re.sub(r'\b(\d{5})\s*-\s*(\d{3})\b', r'\1\2', str(regra_cep).lower())
+
+    # Divide por vírgula, ponto-e-vírgula, barra ou quebra de linha
+    partes = re.split(r'[,;/\n]+', regra_norm)
+    for parte in partes:
+        parte = parte.strip()
+        if not parte:
+            continue
+        # Verifica se é uma faixa (ex: "18700000 a 18705999", "18700 ate 18705", "070 - 072")
+        m_range = re.match(r'^(\d+)\s*(?:a|ate|até|-|~)\s*(\d+)$', parte)
+        if m_range:
+            ini_str, fim_str = m_range.group(1), m_range.group(2)
+            ini_num = int(ini_str.ljust(8, '0')[:8])
+            fim_num = int(fim_str.ljust(8, '9')[:8])
+            if ini_num > fim_num:
+                ini_num, fim_num = fim_num, ini_num
+            if ini_num <= cep_num <= fim_num:
+                return True
+        else:
+            # Prefixo ou CEP exato (ex: "070", "18701", "18701700")
+            digitos = re.sub(r'\D', '', parte)
+            if digitos and cep_8.startswith(digitos):
+                return True
+    return False
+
+
+def carregar_motoristas(plataforma=None, conta_id=None):
     if not plataforma:
         plataforma = plataforma_ativa if plataforma_ativa else "anjun"
+    plat_key = str(plataforma).strip().lower()
+
+    cid_ativo, nomes_base_oficiais, nomes_outras_bases = (None, [], [])
+    if plat_key in ('anjun', 'imile'):
+        cid_ativo, nomes_base_oficiais, nomes_outras_bases = obter_nomes_oficiais_base_ativa(plat_key, conta_id)
+
+    resultado = []
+    motoristas_vistos = set()
+
+    # 1. Carrega os mapeamentos reais de Cidade -> Motorista do banco de dados, filtrando pela Base Ativa!
     try:
         conn = conectar_banco()
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT cidade, motorista 
+            SELECT cidade, motorista, COALESCE(faixa_cep, '')
             FROM motoristas_plataforma 
-            WHERE plataforma = ? 
+            WHERE LOWER(plataforma) = LOWER(?) AND cidade NOT IN ('iMile', 'Anjun', 'Geral', 'Sem Cidade', '')
             ORDER BY cidade COLLATE NOCASE ASC, motorista COLLATE NOCASE ASC
-        """, (plataforma,))
+        """, (plat_key,))
         rows = cursor.fetchall()
         conn.close()
-        return [{"cidade": r[0].strip(), "motorista": r[1].strip()} for r in rows if r[0] and r[1]]
-    except Exception:
-        # Fallback para a tabela antiga de compatibilidade
+
+        for r in rows:
+            cid = (r[0] or "").strip()
+            mot = (r[1] or "").strip()
+            f_cep = (r[2] or "").strip() if len(r) > 2 else ""
+            if cid and mot:
+                if plat_key in ('anjun', 'imile') and not motorista_pertence_a_base_ativa(mot, nomes_base_oficiais, nomes_outras_bases, plat_key):
+                    continue
+                resultado.append({"cidade": cid, "motorista": mot, "faixa_cep": f_cep})
+                motoristas_vistos.add(mot.lower())
+    except Exception as e_db:
+        print(f"[Aviso] Erro ao carregar motoristas do banco: {e_db}")
+
+    # Fallback para tabela antiga caso não haja registros e seja anjun
+    if not resultado and plat_key == 'anjun':
         try:
             conn = conectar_banco()
             cursor = conn.cursor()
-            cursor.execute("SELECT cidade, motorista FROM motoristas ORDER BY cidade COLLATE NOCASE ASC, motorista COLLATE NOCASE ASC")
+            cursor.execute("SELECT cidade, motorista FROM motoristas WHERE cidade NOT IN ('Anjun', 'Geral', '') ORDER BY cidade COLLATE NOCASE ASC, motorista COLLATE NOCASE ASC")
             rows = cursor.fetchall()
             conn.close()
-            return [{"cidade": r[0].strip(), "motorista": r[1].strip()} for r in rows if r[0] and r[1]]
+            for r in rows:
+                cid = (r[0] or "").strip()
+                mot = (r[1] or "").strip()
+                if cid and mot:
+                    if not motorista_pertence_a_base_ativa(mot, nomes_base_oficiais, nomes_outras_bases, plat_key):
+                        continue
+                    resultado.append({"cidade": cid, "motorista": mot, "faixa_cep": ""})
+                    motoristas_vistos.add(mot.lower())
         except Exception:
-            return []
+            pass
 
-def carregar_motoristas_cidade(cidade, plataforma=None):
+    # 2. Complementa com motoristas oficiais da BASE ATIVA que ainda NÃO estão vinculados a nenhuma cidade
+    if plat_key in ('imile', 'anjun') and nomes_base_oficiais:
+        for nome_da in nomes_base_oficiais:
+            nome_limpo = str(nome_da or "").strip()
+            if nome_limpo and nome_limpo.lower() not in motoristas_vistos:
+                resultado.append({"cidade": "Sem Cidade", "motorista": nome_limpo, "faixa_cep": ""})
+                motoristas_vistos.add(nome_limpo.lower())
+
+    return resultado
+
+
+def carregar_motoristas_cidade(cidade, plataforma=None, cep=None):
     if not cidade:
         return []
     if not plataforma:
         plataforma = plataforma_ativa if plataforma_ativa else "anjun"
-    try:
-        conn = conectar_banco()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT motorista, cidade 
-            FROM motoristas_plataforma 
-            WHERE plataforma = ?
-            ORDER BY motorista COLLATE NOCASE ASC
-        """, (plataforma,))
-        rows = cursor.fetchall()
-        conn.close()
         
-        cidade_clean = remover_acentos(cidade.strip().lower())
-        motoristas = [r[0].strip() for r in rows if r[0] and r[0].strip() and remover_acentos(r[1].strip().lower()) == cidade_clean]
-        
-        if not motoristas and plataforma == 'anjun':
-            try:
-                conn2 = conectar_banco()
-                cursor2 = conn2.cursor()
-                cursor2.execute("SELECT motorista, cidade FROM motoristas")
-                rows2 = cursor2.fetchall()
-                conn2.close()
-                motoristas = [r[0].strip() for r in rows2 if r[0] and r[0].strip() and remover_acentos(r[1].strip().lower()) == cidade_clean]
-            except Exception:
-                pass
-        return motoristas
-    except Exception:
+    plataforma_key = str(plataforma).strip().lower()
+    cidade_clean = remover_acentos(str(cidade).strip().lower())
+    cep_clean = re.sub(r'\D', '', str(cep or ''))
+    
+    global _CACHE_RAM_MOTORISTAS_CIDADE
+    cache_key = (cidade_clean, plataforma_key)
+    rows_cidade = _CACHE_RAM_MOTORISTAS_CIDADE.get(cache_key)
+    
+    if rows_cidade is None:
+        try:
+            conn = conectar_banco()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT motorista, cidade, COALESCE(faixa_cep, '')
+                FROM motoristas_plataforma 
+                WHERE LOWER(plataforma) = ?
+                ORDER BY motorista COLLATE NOCASE ASC
+            """, (plataforma_key,))
+            rows = cursor.fetchall()
+            conn.close()
+            
+            rows_cidade = [
+                (r[0].strip(), (r[2] or "").strip() if len(r) > 2 else "")
+                for r in rows
+                if r[0] and r[0].strip() and remover_acentos(r[1].strip().lower()) == cidade_clean
+            ]
+            
+            if not rows_cidade and plataforma_key == 'anjun':
+                try:
+                    conn2 = conectar_banco()
+                    cursor2 = conn2.cursor()
+                    cursor2.execute("SELECT motorista, cidade FROM motoristas")
+                    rows2 = cursor2.fetchall()
+                    conn2.close()
+                    rows_cidade = [
+                        (r[0].strip(), "")
+                        for r in rows2
+                        if r[0] and r[0].strip() and remover_acentos(r[1].strip().lower()) == cidade_clean
+                    ]
+                except Exception:
+                    pass
+                    
+            _CACHE_RAM_MOTORISTAS_CIDADE[cache_key] = rows_cidade
+        except Exception:
+            return []
+
+    if not rows_cidade:
         return []
+
+    todos_motoristas = []
+    for m_nome, _ in rows_cidade:
+        if m_nome not in todos_motoristas:
+            todos_motoristas.append(m_nome)
+
+    # Se o pacote tiver CEP e pelo menos um motorista dessa cidade tiver faixa de CEP configurada:
+    tem_regra_cep = any(bool(f_cep) for _, f_cep in rows_cidade)
+    if cep_clean and tem_regra_cep:
+        mots_cep_exato = []
+        mots_sem_regra = []
+        for m_nome, f_cep in rows_cidade:
+            if f_cep:
+                if cep_bate_com_regra(cep_clean, f_cep) and m_nome not in mots_cep_exato:
+                    mots_cep_exato.append(m_nome)
+            else:
+                if m_nome not in mots_sem_regra:
+                    mots_sem_regra.append(m_nome)
+        if mots_cep_exato:
+            return mots_cep_exato
+        if mots_sem_regra:
+            return mots_sem_regra
+
+    return todos_motoristas
 
 _cache_plataformas = None
 
@@ -1798,26 +2863,469 @@ def carregar_plataformas():
     else:
         with open(CONFIG_PLATAFORMAS, 'r', encoding='utf-8') as f:
             plataformas = json.load(f)
+
+    # Oculta Magalog enquanto não estiver liberada comercialmente
+    plataformas.pop("magalog", None)
             
-    # Mescla as credenciais locais caso existam
-    if os.path.exists(CONFIG_LOCAL_CREDENTIALS):
-        try:
-            with open(CONFIG_LOCAL_CREDENTIALS, 'r', encoding='utf-8') as f:
-                cred_locais = json.load(f)
-                for p_id, creds in cred_locais.items():
-                    if p_id in plataformas:
-                        plataformas[p_id]["login_usuario"] = creds.get("login_usuario", "")
-                        plataformas[p_id]["login_senha"] = creds.get("login_senha", "")
-        except Exception as e_cred:
-            print(f"[Aviso] Falha ao carregar credenciais locais: {str(e_cred)}")
+    # Mescla as credenciais locais e contas caso existam
+    try:
+        todas_contas = carregar_contas_plataformas()
+        for p_id, info_contas in todas_contas.items():
+            if p_id in plataformas:
+                c_ativa = info_contas.get("conta_ativa")
+                contas_list = info_contas.get("contas", [])
+                conta_obj = None
+                for c in contas_list:
+                    if c.get("id") == c_ativa:
+                        conta_obj = c
+                        break
+                if not conta_obj and contas_list:
+                    conta_obj = contas_list[0]
+                    c_ativa = conta_obj.get("id")
+                if conta_obj:
+                    plataformas[p_id]["login_usuario"] = conta_obj.get("login_usuario", "")
+                    plataformas[p_id]["login_senha"] = conta_obj.get("login_senha", "")
+                    plataformas[p_id]["conta_ativa_apelido"] = conta_obj.get("apelido", "")
+                    plataformas[p_id]["conta_ativa_id"] = conta_obj.get("id", "")
+                plataformas[p_id]["contas"] = contas_list
+                plataformas[p_id]["conta_ativa"] = c_ativa
+    except Exception as e_cred:
+        print(f"[Aviso] Falha ao carregar credenciais locais: {str(e_cred)}")
             
     _cache_plataformas = plataformas
     return plataformas
 
-# --- CONTROLE SELENIUM ---
-def is_driver_ativo(rapido=True):
+
+def carregar_plataformas_licenciadas(lic=None):
+    """Retorna apenas as plataformas liberadas na licença ativa desta máquina."""
+    todas = carregar_plataformas()
+    if lic is None:
+        lic = validar_licenca()
+    liberadas = [str(p).strip().lower() for p in (lic.get("plataformas_liberadas") or ["anjun", "imile", "loggi"]) if str(p).strip() and str(p).strip().lower() != "magalog"]
+    if not liberadas:
+        liberadas = ["anjun", "imile", "loggi"]
+    filtradas = {}
+    for k, v in todas.items():
+        if k.lower() in liberadas:
+            filtradas[k] = v
+    return filtradas
+
+
+# --- CONTROLE MULTI-LOGIN E PERFIS ISOLADOS ---
+def carregar_contas_plataformas():
+    """
+    Carrega a lista de contas/logins de cada plataforma a partir de credenciais_locais.json.
+    Garante suporte a múltiplas contas por plataforma mantendo compatibilidade com formato legado.
+    """
+    contas_por_plat = {}
+    if os.path.exists(CONFIG_LOCAL_CREDENTIALS):
+        try:
+            with open(CONFIG_LOCAL_CREDENTIALS, 'r', encoding='utf-8') as f:
+                dados_raw = json.load(f)
+                
+            for p_id, item in dados_raw.items():
+                if not isinstance(item, dict):
+                    continue
+                    
+                # Se já estiver no formato novo com lista de contas
+                if "contas" in item and isinstance(item["contas"], list):
+                    contas_validas = []
+                    for c in item["contas"]:
+                        if isinstance(c, dict):
+                            c_id = str(c.get("id") or "").strip()
+                            c_usr = str(c.get("login_usuario") or "").strip()
+                            c_pass = str(c.get("login_senha") or "").strip()
+                            c_apelido = str(c.get("apelido") or "").strip() or (c_usr or f"Conta {len(contas_validas)+1}")
+                            if not c_id:
+                                c_id = f"conta_{len(contas_validas)+1}"
+                            contas_validas.append({
+                                "id": c_id,
+                                "apelido": c_apelido,
+                                "login_usuario": c_usr,
+                                "login_senha": c_pass
+                            })
+                    
+                    c_ativa = item.get("conta_ativa")
+                    if not c_ativa and contas_validas:
+                        c_ativa = contas_validas[0]["id"]
+                        
+                    contas_por_plat[p_id] = {
+                        "conta_ativa": c_ativa,
+                        "contas": contas_validas
+                    }
+                else:
+                    # Formato legado simples {"login_usuario": "...", "login_senha": "..."}
+                    usr = str(item.get("login_usuario") or "").strip()
+                    pwd = str(item.get("login_senha") or "").strip()
+                    apelido = f"Conta Principal ({usr})" if usr else "Conta Principal"
+                    contas_por_plat[p_id] = {
+                        "conta_ativa": "conta_1",
+                        "contas": [
+                            {
+                                "id": "conta_1",
+                                "apelido": apelido,
+                                "login_usuario": usr,
+                                "login_senha": pwd
+                            }
+                        ]
+                    }
+        except Exception as e:
+            print(f"[Aviso] Falha ao carregar credenciais locais: {e}")
+            
+    return contas_por_plat
+
+def salvar_contas_plataformas(contas_dict):
+    try:
+        with open(CONFIG_LOCAL_CREDENTIALS, 'w', encoding='utf-8') as f:
+            json.dump(contas_dict, f, indent=4, ensure_ascii=False)
+        global _cache_plataformas
+        _cache_plataformas = None
+        return True
+    except Exception as e:
+        print(f"[Erro] Falha ao gravar credenciais locais: {e}")
+        return False
+
+def obter_perfil_e_porta_conta(plataforma_id, conta_id=None):
+    diretorio_projeto = BASE_DIR
+    porta_base = PORTAS_DEBUG.get(plataforma_id, 9222)
+    
+    todas_contas = carregar_contas_plataformas()
+    plat_info = todas_contas.get(plataforma_id, {})
+    contas = plat_info.get("contas", [])
+    
+    if not conta_id:
+        conta_id = plat_info.get("conta_ativa")
+        
+    conta_obj = None
+    indice = 0
+    for idx, c in enumerate(contas):
+        if c.get("id") == conta_id:
+            conta_obj = c
+            indice = idx
+            break
+            
+    if not conta_obj and contas:
+        conta_obj = contas[0]
+        conta_id = conta_obj.get("id")
+        indice = 0
+        
+    if indice == 0:
+        # Primeira conta / Conta padrão: usa perfil e porta originais (preserva login existente no Chrome!)
+        caminho_perfil = os.path.join(diretorio_projeto, f"perfil_robo_{plataforma_id}")
+        porta = porta_base
+    else:
+        # Contas secundárias: perfil isolado e porta única
+        caminho_perfil = os.path.join(diretorio_projeto, f"perfil_robo_{plataforma_id}_{conta_id}")
+        offset_plat = {"imile": 10, "anjun": 20, "loggi": 30}.get(plataforma_id, 40)
+        porta = 9240 + offset_plat + indice
+        
+    return caminho_perfil, porta, conta_id, conta_obj
+
+# --- CONTROLE SELENIUM & SESSÃO PERSISTENTE ---
+PORTAS_DEBUG = {
+    "imile": 9222,
+    "anjun": 9223,
+    "loggi": 9224
+}
+CONFIG_SESSAO = os.path.join(BASE_DIR, 'config_sessao.json')
+
+def salvar_sessao_ativa(plataforma, motorista=None, contagem=0, conta_id=None):
+    global conta_ativa
+    if conta_id:
+        conta_ativa = conta_id
+    try:
+        dados = {
+            "plataforma_ativa": plataforma,
+            "conta_ativa": conta_ativa or "",
+            "motorista_ativo": motorista if motorista else (motorista_atribuicao_ativa or ""),
+            "contagem": contagem if contagem else (contagem_atribuicao_ativa or 0)
+        }
+        with open(CONFIG_SESSAO, 'w', encoding='utf-8') as f:
+            json.dump(dados, f, indent=4, ensure_ascii=False)
+    except Exception as e:
+        print(f"[Aviso] Falha ao salvar sessão ativa: {e}")
+
+def carregar_sessao_ativa():
+    if os.path.exists(CONFIG_SESSAO):
+        try:
+            with open(CONFIG_SESSAO, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+def is_chrome_debug_active(port):
+    if not port:
+        return False
+    try:
+        import urllib.request
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=0.8) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+def desconectar_selenium():
+    """
+    Apenas desconecta a referência do Python ao Chrome SEM fechar a janela do Chrome.
+    Permite alternar entre contas e reiniciar servidor mantendo navegadores 100% abertos e logados.
+    """
     global driver
+    driver = None
+
+def obter_pids_porta(porta):
+    """Retorna o conjunto de PIDs que estão escutando (LISTENING) na porta local informada."""
+    pids = set()
+    if not porta:
+        return pids
+    try:
+        import subprocess
+        flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000) if os.name == 'nt' else 0
+        out = subprocess.check_output(
+            f'netstat -ano | findstr :{porta}',
+            shell=True,
+            creationflags=flags,
+            stderr=subprocess.DEVNULL
+        ).decode('utf-8', errors='ignore')
+        for line in out.splitlines():
+            parts = line.strip().split()
+            if len(parts) >= 5 and f":{porta}" in parts[1] and "LISTENING" in line.upper():
+                try:
+                    pid = int(parts[-1])
+                    if pid > 0:
+                        pids.add(pid)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return pids
+
+def chrome_tem_janela_visivel_na_tela(porta):
+    """
+    Verifica se o processo Chrome que está escutando na porta de debug possui de fato
+    uma janela de navegador real (Chrome_WidgetWin) na área de trabalho interativa atual (WinSta0\\Default).
+    Evita conectar em processos Chrome zumbis/invisíveis ou iniciados em sessão oculta.
+    """
+    if os.name != 'nt':
+        return True
+    pids_porta = obter_pids_porta(porta)
+    if not pids_porta:
+        return False
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        encontrou = [False]
+        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+        def enum_cb(hwnd, lparam):
+            try:
+                pid = ctypes.c_ulong()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                if pid.value in pids_porta:
+                    if user32.IsWindowVisible(hwnd) or user32.IsIconic(hwnd):
+                        cls_buff = ctypes.create_unicode_buffer(64)
+                        user32.GetClassNameW(hwnd, cls_buff, 64)
+                        length = user32.GetWindowTextLengthW(hwnd)
+                        if 'Chrome_WidgetWin' in cls_buff.value and length > 0:
+                            encontrou[0] = True
+                            return False
+            except Exception:
+                pass
+            return True
+
+        user32.EnumWindows(WNDENUMPROC(enum_cb), 0)
+        return encontrou[0]
+    except Exception:
+        return True
+
+def matar_chrome_na_porta(porta):
+    """Encerra processos Chrome órfãos/invisíveis que estejam prendendo a porta de debug."""
+    pids = obter_pids_porta(porta)
+    for pid in pids:
+        try:
+            import subprocess
+            flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000) if os.name == 'nt' else 0
+            print(f"[*] Encerrando processo Chrome órfão/invisível na porta {porta} (PID {pid})...")
+            subprocess.run(
+                f"taskkill /F /T /PID {pid}",
+                shell=True,
+                creationflags=flags,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+        except Exception:
+            pass
+    if pids:
+        time.sleep(0.4)
+
+def forcar_janela_chrome_visivel(porta=None):
+    """
+    Garante que as janelas reais do navegador Chrome estejam visíveis, restauradas, maximizadas
+    e em primeiro plano na frente do TurboScan, escondendo qualquer console residual.
+    """
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        SW_HIDE = 0
+        SW_MAXIMIZE = 3
+        SW_SHOW = 5
+        SW_RESTORE = 9
+        HWND_TOPMOST = -1
+        HWND_NOTOPMOST = -2
+        SWP_NOSIZE = 0x0001
+        SWP_NOMOVE = 0x0002
+        SWP_SHOWWINDOW = 0x0040
+
+        pids_alvo = obter_pids_porta(porta) if porta else set()
+        if not pids_alvo and plataforma_ativa:
+            try:
+                _, p_ativa, _, _ = obter_perfil_e_porta_conta(plataforma_ativa, conta_ativa)
+                if p_ativa:
+                    pids_alvo = obter_pids_porta(p_ativa)
+            except Exception:
+                pass
+
+        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        janelas_chrome = []
+
+        def enum_cb(hwnd, lparam):
+            try:
+                length = user32.GetWindowTextLengthW(hwnd)
+                if length <= 0:
+                    return True
+                buff = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buff, length + 1)
+                title = buff.value.lower()
+
+                # Se for janela de console do chromedriver ou cmd, esconde na hora
+                if 'chromedriver' in title or 'cmd.exe' in title:
+                    user32.ShowWindow(hwnd, SW_HIDE)
+                    return True
+
+                # Ignora a janela do próprio TurboScan Electron
+                if 'turboscan' in title:
+                    return True
+
+                cls_buff = ctypes.create_unicode_buffer(64)
+                user32.GetClassNameW(hwnd, cls_buff, 64)
+                cls_name = cls_buff.value
+
+                pid = ctypes.c_ulong()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+
+                if pids_alvo and pid.value in pids_alvo and 'Chrome_WidgetWin' in cls_name:
+                    janelas_chrome.insert(0, hwnd)
+                    return True
+
+                if 'Chrome_WidgetWin' in cls_name and any(k in title for k in [
+                    'ds -', 'anjun', 'loggi', 'imile', 'google chrome', 'chrome', 'ds ',
+                    'recepcionar', 'atribuir', 'pacotes', 'arco', 'newsupplier'
+                ]):
+                    janelas_chrome.append(hwnd)
+            except Exception:
+                pass
+            return True
+
+        user32.EnumWindows(WNDENUMPROC(enum_cb), 0)
+
+        for hwnd in janelas_chrome:
+            try:
+                if user32.IsIconic(hwnd):
+                    user32.ShowWindow(hwnd, SW_RESTORE)
+                else:
+                    user32.ShowWindow(hwnd, SW_SHOW)
+                user32.ShowWindow(hwnd, SW_MAXIMIZE)
+
+                fg_hwnd = user32.GetForegroundWindow()
+                fg_tid = user32.GetWindowThreadProcessId(fg_hwnd, None) if fg_hwnd else 0
+                target_tid = user32.GetWindowThreadProcessId(hwnd, None)
+                cur_tid = kernel32.GetCurrentThreadId()
+
+                if fg_tid and fg_tid != cur_tid:
+                    user32.AttachThreadInput(cur_tid, fg_tid, True)
+                if target_tid and target_tid != cur_tid:
+                    user32.AttachThreadInput(cur_tid, target_tid, True)
+
+                user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+                user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+                user32.BringWindowToTop(hwnd)
+                user32.SetForegroundWindow(hwnd)
+
+                if fg_tid and fg_tid != cur_tid:
+                    user32.AttachThreadInput(cur_tid, fg_tid, False)
+                if target_tid and target_tid != cur_tid:
+                    user32.AttachThreadInput(cur_tid, target_tid, False)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+def conectar_chrome_existente(plataforma_id, conta_id=None):
+    """
+    Conecta instantaneamente ao Chrome existente via porta de debug sem abrir nova janela.
+    """
+    global driver, aba_recebimento, aba_descarregamento, aba_atribuicao, aba_atribuicao_anjun, plataforma_ativa, conta_ativa
+    _, porta, cid_final, _ = obter_perfil_e_porta_conta(plataforma_id, conta_id)
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.chrome.service import Service
+    import subprocess
+    attach_options = Options()
+    attach_options.add_experimental_option("debuggerAddress", f"127.0.0.1:{porta}")
+    chrome_service = Service()
+    chrome_service.creation_flags = subprocess.CREATE_NO_WINDOW
+    driver = webdriver.Chrome(service=chrome_service, options=attach_options)
+    try:
+        driver.maximize_window()
+        driver.execute_cdp_cmd("Page.bringToFront", {})
+    except Exception:
+        pass
+    forcar_janela_chrome_visivel(porta)
+    plataforma_ativa = plataforma_id
+    conta_ativa = cid_final
+    
+    if plataforma_id == 'imile':
+        cache_sessao_imile["access_token"] = None
+        cache_sessao_imile["timestamp"] = 0
+        garantir_abas_imile(driver)
+        try:
+            atualizar_sessao_imile(driver, forcar=True, conta_id=cid_final)
+            carregar_motoristas_imile_api(forcar=True, conta_id=cid_final)
+        except Exception:
+            pass
+    elif plataforma_id == 'anjun':
+        cache_sessao_anjun["token"] = None
+        cache_sessao_anjun["timestamp"] = 0
+        cache_motoristas_anjun["lista"] = []
+        cache_motoristas_anjun["timestamp"] = 0
+        garantir_abas_anjun(driver)
+        try:
+            atualizar_sessao_anjun(driver, forcar=True)
+            carregar_motoristas_anjun_api(forcar=True, conta_id=cid_final)
+        except Exception:
+            pass
+    elif plataforma_id == 'loggi':
+        if verificar_tela_login_loggi(driver):
+            plataformas = carregar_plataformas()
+            config_loggi = plataformas.get('loggi', {})
+            fluxo_login_loggi(driver, config_loggi)
+        else:
+            garantir_abas_loggi(driver)
+    forcar_janela_chrome_visivel(porta)
+    print(f"[+] Conectado com sucesso ao Chrome da plataforma '{plataforma_id}' (Conta: {conta_ativa}, porta {porta})!")
+
+def is_driver_ativo(rapido=True):
+    global driver, plataforma_ativa, conta_ativa
     if not driver:
+        # Se não há driver em memória, mas o Chrome está aberto e visível na porta de debug da plataforma/conta ativa:
+        if plataforma_ativa:
+            _, porta, cid, _ = obter_perfil_e_porta_conta(plataforma_ativa, conta_ativa)
+            if porta and is_chrome_debug_active(porta) and chrome_tem_janela_visivel_na_tela(porta):
+                try:
+                    print(f"[*] Reconectando ao Chrome ativo na porta {porta}...")
+                    conectar_chrome_existente(plataforma_ativa, cid)
+                    return True
+                except Exception:
+                    pass
         return False
     try:
         if rapido:
@@ -1827,8 +3335,18 @@ def is_driver_ativo(rapido=True):
         _ = driver.window_handles
         return True
     except Exception:
-        # Limpa referências se o browser foi fechado pelo operador
-        fechar_selenium()
+        # Sessão do WebDriver teve interrupção (ex: suspensão ou hibernação do Windows)
+        # NÃO fecha o Chrome! Tenta reconectar diretamente ao Chrome existente na porta de debug!
+        driver = None
+        if plataforma_ativa:
+            _, porta, cid, _ = obter_perfil_e_porta_conta(plataforma_ativa, conta_ativa)
+            if porta and is_chrome_debug_active(porta) and chrome_tem_janela_visivel_na_tela(porta):
+                try:
+                    print(f"[*] Sessão Selenium perdida pós-hibernação. Reconectando à porta {porta}...")
+                    conectar_chrome_existente(plataforma_ativa, cid)
+                    return True
+                except Exception:
+                    pass
         return False
 
 def fechar_selenium():
@@ -1838,7 +3356,7 @@ def fechar_selenium():
             driver.quit()
         except Exception:
             pass
-        time.sleep(1.0)  # Aguarda liberação de locks no Windows
+        time.sleep(0.5)  # Aguarda liberação de locks no Windows
         try:
             import subprocess
             subprocess.run("taskkill /f /im chromedriver.exe", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -1893,12 +3411,99 @@ def forcar_idioma_portugues_imile(driver):
     except Exception as e:
         print(f"[Aviso] Falha ao forçar idioma português nesta aba: {str(e)}")
 
+def verificar_tela_login_loggi(drv):
+    """
+    Retorna True se o navegador estiver na tela de login da Loggi (Arco)
+    """
+    if not drv:
+        return False
+    try:
+        url = (drv.current_url or '').lower()
+        if not url or url.startswith("data:") or url.startswith("about:"):
+            return True
+        if "login" in url or "auth" in url or "accounts.google.com" in url:
+            return True
+        if "arco.loggi.com" in url:
+            # Se não tiver /av3 na url, com certeza ainda não entrou na área autenticada do Arco
+            if "/av3" not in url:
+                return True
+            res = drv.execute_script("""
+                var txt = (document.body ? document.body.innerText : '').toLowerCase();
+                if (txt.includes('acesse o arco') || txt.includes('entrar com o google') || txt.includes('esqueceu sua senha')) {
+                    return true;
+                }
+                var btns = document.querySelectorAll("button");
+                for (var i = 0; i < btns.length; i++) {
+                    var bTxt = (btns[i].innerText || btns[i].textContent || '').toLowerCase();
+                    if (bTxt.includes('entrar com o google')) return true;
+                }
+                return false;
+            """)
+            if res:
+                return True
+    except Exception:
+        pass
+    return False
+
+def tentar_clicar_login_google_loggi(drv):
+    """
+    Tenta clicar automaticamente no botão 'Entrar com o Google' da Loggi no Chrome.
+    """
+    if not drv:
+        return False
+    try:
+        res = drv.execute_script("""
+            var btns = document.querySelectorAll("button, [role='button'], a");
+            for (var i = 0; i < btns.length; i++) {
+                var btn = btns[i];
+                var txt = (btn.innerText || btn.textContent || '').trim().toLowerCase();
+                if (txt.includes('entrar com o google') || (txt.includes('google') && txt.includes('entrar'))) {
+                    try { btn.focus(); } catch(e){}
+                    btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+                    btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+                    btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                    btn.click();
+                    return true;
+                }
+            }
+            return false;
+        """)
+        if res:
+            return True
+            
+        xpaths = [
+            "//button[contains(., 'Entrar com o Google') or contains(., 'com o Google')]",
+            "//button[contains(span, 'Google') or contains(., 'Google')]",
+            "//button[contains(@class, 'MuiButton-fullWidth') and contains(., 'Google')]"
+        ]
+        for xp in xpaths:
+            try:
+                elems = drv.find_elements(By.XPATH, xp)
+                for el in elems:
+                    if el.is_displayed():
+                        drv.execute_script("arguments[0].click();", el)
+                        return True
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"[!] Erro ao tentar clicar 'Entrar com o Google': {e}")
+    return False
+
 def garantir_abas_loggi(driver):
     global aba_recebimento, aba_atribuicao, aba_atribuicao_anjun
     if not driver:
         return
     try:
         handles = driver.window_handles
+        if not handles:
+            return
+            
+        # Se estiver na tela de login, NÃO tenta abrir novas abas!
+        if verificar_tela_login_loggi(driver):
+            if handles:
+                aba_recebimento = handles[0]
+            return
+
         # 1. Verifica se aba_atribuicao_anjun realmente tem 'grupos' na URL
         aba_grupos_ok = False
         if aba_atribuicao_anjun and aba_atribuicao_anjun in handles:
@@ -1957,9 +3562,24 @@ def garantir_abas_loggi(driver):
                     if "colecoes" in driver.current_url.lower():
                         aba_recebimento = h
                         print(f"[+] Aba 1 Loggi (Recebimento) identificada dinamicamente: {h}")
+                        aba_rec_ok = True
                         break
                 except Exception:
                     continue
+
+        if not aba_rec_ok:
+            for h in handles:
+                if h != aba_atribuicao_anjun:
+                    aba_recebimento = h
+                    break
+            if aba_recebimento:
+                try:
+                    driver.switch_to.window(aba_recebimento)
+                    if "colecoes" not in driver.current_url.lower():
+                        driver.get('https://arco.loggi.com/AV3/na-base/colecoes')
+                        time.sleep(1.0)
+                except Exception:
+                    pass
                     
         # 5. Garante que aba_atribuicao seja a Aba 2 ('hoje')
         aba_hoje_ok = False
@@ -1986,12 +3606,132 @@ def garantir_abas_loggi(driver):
                     continue
                     
         if not aba_hoje_ok:
+            print("[*] Aba Hoje da Loggi ausente. Abrindo nova aba de hoje...")
+            driver.execute_script("window.open('https://arco.loggi.com/AV3/hoje', '_blank');")
+            time.sleep(1.0)
+            for h in driver.window_handles:
+                try:
+                    driver.switch_to.window(h)
+                    if "hoje" in driver.current_url.lower():
+                        aba_atribuicao = h
+                        aba_hoje_ok = True
+                        break
+                except Exception:
+                    continue
+
+        if not aba_hoje_ok:
             for h in handles:
                 if h != aba_recebimento and h != aba_atribuicao_anjun:
                     aba_atribuicao = h
                     break
     except Exception as e:
         print(f"[Aviso] Falha ao mapear abas da Loggi: {str(e)}")
+
+def fluxo_login_loggi(driver, config):
+    """
+    Executa o fluxo de inicialização e autenticação da Loggi:
+    1. Mantém estritamente apenas 1 aba aberta durante o login
+    2. Acessa a URL de coleções/recebimento
+    3. Clica automaticamente em 'Entrar com o Google'
+    4. Aguarda a autenticação ser concluída (URL contendo /AV3/ e sem tela de login)
+    5. Somente após a autenticação confirmada, abre a Aba 2 (Hoje) e Aba 3 (Grupos)
+    """
+    print("[*] Iniciando fluxo de login para a Loggi...")
+    
+    # 1. Fecha qualquer aba extra para manter estritamente apenas a primeira aba
+    while len(driver.window_handles) > 1:
+        try:
+            driver.switch_to.window(driver.window_handles[-1])
+            driver.close()
+        except Exception:
+            break
+    try:
+        driver.switch_to.window(driver.window_handles[0])
+    except Exception:
+        pass
+        
+    recebimento_url = config.get('recebimento_url', 'https://arco.loggi.com/AV3/na-base/colecoes')
+    
+    # 2. Navega até a página
+    curr_url = (driver.current_url or '').lower()
+    if "/av3" not in curr_url or verificar_tela_login_loggi(driver):
+        driver.get(recebimento_url)
+        time.sleep(2.0)
+        
+        # Tenta auto-clicar em "Entrar com o Google" de imediato
+        tentar_clicar_login_google_loggi(driver)
+        
+        print("[*] Aguardando o login ser concluído no navegador para Loggi...")
+        login_concluido = False
+        inicio_login = time.time()
+        while time.time() - inicio_login < 180.0:
+            try:
+                if not driver or not driver.window_handles:
+                    break
+                current_url = driver.current_url.lower()
+                # Critério estrito: arco.loggi.com + /av3 + NÃO na tela de login
+                if "arco.loggi.com" in current_url and "/av3" in current_url and not verificar_tela_login_loggi(driver):
+                    print(f"[+] Login Loggi detectado com sucesso: {current_url}")
+                    login_concluido = True
+                    break
+                else:
+                    tentar_clicar_login_google_loggi(driver)
+            except Exception:
+                pass
+            time.sleep(1.0)
+            
+        if not login_concluido:
+            raise Exception("Tempo limite esgotado para o login na Loggi.")
+            
+    # 3. Garante que a primeira aba esteja na tela de coleções/recebimento
+    try:
+        if "colecoes" not in driver.current_url.lower():
+            driver.get(recebimento_url)
+            time.sleep(1.5)
+    except Exception:
+        pass
+
+    # 4. Somente após login confirmado, abre as abas 2 e 3
+    print("[*] Autenticação confirmada! Abrindo abas operacionais da Loggi...")
+    handles_atuais = driver.window_handles
+    
+    # Aba 2 (Hoje)
+    tem_hoje = False
+    for h in handles_atuais:
+        try:
+            driver.switch_to.window(h)
+            if "hoje" in driver.current_url.lower():
+                tem_hoje = True
+                break
+        except Exception:
+            pass
+    if not tem_hoje:
+        driver.execute_script("window.open('https://arco.loggi.com/AV3/hoje', '_blank');")
+        time.sleep(0.8)
+        
+    # Aba 3 (Grupos)
+    handles_atuais = driver.window_handles
+    tem_grupos = False
+    for h in handles_atuais:
+        try:
+            driver.switch_to.window(h)
+            if "grupos" in driver.current_url.lower():
+                tem_grupos = True
+                break
+        except Exception:
+            pass
+    if not tem_grupos:
+        driver.execute_script("window.open('https://arco.loggi.com/AV3/na-base/grupos', '_blank');")
+        time.sleep(0.8)
+        
+    garantir_abas_loggi(driver)
+    
+    global aba_recebimento
+    try:
+        if aba_recebimento and aba_recebimento in driver.window_handles:
+            driver.switch_to.window(aba_recebimento)
+    except Exception:
+        pass
 
 def garantir_abas_imile(driver):
     """
@@ -2036,30 +3776,192 @@ def garantir_abas_imile(driver):
     except Exception as e:
         print(f"[Aviso] Falha ao garantir abas da iMile: {str(e)}")
 
-def inicializar_selenium(plataforma_id):
-    global driver, aba_recebimento, aba_descarregamento, aba_atribuicao, aba_atribuicao_anjun, plataforma_ativa, motorista_atribuicao_ativa, contagem_atribuicao_ativa
-    
-    # Se o driver estiver ativo e já estiver na plataforma correta, não faz nada
-    if is_driver_ativo() and plataforma_ativa == plataforma_id:
+def garantir_abas_anjun(driver):
+    """
+    Garante que as 3 abas da Anjun Express estejam abertas, válidas e mapeadas:
+    Aba 1 (aba_recebimento): netEntryScanning (Entrada / Recebimento de Pacotes)
+    Aba 2 (aba_atribuicao): packageQuery (Consulta de Pacotes)
+    Aba 3 (aba_atribuicao_anjun): TaskAssignment (Atribuição de Tarefas / Motoristas)
+    Se alguma aba foi fechada, recarregada ou perdida, recupera ou reabre automaticamente.
+    """
+    global aba_recebimento, aba_atribuicao, aba_atribuicao_anjun
+    if not driver:
         return
-        
-    # Se estiver em outra plataforma, reinicia
-    fechar_selenium()
+    try:
+        handles = driver.window_handles
+        if not handles:
+            return
+
+        # 1. Verifica e valida Aba 3 (Atribuição de Motoristas / TaskAssignment)
+        aba3_ok = False
+        if aba_atribuicao_anjun and aba_atribuicao_anjun in handles:
+            try:
+                driver.switch_to.window(aba_atribuicao_anjun)
+                u = (driver.current_url or '').lower()
+                tit = (driver.title or '').lower()
+                if "taskassignment" in u or ("operatingcenter" in u and "netentry" not in u) or "atribuir" in tit or "tarefa" in tit:
+                    aba3_ok = True
+            except Exception:
+                pass
+
+        if not aba3_ok:
+            aba_atribuicao_anjun = None
+            for h in handles:
+                try:
+                    driver.switch_to.window(h)
+                    u = (driver.current_url or '').lower()
+                    tit = (driver.title or '').lower()
+                    if "taskassignment" in u or ("operatingcenter" in u and "netentry" not in u) or "atribuir" in tit or "tarefa" in tit:
+                        aba_atribuicao_anjun = h
+                        aba3_ok = True
+                        print(f"[+] Aba 3 Anjun (Atribuição/TaskAssignment) mapeada dinamicamente: {h}")
+                        break
+                except Exception:
+                    continue
+
+        # Se a Aba 3 não existe, abre-a em nova aba
+        if not aba3_ok:
+            print("[*] Aba 3 da Anjun (TaskAssignment) ausente. Abrindo nova aba...")
+            driver.execute_script("window.open('https://newsupplier.anjunexpress.com/#/views/operatingCenter/TaskAssignment', '_blank');")
+            time.sleep(1.2)
+            for h in driver.window_handles:
+                try:
+                    driver.switch_to.window(h)
+                    u = (driver.current_url or '').lower()
+                    tit = (driver.title or '').lower()
+                    if "taskassignment" in u or "atribuir" in tit or "tarefa" in tit:
+                        aba_atribuicao_anjun = h
+                        aba3_ok = True
+                        print(f"[+] Nova Aba 3 da Anjun criada e mapeada: {h}")
+                        break
+                except Exception:
+                    continue
+
+        # 2. Garante Aba 1 (Entrada / netEntryScanning)
+        aba1_ok = False
+        if aba_recebimento and aba_recebimento in handles and aba_recebimento != aba_atribuicao_anjun:
+            try:
+                driver.switch_to.window(aba_recebimento)
+                u = (driver.current_url or '').lower()
+                tit = (driver.title or '').lower()
+                if "netentryscanning" in u or "recebimento" in u or "recepcionar" in tit:
+                    aba1_ok = True
+            except Exception:
+                pass
+
+        if not aba1_ok:
+            for h in handles:
+                if h == aba_atribuicao_anjun:
+                    continue
+                try:
+                    driver.switch_to.window(h)
+                    u = (driver.current_url or '').lower()
+                    tit = (driver.title or '').lower()
+                    if "netentryscanning" in u or "recebimento" in u or "recepcionar" in tit:
+                        aba_recebimento = h
+                        aba1_ok = True
+                        print(f"[+] Aba 1 Anjun (Recebimento) mapeada dinamicamente: {h}")
+                        break
+                except Exception:
+                    continue
+
+        # 3. Garante Aba 2 (Consulta / packageQuery)
+        aba2_ok = False
+        if aba_atribuicao and aba_atribuicao in handles and aba_atribuicao not in [aba_recebimento, aba_atribuicao_anjun]:
+            try:
+                driver.switch_to.window(aba_atribuicao)
+                u = (driver.current_url or '').lower()
+                tit = (driver.title or '').lower()
+                if "packagequery" in u or "consulta" in tit or "consulta" in u:
+                    aba2_ok = True
+            except Exception:
+                pass
+
+        if not aba2_ok:
+            for h in handles:
+                if h in [aba_recebimento, aba_atribuicao_anjun]:
+                    continue
+                try:
+                    driver.switch_to.window(h)
+                    u = (driver.current_url or '').lower()
+                    tit = (driver.title or '').lower()
+                    if "packagequery" in u or "consulta" in tit or "consulta" in u:
+                        aba_atribuicao = h
+                        aba2_ok = True
+                        print(f"[+] Aba 2 Anjun (Consulta) mapeada dinamicamente: {h}")
+                        break
+                except Exception:
+                    continue
+
+        # Fallbacks finais seguros caso as URLs não tenham carregado totalmente
+        if not aba_recebimento and len(driver.window_handles) > 0:
+            aba_recebimento = driver.window_handles[0]
+        if not aba_atribuicao and len(driver.window_handles) > 1:
+            aba_atribuicao = driver.window_handles[1]
+        if not aba_atribuicao_anjun and len(driver.window_handles) > 2:
+            aba_atribuicao_anjun = driver.window_handles[2]
+
+    except Exception as e:
+        print(f"[Aviso] Falha ao garantir abas da Anjun: {str(e)}")
+
+_init_seq_id = 0
+
+def inicializar_selenium(plataforma_id, conta_id=None):
+    global driver, aba_recebimento, aba_descarregamento, aba_atribuicao, aba_atribuicao_anjun, plataforma_ativa, conta_ativa, motorista_atribuicao_ativa, contagem_atribuicao_ativa, _init_seq_id
+    
+    _init_seq_id += 1
+    meu_seq_id = _init_seq_id
+    caminho_perfil, porta, conta_id_resolvido, conta_obj = obter_perfil_e_porta_conta(plataforma_id, conta_id)
+    
+    # 1. Se o Chrome para esta plataforma + conta JÁ estiver em execução no Windows (porta debug respondendo):
+    if is_chrome_debug_active(porta):
+        if not chrome_tem_janela_visivel_na_tela(porta):
+            print(f"[!] Chrome na porta {porta} está oculto/órfão sem janela visível na tela. Reiniciando janela do Chrome...")
+            desconectar_selenium()
+            matar_chrome_na_porta(porta)
+        else:
+            print(f"[*] Chrome para '{plataforma_id}' (Conta: {conta_id_resolvido}) já está em execução no Windows (porta {porta}). Trazendo para frente...")
+            try:
+                conectar_chrome_existente(plataforma_id, conta_id_resolvido)
+                if driver and len(driver.window_handles) > 0:
+                    try:
+                        driver.maximize_window()
+                        driver.execute_cdp_cmd("Page.bringToFront", {})
+                    except Exception:
+                        pass
+                    forcar_janela_chrome_visivel(porta)
+                    salvar_sessao_ativa(plataforma_id, motorista_atribuicao_ativa, contagem_atribuicao_ativa, conta_id_resolvido)
+                    return
+            except Exception as e_att:
+                print(f"[Aviso] Falha ao reconectar ao Chrome existente ({e_att}). Abrindo novo Chrome...")
+                desconectar_selenium()
+                matar_chrome_na_porta(porta)
+
+    # 2. Desconecta o driver anterior em memória SEM fechar o Chrome dele no Windows!
+    desconectar_selenium()
     
     plataformas = carregar_plataformas()
-    config = plataformas.get(plataforma_id)
-    if not config:
+    config_base = plataformas.get(plataforma_id)
+    if not config_base:
         raise Exception(f"Configurações para a plataforma '{plataforma_id}' não encontradas.")
+    config = dict(config_base)
+    if isinstance(conta_obj, dict):
+        if conta_obj.get("login_usuario"):
+            config["login_usuario"] = conta_obj["login_usuario"]
+        if conta_obj.get("login_senha"):
+            config["login_senha"] = conta_obj["login_senha"]
         
-    print(f"[*] Iniciando Chrome para a plataforma: {config['nome']}...")
+    print(f"[*] Iniciando Chrome para a plataforma: {config['nome']} (Conta: {conta_id_resolvido}, porta {porta})...")
     
     from selenium.webdriver.chrome.options import Options
     chrome_options = Options()
     
-    # Aponta para um diretório de perfil exclusivo do robô dentro da pasta do projeto (específico por plataforma)
-    diretorio_projeto = os.path.dirname(os.path.abspath(__file__))
-    caminho_perfil = os.path.join(diretorio_projeto, f"perfil_robo_{plataforma_id}")
+    # Aponta para um diretório de perfil exclusivo do robô dentro da pasta do projeto (específico por conta e plataforma)
     chrome_options.add_argument(f"--user-data-dir={caminho_perfil}")
+    chrome_options.add_argument(f"--remote-debugging-port={porta}")
+    chrome_options.add_argument("--start-maximized")
+    chrome_options.add_argument("--window-position=0,0")
+    chrome_options.add_argument("--disable-session-crashed-bubble")
     chrome_options.add_argument("--disable-restore-session-state")
     chrome_options.add_argument("--lang=pt-BR")
     chrome_options.add_argument("--disable-print-preview")
@@ -2073,9 +3975,13 @@ def inicializar_selenium(plataforma_id):
         "credentials_enable_service": True,
         "profile.password_manager_enabled": True
     })
-    
+    from selenium.webdriver.chrome.service import Service
+    import subprocess
+    chrome_service = Service()
+    chrome_service.creation_flags = subprocess.CREATE_NO_WINDOW
+
     try:
-        driver = webdriver.Chrome(options=chrome_options)
+        driver = webdriver.Chrome(service=chrome_service, options=chrome_options)
         
         # Oculta o navigator.webdriver para permitir login com o Google (OAuth)
         try:
@@ -2086,7 +3992,13 @@ def inicializar_selenium(plataforma_id):
         except Exception as e_cdp:
             print(f"[Aviso] Falha ao ocultar navigator.webdriver via CDP: {str(e_cdp)}")
             
-        driver.maximize_window()
+        try:
+            driver.set_window_position(0, 0)
+            driver.maximize_window()
+            driver.execute_cdp_cmd("Page.bringToFront", {})
+        except Exception:
+            pass
+        forcar_janela_chrome_visivel(porta)
         
         # Garante início com apenas uma aba aberta (evita abas acumuladas de sessões anteriores)
         print("[*] Limpando abas extras residuais...")
@@ -2109,51 +4021,24 @@ def inicializar_selenium(plataforma_id):
         raise e
     
     if plataforma_id == 'loggi':
-        print("[*] Iniciando fluxo de login para a Loggi...")
-        driver.get(config['recebimento_url'])
-        time.sleep(1.5)
-        
-        print("[*] Aguardando o login ser concluído no navegador para Loggi...")
-        login_concluido = False
-        inicio_login = time.time()
-        while time.time() - inicio_login < 180.0:
-            try:
-                if not driver or not driver.window_handles:
-                    break
-                current_url = driver.current_url.lower()
-                if "login" not in current_url and "arco.loggi.com" in current_url:
-                    print("[+] Login detectado com sucesso!")
-                    login_concluido = True
-                    break
-            except Exception:
-                pass
-            time.sleep(1.0)
-            
-        if not login_concluido:
-            raise Exception("Tempo limite esgotado para o login na Loggi.")
-            
-        # Cria a segunda aba (Hoje)
-        driver.execute_script("window.open('https://arco.loggi.com/AV3/hoje', '_blank');")
-        time.sleep(0.5)
-        
-        # Cria a terceira aba (Atribuição / Grupos)
-        driver.execute_script("window.open('https://arco.loggi.com/AV3/na-base/grupos', '_blank');")
-        time.sleep(1.0)
-        
-        garantir_abas_loggi(driver)
+        forcar_janela_chrome_visivel(porta)
+        fluxo_login_loggi(driver, config)
+        forcar_janela_chrome_visivel(porta)
         plataforma_ativa = plataforma_id
-        
-        try:
-            if aba_recebimento:
-                driver.switch_to.window(aba_recebimento)
-        except Exception:
-            pass
+        conta_ativa = conta_id_resolvido
             
     elif plataforma_id == 'imile':
         print("[*] Iniciando fluxo de login para a iMile...")
         # Abre primeiro a página de login
         driver.get("https://ds-login.imile.com/")
         time.sleep(1.0)
+        try:
+            driver.set_window_position(0, 0)
+            driver.maximize_window()
+            driver.execute_cdp_cmd("Page.bringToFront", {})
+        except Exception:
+            pass
+        forcar_janela_chrome_visivel(porta)
         
         # Tenta mudar o idioma para Português na tela de login
         try:
@@ -2217,6 +4102,8 @@ def inicializar_selenium(plataforma_id):
         login_concluido = False
         inicio_login = time.time()
         while time.time() - inicio_login < 180.0:  # Limite de 3 minutos para logar
+            if _init_seq_id != meu_seq_id:
+                return
             try:
                 if not driver or not driver.window_handles:
                     break
@@ -2402,6 +4289,12 @@ def inicializar_selenium(plataforma_id):
             raise Exception("O Chrome foi fechado ou travou durante o mapeamento das abas. Por favor, tente novamente.")
         
         plataforma_ativa = plataforma_id
+        conta_ativa = conta_id_resolvido
+        try:
+            atualizar_sessao_imile(driver, forcar=True, conta_id=conta_id_resolvido)
+            carregar_motoristas_imile_api(forcar=True, conta_id=conta_id_resolvido)
+        except Exception:
+            pass
         
         def inicializar_aba_atribuicao_imile_boot():
             inicio = time.time()
@@ -2522,11 +4415,13 @@ def inicializar_selenium(plataforma_id):
         # Configura aba de Recebimento
         driver.get(config['recebimento_url'])
         time.sleep(1.5)
+        forcar_janela_chrome_visivel(porta)
         
         # Se for Anjun Express e cair na tela de login
         current_url = driver.current_url
         if plataforma_id == 'anjun' and ("login" in current_url.lower() or "newsupplier.anjunexpress.com/#/login" in current_url):
             print("[*] Tela de login da Anjun detectada. Aguardando login...")
+            forcar_janela_chrome_visivel(porta)
             usuario = config.get("login_usuario", "").strip()
             senha = config.get("login_senha", "").strip()
             autofill_feito = False
@@ -2534,6 +4429,8 @@ def inicializar_selenium(plataforma_id):
             login_concluido = False
             inicio_login = time.time()
             while time.time() - inicio_login < 180.0:  # Limite de 3 minutos
+                if _init_seq_id != meu_seq_id:
+                    return
                 try:
                     if not driver or not driver.window_handles:
                         break
@@ -2624,15 +4521,24 @@ def inicializar_selenium(plataforma_id):
                 print(f"[Aviso] Falha ao mapear aba Anjun: {str(e_map)}")
                 
         # Fallbacks
-        if not aba_recebimento: aba_recebimento = driver.window_handles[0]
-        if not aba_atribuicao: aba_atribuicao = driver.window_handles[1]
-        if plataforma_id == 'anjun' and not aba_atribuicao_anjun:
+        if not aba_recebimento and len(driver.window_handles) > 0: aba_recebimento = driver.window_handles[0]
+        if not aba_atribuicao and len(driver.window_handles) > 1: aba_atribuicao = driver.window_handles[1]
+        if plataforma_id == 'anjun' and not aba_atribuicao_anjun and len(driver.window_handles) > 2:
             aba_atribuicao_anjun = driver.window_handles[2]
             
         plataforma_ativa = plataforma_id
+        conta_ativa = conta_id_resolvido
         
         if plataforma_id == 'anjun':
+            cache_sessao_anjun["token"] = None
+            cache_sessao_anjun["timestamp"] = 0
+            cache_motoristas_anjun["lista"] = []
+            cache_motoristas_anjun["timestamp"] = 0
             fechar_avisos_todas_abas_anjun(driver)
+            try:
+                atualizar_sessao_anjun(driver, forcar=True)
+            except Exception:
+                pass
         
         def monitorar_carregamento_anjun():
             inicio = time.time()
@@ -2767,7 +4673,8 @@ def requer_licenca_ativa(f):
 
 @app.route('/status-licenca', methods=['GET'])
 def rota_status_licenca():
-    return jsonify(validar_licenca())
+    forcar = request.args.get("forcar") in ("1", "true", "True")
+    return jsonify(validar_licenca(forcar_rede=forcar))
 
 @app.route('/ativar-licenca', methods=['POST'])
 def rota_ativar_licenca():
@@ -2776,12 +4683,56 @@ def rota_ativar_licenca():
     if not chave:
         return jsonify({"sucesso": False, "mensagem": "A chave de ativação não pode ficar vazia!"}), 400
     ok, msg = salvar_licenca(chave)
-    status_atual = validar_licenca()
+    status_atual = validar_licenca(forcar_rede=True)
     return jsonify({
         "sucesso": ok,
         "mensagem": msg,
         "status": status_atual
     }), (200 if ok else 400)
+
+@app.route('/licenca/plataformas', methods=['POST'])
+def rota_atualizar_plataformas_licenca():
+    """
+    Permite atualizar quais empresas (anjun, imile, loggi, magalog) estão liberadas
+    nesta licença (salva localmente e sincroniza na nuvem Supabase caso seja chave GM-...).
+    """
+    dados = request.json or {}
+    plataformas = dados.get('plataformas') or []
+    ok, res_plats = salvar_override_plataformas_local(plataformas)
+    if not ok:
+        return jsonify({"sucesso": False, "mensagem": res_plats}), 400
+
+    # Se a licença ativa for GM-... no Supabase, sincroniza a tag [PLATS:...] na nuvem também
+    try:
+        lic_atual = validar_licenca(forcar_rede=True)
+        lic_id = lic_atual.get("licenca_id")
+        if lic_id:
+            url_base, anon_key = _obter_config_supabase()
+            headers = {
+                "apikey": anon_key,
+                "Authorization": f"Bearer {anon_key}",
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal"
+            }
+            tag_plats = f"[PLATS:{','.join(res_plats)}]"
+            payload_patch = json.dumps({"observacoes": tag_plats}).encode("utf-8")
+            req_patch = urllib.request.Request(
+                f"{url_base}/rest/v1/licencas?id=eq.{lic_id}",
+                data=payload_patch,
+                headers=headers,
+                method="PATCH"
+            )
+            urllib.request.urlopen(req_patch, timeout=4.0).close()
+    except Exception as e_sync:
+        print(f"[Aviso] Falha ao sincronizar plataformas na nuvem: {e_sync}")
+
+    status_atual = validar_licenca(forcar_rede=True)
+    return jsonify({
+        "sucesso": True,
+        "mensagem": "Empresas liberadas na licença atualizadas com sucesso!",
+        "plataformas_liberadas": res_plats,
+        "status": status_atual
+    })
 
 # --- ROTAS DE COBRANÇA E RENOVAÇÃO AUTOMÁTICA VIA PIX ---
 
@@ -2826,6 +4777,45 @@ def rota_checar_atualizacao():
     resultado = atualizador.verificar_atualizacao()
     return jsonify(resultado)
 
+def obter_env_limpo_pyinstaller():
+    """
+    Remove variáveis de ambiente internas do bootloader PyInstaller (_MEIPASS2, _PYI_*, etc.)
+    e reseta SetDllDirectoryW para que o novo processo app_engine.exe faça sua própria extração
+    limpa em vez de buscar python312.dll na pasta _MEI antiga que será apagada ao sair.
+    """
+    try:
+        if os.name == 'nt':
+            import ctypes
+            ctypes.windll.kernel32.SetDllDirectoryW(None)
+    except Exception:
+        pass
+
+    env = os.environ.copy()
+    chaves_remover = [
+        k for k in list(env.keys())
+        if k.upper().startswith('_MEI')
+        or k.upper().startswith('_PYI')
+        or k.upper() in ('TCL_LIBRARY', 'TK_LIBRARY', 'PYTHONHOME', 'PYTHONPATH')
+    ]
+    for k in chaves_remover:
+        env.pop(k, None)
+
+    meipass_atual = getattr(sys, '_MEIPASS', None)
+    if 'PATH' in env:
+        partes_path = env['PATH'].split(os.pathsep)
+        partes_limpas = []
+        for p in partes_path:
+            if not p:
+                continue
+            if meipass_atual and os.path.normcase(os.path.abspath(p)) == os.path.normcase(os.path.abspath(meipass_atual)):
+                continue
+            if '_mei' in p.lower():
+                continue
+            partes_limpas.append(p)
+        env['PATH'] = os.pathsep.join(partes_limpas)
+
+    return env
+
 @app.route('/aplicar-atualizacao', methods=['POST'])
 def rota_aplicar_atualizacao():
     ok, msg = atualizador.aplicar_atualizacao()
@@ -2833,7 +4823,18 @@ def rota_aplicar_atualizacao():
         # Agenda reinício do servidor após a resposta ser enviada ao navegador
         def reiniciar_depois():
             time.sleep(1.5)
-            os._exit(42)
+            try:
+                import subprocess
+                env_limpo = obter_env_limpo_pyinstaller()
+                flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000) if os.name == 'nt' else 0
+                if getattr(sys, 'frozen', False):
+                    cmd_str = f'cmd /c "ping 127.0.0.1 -n 3 > nul && \"{sys.executable}\""'
+                    subprocess.Popen(cmd_str, cwd=BASE_DIR, env=env_limpo, shell=True, creationflags=flags, close_fds=True)
+                else:
+                    subprocess.Popen([sys.executable, os.path.abspath(__file__)], cwd=BASE_DIR, env=env_limpo)
+            except Exception:
+                pass
+            os._exit(0)
         import threading
         threading.Thread(target=reiniciar_depois, daemon=True).start()
 
@@ -2844,11 +4845,15 @@ def rota_aplicar_atualizacao():
 
 @app.route('/')
 def rota_index():
-    return send_from_directory(os.path.dirname(os.path.abspath(__file__)), 'index.html')
+    resp = send_from_directory(BASE_DIR, 'index.html', max_age=0)
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    return resp
 
 @app.route('/dashboard')
 def rota_dashboard():
-    return send_from_directory(os.path.dirname(os.path.abspath(__file__)), 'dashboard.html')
+    resp = send_from_directory(BASE_DIR, 'dashboard.html', max_age=0)
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    return resp
 
 @app.route('/ping', methods=['GET'])
 def rota_ping():
@@ -2856,22 +4861,110 @@ def rota_ping():
 
 @app.route('/configuracoes', methods=['GET'])
 def obter_configuracoes():
-    plat_id = request.args.get("plataforma")
+    plat_id = (request.args.get("plataforma") or "").strip().lower()
+    cid_req = request.args.get("conta_id")
+    lic = validar_licenca()
+    plats_licenciadas = carregar_plataformas_licenciadas(lic)
+    plat_ativa_ret = plataforma_ativa if (plataforma_ativa and plataforma_ativa.lower() in plats_licenciadas) else ""
+    plat_consulta_mot = plat_id or plat_ativa_ret
+    if not plat_consulta_mot:
+        try:
+            conn_p = conectar_banco()
+            cur_p = conn_p.cursor()
+            cur_p.execute("""
+                SELECT LOWER(plataforma), COUNT(*)
+                FROM motoristas_plataforma
+                WHERE LOWER(TRIM(cidade)) NOT IN ('sem cidade', 'geral', 'imile', 'anjun', '')
+                GROUP BY LOWER(plataforma)
+                ORDER BY COUNT(*) DESC
+            """)
+            for p_db, _ in cur_p.fetchall():
+                if p_db and p_db in plats_licenciadas:
+                    plat_consulta_mot = p_db
+                    break
+            conn_p.close()
+        except Exception:
+            pass
+    if not plat_consulta_mot and plats_licenciadas:
+        plat_consulta_mot = "anjun" if "anjun" in plats_licenciadas else next(iter(plats_licenciadas.keys()), "anjun")
     return jsonify({
-        "plataformas": carregar_plataformas(),
-        "motoristas": carregar_motoristas(plat_id),
+        "plataformas": plats_licenciadas,
+        "todas_plataformas_sistema": carregar_plataformas(),
+        "contas_plataformas": carregar_contas_plataformas(),
+        "conta_ativa": cid_req or conta_ativa,
+        "motoristas": carregar_motoristas(plat_consulta_mot, conta_id=cid_req),
         "cidades": carregar_cidades(),
-        "plataforma_ativa": plataforma_ativa,
+        "plataforma_ativa": plat_ativa_ret,
+        "plataforma_motoristas": plat_consulta_mot,
+        "motorista_lote": motorista_atribuicao_ativa,
+        "contagem": contagem_atribuicao_ativa,
         "modo_consulta": modo_consulta,
-        "licenca": validar_licenca()
+        "licenca": lic
+    })
+
+@app.route('/motoristas/lista-site', methods=['GET'])
+def obter_lista_motoristas_site():
+    plat_id = (request.args.get("plataforma") or plataforma_ativa or "anjun").strip().lower()
+    cid_req = request.args.get("conta_id") or obter_conta_ativa_plataforma(plat_id)[0]
+    forcar = request.args.get("forcar") in ("1", "true", "True")
+    nomes_set = set()
+
+    try:
+        if plat_id == 'anjun':
+            fn_an = globals().get('carregar_motoristas_anjun_api')
+            if fn_an:
+                lista_an, _ = fn_an(forcar=forcar, conta_id=cid_req)
+                for m in (lista_an or []):
+                    un = (m.get("username") or "").strip()
+                    if un:
+                        nomes_set.add(un)
+        elif plat_id == 'imile':
+            fn_im = globals().get('carregar_motoristas_imile_api')
+            if fn_im:
+                lista_im, _ = fn_im(forcar=forcar, conta_id=cid_req)
+                for m in (lista_im or []):
+                    dn = (m.get("daName") or "").strip()
+                    if dn:
+                        nomes_set.add(dn)
+    except Exception as e:
+        print(f"[Aviso] Falha ao consultar API de motoristas para {plat_id} ({cid_req}): {e}")
+
+    if not nomes_set and plat_id in ('anjun', 'imile'):
+        salvos = obter_motoristas_da_base_salvos(plat_id, cid_req)
+        for s in salvos:
+            if s and str(s).strip():
+                nomes_set.add(str(s).strip())
+
+    _, nomes_base_oficiais, nomes_outras_bases = obter_nomes_oficiais_base_ativa(plat_id, cid_req, forcar=False)
+    try:
+        conn = conectar_banco()
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT motorista FROM motoristas_plataforma WHERE LOWER(plataforma) = ?", (plat_id,))
+        for (m_db,) in cursor.fetchall():
+            if m_db and str(m_db).strip() and str(m_db).strip() not in ("---", "Sem Motorista"):
+                m_str = str(m_db).strip()
+                if motorista_pertence_a_base_ativa(m_str, nomes_base_oficiais, nomes_outras_bases, plat_id):
+                    nomes_set.add(m_str)
+        conn.close()
+    except Exception:
+        pass
+
+    lista_ordenada = sorted(list(nomes_set), key=lambda s: remover_acentos(s.lower()))
+    return jsonify({
+        "status": "sucesso",
+        "plataforma": plat_id,
+        "conta_id": cid_req,
+        "motoristas": lista_ordenada
     })
 
 @app.route('/<path:filename>')
 def rota_arquivos_estaticos(filename):
-    diretorio = os.path.dirname(os.path.abspath(__file__))
+    diretorio = BASE_DIR
     caminho = os.path.join(diretorio, filename)
     if os.path.isfile(caminho):
-        return send_from_directory(diretorio, filename)
+        resp = send_from_directory(diretorio, filename, max_age=0)
+        resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        return resp
     return jsonify({"erro": "Arquivo nao encontrado"}), 404
 
 @app.route('/configuracoes/modo-consulta', methods=['POST'])
@@ -2912,7 +5005,7 @@ def obter_historico():
             start = data_inicio + "T00:00:00"
             end = data_fim + "T23:59:59"
             cursor.execute("""
-                SELECT timestamp, codigo, plataforma, cidade, motorista, status, recebedor, telefone, email, tempo_criacao, status_pacote, valor_declarado, negocios, bairro, status_entrega, motorista_entrega, tempo_atraso 
+                SELECT timestamp, codigo, plataforma, cidade, motorista, status, recebedor, telefone, email, tempo_criacao, status_pacote, valor_declarado, negocios, bairro, status_entrega, motorista_entrega, tempo_atraso, cep, endereco 
                 FROM historico
                 WHERE timestamp >= ? AND timestamp <= ?
             """, (start, end))
@@ -2942,7 +5035,9 @@ def obter_historico():
                     "bairro": r[13] if len(r) > 13 else "---",
                     "status_entrega": r[14] if len(r) > 14 and r[14] is not None else "",
                     "motorista_entrega": traduzir_motorista(mot_ent_original, plat) if (len(r) > 15 and r[15] is not None) else "",
-                    "tempo_atraso": r[16] if len(r) > 16 and r[16] is not None else 0.0
+                    "tempo_atraso": r[16] if len(r) > 16 and r[16] is not None else 0.0,
+                    "cep": r[17] if len(r) > 17 and r[17] is not None else "",
+                    "endereco": r[18] if len(r) > 18 and r[18] is not None else ""
                 })
             return jsonify(historico)
         except Exception as e:
@@ -2954,7 +5049,7 @@ def obter_historico():
             import datetime
             cutoff = (datetime.datetime.now() - datetime.timedelta(hours=24)).strftime('%Y-%m-%dT%H:%M:%S')
             cursor.execute("""
-                SELECT timestamp, codigo, plataforma, cidade, motorista, status, recebedor, telefone, email, tempo_criacao, status_pacote, valor_declarado, negocios, bairro, status_entrega, motorista_entrega, tempo_atraso 
+                SELECT timestamp, codigo, plataforma, cidade, motorista, status, recebedor, telefone, email, tempo_criacao, status_pacote, valor_declarado, negocios, bairro, status_entrega, motorista_entrega, tempo_atraso, cep, endereco 
                 FROM historico
                 WHERE timestamp >= ?
             """, (cutoff,))
@@ -2984,7 +5079,9 @@ def obter_historico():
                     "bairro": r[13] if len(r) > 13 else "---",
                     "status_entrega": r[14] if len(r) > 14 and r[14] is not None else "",
                     "motorista_entrega": traduzir_motorista(mot_ent_original, plat) if (len(r) > 15 and r[15] is not None) else "",
-                    "tempo_atraso": r[16] if len(r) > 16 and r[16] is not None else 0.0
+                    "tempo_atraso": r[16] if len(r) > 16 and r[16] is not None else 0.0,
+                    "cep": r[17] if len(r) > 17 and r[17] is not None else "",
+                    "endereco": r[18] if len(r) > 18 and r[18] is not None else ""
                 })
             return jsonify(historico)
         except Exception:
@@ -3465,6 +5562,39 @@ def debug_dom():
             
     return jsonify(dom_info)
 
+@app.route('/debug-eval', methods=['POST'])
+def debug_eval():
+    global driver
+    if not driver:
+        return jsonify({"erro": "sem driver"})
+    dados = request.get_json(force=True) or {}
+    script = dados.get("script")
+    handle = dados.get("handle")
+    if handle:
+        driver.switch_to.window(handle)
+    try:
+        res = driver.execute_script(script)
+        return jsonify({"sucesso": True, "resultado": res})
+    except Exception as e:
+        return jsonify({"sucesso": False, "erro": str(e)})
+
+@app.route('/debug-test-bipe', methods=['POST'])
+def debug_test_bipe():
+    global driver
+    if not driver:
+        return jsonify({"erro": "sem driver"})
+    dados = request.get_json(force=True) or {}
+    codigo = dados.get("codigo", "TEST123456")
+    handle = dados.get("handle")
+    if handle:
+        driver.switch_to.window(handle)
+    campo = obter_input_imile_html(driver)
+    if not campo:
+        return jsonify({"erro": "campo não encontrado"})
+    sucesso = enviar_bipe_imile_html(driver, campo, codigo)
+    val_final = campo.get_attribute("value")
+    return jsonify({"sucesso": sucesso, "val_final": val_final})
+
 @app.route('/atribuicao/exportar-csv', methods=['GET'])
 def exportar_csv():
     try:
@@ -3488,6 +5618,12 @@ def exportar_csv():
         conn = conectar_banco()
         cursor = conn.cursor()
         
+        # Garante que a coluna produto exista antes do SELECT
+        try:
+            cursor.execute("ALTER TABLE historico ADD COLUMN produto TEXT")
+        except Exception:
+            pass
+
         # 1. Busca os dados agrupados por motorista, cidade, plataforma
         query_agrupado = """
             SELECT motorista, cidade, plataforma, count(id)
@@ -3504,9 +5640,10 @@ def exportar_csv():
         cursor.execute(query_agrupado, (start, end))
         linhas_agrupadas = cursor.fetchall()
         
-        # 2. Busca a lista detalhada de todos os bips daquele dia
+        # 2. Busca a lista detalhada de todos os bips daquele período com todas as colunas extras
         query_detalhada = """
-            SELECT timestamp, codigo, plataforma, cidade, motorista, recebedor
+            SELECT timestamp, codigo, plataforma, cidade, motorista, recebedor,
+                   cep, endereco, bairro, telefone, negocios, produto, valor_declarado
             FROM historico
             WHERE timestamp >= ?
               AND timestamp <= ?
@@ -3518,50 +5655,202 @@ def exportar_csv():
         conn.close()
         
         import io
-        import csv
         import datetime
-        
-        output = io.StringIO()
-        output.write('\ufeff') # BOM UTF-8
-        
-        writer = csv.writer(output, delimiter=';')
-        
-        # Cabeçalho do Resumo
-        writer.writerow([f"RESUMO DE ATRIBUIÇÕES - PERÍODO: {label_periodo}"])
-        writer.writerow([])
-        writer.writerow(["Motorista", "Cidade", "Plataforma", "Quantidade de Pacotes"])
-        
-        for r in linhas_agrupadas:
-            writer.writerow([r[0], r[1], r[2], r[3]])
-            
-        writer.writerow([])
-        writer.writerow([])
-        
-        # Cabeçalho da Listagem Detalhada
-        writer.writerow(["LISTAGEM DETALHADA DE PACOTES BIPADOS"])
-        writer.writerow([])
-        writer.writerow(["Horário", "Código de Rastreio", "Plataforma", "Cidade Destino", "Motorista Atribuído", "Recebedor"])
-        
+        from flask import Response
+
+        def _limpar_campo(v):
+            s = str(v or "").strip()
+            return "" if s in ["---", "None", "null", "****"] else s
+
+        linhas_processadas = []
         for r in linhas_detalhadas:
-            ts = r[0]
+            ts = r[0] or ""
             if ts and len(ts) >= 19:
                 try:
                     dt = datetime.datetime.strptime(ts[:19], '%Y-%m-%dT%H:%M:%S')
                     ts = dt.strftime('%d/%m/%Y %H:%M:%S')
                 except Exception:
                     pass
-            writer.writerow([ts, r[1], r[2], r[3], r[4], r[5]])
-            
-        csv_data = output.getvalue()
-        output.close()
-        
-        from flask import Response
-        response = Response(
-            csv_data,
-            mimetype="text/csv",
-            headers={"Content-disposition": f"attachment; filename=Fechamento_Triagem_{label_periodo}.csv"}
-        )
-        return response
+            cod_val = str(r[1] or "").strip()
+            plat_val = str(r[2] or "").strip()
+            cid_val = _limpar_campo(r[3])
+            mot_val = _limpar_campo(r[4])
+            rec_val = _limpar_campo(r[5])
+            cep_val = _limpar_campo(r[6]) if len(r) > 6 else ""
+            end_val = _limpar_campo(r[7]) if len(r) > 7 else ""
+            bairro_val = _limpar_campo(r[8]) if len(r) > 8 else ""
+            tel_val = _limpar_campo(r[9]) if len(r) > 9 else ""
+            emp_val = _limpar_campo(r[10]) if len(r) > 10 else ""
+            prod_val = _limpar_campo(r[11]) if len(r) > 11 else ""
+            valor_val = _limpar_campo(r[12]) if len(r) > 12 else ""
+
+            # Compatibilidade com registros antigos da Loggi onde a empresa ficava salva em 'recebedor'
+            if not emp_val and plat_val.lower() == "loggi" and rec_val:
+                emp_val = formatar_nome_empresa_remetente(rec_val, cod_val, plat_val)
+            else:
+                emp_val = formatar_nome_empresa_remetente(emp_val, cod_val, plat_val)
+
+            linhas_processadas.append([
+                ts, cod_val, plat_val.upper(), emp_val, cid_val, bairro_val,
+                cep_val, end_val, mot_val, rec_val, tel_val, prod_val, valor_val
+            ])
+
+        try:
+            import openpyxl
+            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+            from openpyxl.utils import get_column_letter
+
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Fechamento Triagem"
+
+            font_title = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
+            fill_title = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
+            font_header = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+            fill_header_resumo = PatternFill(start_color="0284C7", end_color="0284C7", fill_type="solid")
+            fill_header_detalhe = PatternFill(start_color="2563EB", end_color="2563EB", fill_type="solid")
+            fill_zebra = PatternFill(start_color="F8FAFC", end_color="F8FAFC", fill_type="solid")
+            font_cell = Font(name="Calibri", size=10)
+            thin_side = Side(border_style="thin", color="CBD5E1")
+            border_cell = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+
+            # Bloco 1: Resumo de Atribuições
+            ws.append([f"RESUMO DE ATRIBUIÇÕES - PERÍODO: {label_periodo}"])
+            ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=4)
+            c_t1 = ws.cell(row=1, column=1)
+            c_t1.font = font_title
+            c_t1.fill = fill_title
+            c_t1.alignment = Alignment(vertical="center", horizontal="left")
+            ws.row_dimensions[1].height = 24
+
+            ws.append([])
+            headers_resumo = ["Motorista", "Cidade", "Plataforma", "Quantidade de Pacotes"]
+            ws.append(headers_resumo)
+            row_h_res = ws.max_row
+            ws.row_dimensions[row_h_res].height = 20
+            for col_i in range(1, len(headers_resumo) + 1):
+                c = ws.cell(row=row_h_res, column=col_i)
+                c.font = font_header
+                c.fill = fill_header_resumo
+                c.alignment = Alignment(vertical="center", horizontal="center" if col_i == 4 else "left")
+                c.border = border_cell
+
+            for idx_r, r in enumerate(linhas_agrupadas):
+                ws.append([r[0], r[1], str(r[2] or "").upper(), int(r[3] or 0)])
+                curr_r = ws.max_row
+                for col_i in range(1, 5):
+                    c = ws.cell(row=curr_r, column=col_i)
+                    c.font = font_cell
+                    c.border = border_cell
+                    if idx_r % 2 == 1:
+                        c.fill = fill_zebra
+                    if col_i == 4:
+                        c.alignment = Alignment(horizontal="center")
+
+            ws.append([])
+            ws.append([])
+
+            # Bloco 2: Listagem Detalhada de Pacotes Bipados
+            ws.append(["LISTAGEM DETALHADA DE PACOTES BIPADOS"])
+            row_t2 = ws.max_row
+            headers_detalhe = [
+                "Horário", "Código de Rastreio", "Plataforma", "Empresa / Loja",
+                "Cidade Destino", "Bairro", "CEP", "Endereço",
+                "Motorista Atribuído", "Recebedor", "Telefone", "Produto", "Valor"
+            ]
+            ws.merge_cells(start_row=row_t2, start_column=1, end_row=row_t2, end_column=len(headers_detalhe))
+            c_t2 = ws.cell(row=row_t2, column=1)
+            c_t2.font = font_title
+            c_t2.fill = fill_title
+            c_t2.alignment = Alignment(vertical="center", horizontal="left")
+            ws.row_dimensions[row_t2].height = 24
+
+            ws.append(headers_detalhe)
+            row_h_det = ws.max_row
+            ws.row_dimensions[row_h_det].height = 22
+            for col_i in range(1, len(headers_detalhe) + 1):
+                c = ws.cell(row=row_h_det, column=col_i)
+                c.font = font_header
+                c.fill = fill_header_detalhe
+                c.alignment = Alignment(vertical="center", horizontal="left")
+                c.border = border_cell
+
+            for idx_d, row_vals in enumerate(linhas_processadas):
+                ws.append(row_vals)
+                curr_r = ws.max_row
+                for col_i in range(1, len(headers_detalhe) + 1):
+                    c = ws.cell(row=curr_r, column=col_i)
+                    c.font = font_cell
+                    c.border = border_cell
+                    if idx_d % 2 == 1:
+                        c.fill = fill_zebra
+                    # Força formato texto em Código de Rastreio (2), CEP (7) e Telefone (11) para nunca virar 3,32E+12
+                    if col_i in (2, 7, 11):
+                        c.number_format = '@'
+                        c.value = str(c.value or "")
+
+            # Larguras ideais mínimas por coluna para nunca aparecer '#######' no Horário nem cortar textos
+            larguras_minimas = {
+                1: 21,  # Horário
+                2: 24,  # Código de Rastreio
+                3: 13,  # Plataforma
+                4: 24,  # Empresa / Loja
+                5: 22,  # Cidade Destino
+                6: 20,  # Bairro
+                7: 13,  # CEP
+                8: 38,  # Endereço
+                9: 24,  # Motorista Atribuído
+                10: 26, # Recebedor
+                11: 17, # Telefone
+                12: 25, # Produto
+                13: 14  # Valor
+            }
+            for col_idx in range(1, len(headers_detalhe) + 1):
+                col_letter = get_column_letter(col_idx)
+                max_len = larguras_minimas.get(col_idx, 16)
+                for row_idx in range(row_h_det, min(ws.max_row + 1, row_h_det + 300)):
+                    val_str = str(ws.cell(row=row_idx, column=col_idx).value or "")
+                    if len(val_str) + 3 > max_len:
+                        max_len = min(len(val_str) + 3, 52)
+                ws.column_dimensions[col_letter].width = max_len
+
+            bio = io.BytesIO()
+            wb.save(bio)
+            bio.seek(0)
+            return Response(
+                bio.getvalue(),
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={"Content-disposition": f"attachment; filename=Fechamento_Triagem_{label_periodo}.xlsx"}
+            )
+        except Exception as e_xlsx:
+            print(f"[Aviso] Falha ao gerar .xlsx com openpyxl ({e_xlsx}), gerando .csv de fallback...")
+            import csv
+            output = io.StringIO()
+            output.write('\ufeff')
+            writer = csv.writer(output, delimiter=';')
+            writer.writerow([f"RESUMO DE ATRIBUIÇÕES - PERÍODO: {label_periodo}"])
+            writer.writerow([])
+            writer.writerow(["Motorista", "Cidade", "Plataforma", "Quantidade de Pacotes"])
+            for r in linhas_agrupadas:
+                writer.writerow([r[0], r[1], r[2], r[3]])
+            writer.writerow([])
+            writer.writerow([])
+            writer.writerow(["LISTAGEM DETALHADA DE PACOTES BIPADOS"])
+            writer.writerow([])
+            writer.writerow([
+                "Horário", "Código de Rastreio", "Plataforma", "Empresa / Loja",
+                "Cidade Destino", "Bairro", "CEP", "Endereço",
+                "Motorista Atribuído", "Recebedor", "Telefone", "Produto", "Valor"
+            ])
+            for row_vals in linhas_processadas:
+                writer.writerow(row_vals)
+            csv_data = output.getvalue()
+            output.close()
+            return Response(
+                csv_data,
+                mimetype="text/csv",
+                headers={"Content-disposition": f"attachment; filename=Fechamento_Triagem_{label_periodo}.csv"}
+            )
     except Exception as e:
         return jsonify({"status": "erro", "mensagem": str(e)}), 500
 
@@ -3573,20 +5862,51 @@ def limpar_historico():
 @app.route('/divergencias/pendentes', methods=['GET'])
 def obter_divergencias_pendentes():
     try:
+        import datetime
+        hoje_str = datetime.datetime.now().strftime('%Y-%m-%d')
         conn = conectar_banco()
         cursor = conn.cursor()
-        cursor.execute("SELECT codigo, motorista_lote, motorista_esperado, timestamp FROM divergencias_pendentes WHERE status = 'pendente' AND timestamp >= datetime('now', '-18 hours')")
+        cursor.execute("""
+            SELECT d.codigo, 
+                   d.motorista_lote,
+                   d.motorista_esperado, 
+                   d.timestamp,
+                   COALESCE(NULLIF(d.cidade, ''), NULLIF(h.cidade, ''), '---') AS cidade_destino
+            FROM divergencias_pendentes d
+            LEFT JOIN (
+                SELECT codigo, cidade 
+                FROM historico 
+                WHERE cidade IS NOT NULL AND cidade != '' AND cidade != '---'
+                GROUP BY codigo
+            ) h ON d.codigo = h.codigo
+            WHERE d.status = 'pendente' 
+              AND (d.timestamp LIKE ? OR date(d.timestamp) = ? OR date(d.timestamp, 'localtime') = ?)
+            ORDER BY d.timestamp DESC
+        """, (hoje_str + '%', hoje_str, hoje_str))
         linhas = cursor.fetchall()
-        conn.close()
         
         resultado = []
         for r in linhas:
+            codigo = r[0]
+            mot_lote = r[1] or ""
+            mot_esperado = r[2] or ""
+            timestamp = r[3]
+            cidade_destino = r[4]
+            
+            deveria_ir = mot_esperado if mot_esperado else (cidade_destino or "---")
+            estava_em = mot_lote if mot_lote else "---"
+                
             resultado.append({
-                "codigo": r[0],
-                "motorista_lote": r[1],
-                "motorista_esperado": r[2],
-                "timestamp": r[3]
+                "codigo": codigo,
+                "estava_em": estava_em,
+                "motorista_lote": mot_lote,
+                "cidade_destino": cidade_destino,
+                "motorista_esperado": mot_esperado,
+                "deveria_ir_para": deveria_ir,
+                "timestamp": timestamp
             })
+            
+        conn.close()
         return jsonify(resultado)
     except Exception as e:
         return jsonify({"status": "erro", "mensagem": str(e)}), 500
@@ -3601,6 +5921,13 @@ def obter_lotes_finalizados():
         if not data_inicio and not data_fim and data_filtro:
             data_inicio = data_filtro
             data_fim = data_filtro
+
+        # Sincroniza lotes abertos diretamente da API da Anjun (se houver sessão ativa)
+        try:
+            if not data_inicio and not data_fim:
+                sincronizar_lotes_pendentes_anjun_api()
+        except Exception:
+            pass
             
         conn = conectar_banco()
         cursor = conn.cursor()
@@ -3639,6 +5966,14 @@ def obter_lotes_finalizados():
             
         linhas = cursor.fetchall()
         
+        # Consulta lotes pendentes (grupos abertos) na Anjun
+        pendentes_map = {}
+        try:
+            cursor.execute("SELECT motorista, count(*) FROM lote_pendente_anjun GROUP BY motorista")
+            pendentes_map = {row[0]: row[1] for row in cursor.fetchall() if row[0]}
+        except Exception as e_pend:
+            print(f"[Aviso] Erro ao buscar lotes pendentes Anjun: {e_pend}")
+            
         resultado = []
         for r in linhas:
             motorista_nome = r[0]
@@ -3666,16 +6001,375 @@ def obter_lotes_finalizados():
                 cidades_list = []
             cidades_str = ", ".join(cidades_list) if cidades_list else "Sem Cidades"
             
+            # Detalhamento de pacotes por cidade para este motorista no período
+            detalhes_cidades = []
+            try:
+                if data_inicio and data_fim:
+                    cursor.execute("""
+                        SELECT cidade, count(*) 
+                        FROM historico 
+                        WHERE status = 'OK' 
+                          AND timestamp >= ? 
+                          AND timestamp <= ? 
+                          AND motorista = ?
+                        GROUP BY cidade 
+                        ORDER BY count(*) DESC
+                    """, (start, end, motorista_nome))
+                else:
+                    cursor.execute("""
+                        SELECT cidade, count(*) 
+                        FROM historico 
+                        WHERE status = 'OK' 
+                          AND timestamp >= ? 
+                          AND motorista = ?
+                        GROUP BY cidade 
+                        ORDER BY count(*) DESC
+                    """, (cutoff, motorista_nome))
+                linhas_cid = cursor.fetchall()
+                for cid_row in linhas_cid:
+                    c_nome = cid_row[0] or "Não Informada"
+                    if c_nome.strip() in ("", "---"):
+                        c_nome = "Não Informada"
+                    detalhes_cidades.append({
+                        "cidade": c_nome,
+                        "quantidade": cid_row[1]
+                    })
+            except Exception as e_cid:
+                print(f"[Aviso] Erro ao buscar detalhamento de cidades para {motorista_nome}: {e_cid}")
+                detalhes_cidades = []
+            
+            # Lista individual de códigos de pacotes deste motorista no período
+            pacotes_motorista = []
+            try:
+                if data_inicio and data_fim:
+                    cursor.execute("""
+                        SELECT codigo, cidade, timestamp
+                        FROM historico
+                        WHERE status = 'OK'
+                          AND timestamp >= ?
+                          AND timestamp <= ?
+                          AND motorista = ?
+                        ORDER BY id DESC
+                    """, (start, end, motorista_nome))
+                else:
+                    cursor.execute("""
+                        SELECT codigo, cidade, timestamp
+                        FROM historico
+                        WHERE status = 'OK'
+                          AND timestamp >= ?
+                          AND motorista = ?
+                        ORDER BY id DESC
+                    """, (cutoff, motorista_nome))
+                vistos_cod = set()
+                for row_p in cursor.fetchall():
+                    cod_p = str(row_p[0] or "").strip()
+                    if not cod_p or cod_p in vistos_cod:
+                        continue
+                    vistos_cod.add(cod_p)
+                    cid_p = str(row_p[1] or "Não Informada").strip()
+                    if cid_p in ("", "---"):
+                        cid_p = "Não Informada"
+                    ts_p = str(row_p[2] or "")
+                    hora_p = ts_p.split("T")[1][:8] if "T" in ts_p else ts_p[-8:]
+                    pacotes_motorista.append({
+                        "codigo": cod_p,
+                        "cidade": cid_p,
+                        "horario": hora_p
+                    })
+            except Exception as e_pkg:
+                print(f"[Aviso] Erro ao buscar pacotes de {motorista_nome}: {e_pkg}")
+
+            # Qtd pendente no lote aberto Anjun (exclusivamente da tabela lote_pendente_anjun, sem misturar contadores de iMile/Loggi em memória)
+            qtd_pend = 0
+            if plat_display == "Anjun":
+                norm_m_row = remover_acentos(motorista_nome.lower()).replace('-', '').replace('_', '').replace(' ', '')
+                for m_p, q_p in pendentes_map.items():
+                    norm_mp = remover_acentos(m_p.lower()).replace('-', '').replace('_', '').replace(' ', '')
+                    if norm_mp == norm_m_row or norm_mp in norm_m_row or norm_m_row in norm_mp:
+                        qtd_pend += q_p
+                if qtd > 0 and qtd_pend > qtd:
+                    qtd_pend = qtd
+
             resultado.append({
                 "motorista": motorista_nome,
                 "cidades": cidades_str,
                 "quantidade": qtd,
+                "qtd_pendente": qtd_pend,
+                "grupo_aberto": bool(qtd_pend > 0),
                 "plataforma": plat_display,
-                "timestamp": ""
+                "timestamp": "",
+                "detalhes_cidades": detalhes_cidades,
+                "pacotes": pacotes_motorista
             })
+            
+        # Adiciona motoristas que têm lote aberto na Anjun mas ainda não tinham pacotes no histórico
+        motoristas_em_resultado = [remover_acentos(r["motorista"].lower()).replace('-', '').replace('_', '').replace(' ', '') for r in resultado if r.get("plataforma") == "Anjun"]
+        for mot_pend, qtd_pend in pendentes_map.items():
+            norm_mp = remover_acentos(mot_pend.lower()).replace('-', '').replace('_', '').replace(' ', '')
+            if not any(norm_mp == m_res or norm_mp in m_res or m_res in norm_mp for m_res in motoristas_em_resultado):
+                try:
+                    cursor.execute("SELECT cidade FROM motoristas_plataforma WHERE motorista = ?", (mot_pend,))
+                    cidades_list = [row[0] for row in cursor.fetchall()]
+                except Exception:
+                    cidades_list = []
+                cidades_str = ", ".join(cidades_list) if cidades_list else "Sem Cidades"
+                resultado.append({
+                    "motorista": mot_pend,
+                    "cidades": cidades_str,
+                    "quantidade": qtd_pend,
+                    "qtd_pendente": qtd_pend,
+                    "grupo_aberto": True,
+                    "plataforma": "Anjun",
+                    "timestamp": "",
+                    "detalhes_cidades": [],
+                    "pacotes": []
+                })
+                motoristas_em_resultado.append(norm_mp)
             
         conn.close()
         return jsonify(resultado)
+    except Exception as e:
+        return jsonify({"status": "erro", "mensagem": str(e)}), 500
+
+@app.route('/atribuicao/transferir-motorista', methods=['POST'])
+def transferir_pacotes_motorista():
+    """
+    Transfere todos os pacotes (ou apenas os de uma cidade específica ou códigos selecionados) bipados hoje
+    de um motorista de origem para um novo motorista de destino, reatribuindo
+    automaticamente no site da Anjun / iMile via API ultra-rápida e atualizando o banco local.
+    """
+    global contagem_motoristas
+    try:
+        dados = request.get_json(force=True) or {}
+        mot_origem = str(dados.get("motorista_origem") or "").strip()
+        mot_destino = str(dados.get("motorista_destino") or "").strip()
+        plat_raw = str(dados.get("plataforma") or "").strip().lower()
+        cidade_filtro = str(dados.get("cidade_filtro") or "").strip()
+        codigos_selecionados = dados.get("codigos_selecionados")
+        if isinstance(codigos_selecionados, list):
+            codigos_selecionados = [str(c).strip() for c in codigos_selecionados if str(c).strip()]
+        else:
+            codigos_selecionados = []
+        if cidade_filtro.upper().startswith("COD:"):
+            cod_esp = cidade_filtro[4:].strip()
+            if cod_esp and cod_esp not in codigos_selecionados:
+                codigos_selecionados = [cod_esp]
+            cidade_filtro = "TODAS"
+
+        lancar_no_site = bool(dados.get("lancar_no_site", True))
+        data_inicio = str(dados.get("data_inicio") or "").strip()
+        data_fim = str(dados.get("data_fim") or "").strip()
+
+        if not mot_origem or not mot_destino:
+            return jsonify({"status": "erro", "mensagem": "Informe o motorista de origem e o novo motorista de destino."}), 400
+
+        if mot_origem.lower() == mot_destino.lower():
+            return jsonify({"status": "erro", "mensagem": "O novo motorista deve ser diferente do motorista atual."}), 400
+
+        import datetime
+        import concurrent.futures
+
+        hoje_str = datetime.datetime.now().strftime('%Y-%m-%d')
+        start_ts = (data_inicio if data_inicio else hoje_str) + "T00:00:00"
+        end_ts = (data_fim if data_fim else hoje_str) + "T23:59:59"
+
+        conn = conectar_banco()
+        cursor = conn.cursor()
+
+        params = [start_ts, end_ts, mot_origem]
+        sql_busca = """
+            SELECT id, codigo, plataforma, cidade
+            FROM historico
+            WHERE status = 'OK'
+              AND timestamp >= ?
+              AND timestamp <= ?
+              AND motorista = ?
+        """
+        if codigos_selecionados:
+            placeholders_sel = ",".join(["?"] * len(codigos_selecionados))
+            sql_busca += f" AND codigo IN ({placeholders_sel})"
+            params.extend(codigos_selecionados)
+        elif cidade_filtro and cidade_filtro.upper() != "TODAS":
+            if cidade_filtro == "Não Informada":
+                sql_busca += " AND (cidade IS NULL OR cidade = '' OR cidade = '---' OR cidade = 'Não Informada')"
+            else:
+                sql_busca += " AND cidade = ?"
+                params.append(cidade_filtro)
+
+        cursor.execute(sql_busca, tuple(params))
+        registros_hist = cursor.fetchall()
+
+        ids_hist = [r[0] for r in registros_hist]
+        codigos_unicos = []
+        plat_detectada = plat_raw
+        for r in registros_hist:
+            cod_c = str(r[1] or "").strip()
+            if cod_c and cod_c not in codigos_unicos:
+                codigos_unicos.append(cod_c)
+            if not plat_detectada and r[2]:
+                plat_detectada = str(r[2]).strip().lower()
+
+        eh_anjun = "anjun" in plat_detectada
+        eh_imile = "imile" in plat_detectada
+
+        # Se for Anjun e não houver filtro de cidade restritivo, também inclui pacotes que estejam no lote_pendente_anjun
+        if eh_anjun and (not cidade_filtro or cidade_filtro.upper() == "TODAS"):
+            try:
+                cursor.execute("SELECT waybill FROM lote_pendente_anjun WHERE motorista = ?", (mot_origem,))
+                for row_p in cursor.fetchall():
+                    c_p = str(row_p[0] or "").strip()
+                    if c_p and c_p not in codigos_unicos:
+                        if not codigos_selecionados or c_p in codigos_selecionados:
+                            codigos_unicos.append(c_p)
+            except Exception:
+                pass
+
+        if not codigos_unicos and not ids_hist:
+            conn.close()
+            return jsonify({"status": "erro", "mensagem": f"Nenhum pacote encontrado hoje para o motorista '{mot_origem}'."}), 404
+
+        mot_final_destino = mot_destino
+        ok_site_count = 0
+        erros_site = []
+
+        # 1. Lançamento / Reatribuição automática no site (Anjun ou iMile)
+        if lancar_no_site and codigos_unicos and (eh_anjun or eh_imile):
+            if eh_imile:
+                sessao = atualizar_sessao_imile()
+                token = sessao.get("token")
+                if not token:
+                    conn.close()
+                    return jsonify({
+                        "status": "erro",
+                        "mensagem": "Sessão da iMile não encontrada no Chrome. Abra a iMile no sistema antes de transferir no site (ou desmarque a opção de lançar no site)."
+                    }), 400
+
+                da_obj = resolver_motorista_imile_api(mot_destino)
+                if not da_obj:
+                    conn.close()
+                    return jsonify({
+                        "status": "erro",
+                        "mensagem": f"Motorista '{mot_destino}' não encontrado na lista oficial da iMile."
+                    }), 400
+
+                da_code = da_obj["daCode"]
+                da_name = da_obj["daName"]
+                mot_final_destino = da_name
+                station_code = sessao.get("currentStationCode", "S210570001")
+                station_name = sessao.get("stationName", "DS AVR")
+
+                def _reatribuir_imile(cod_pkg):
+                    payload_assign = {
+                        "daCode": da_code,
+                        "scanNumber": cod_pkg,
+                        "ocCode": station_code,
+                        "forceOperate": True,
+                        "fromAssign": 1,
+                        "daName": da_name,
+                        "currentStationCode": station_code,
+                        "currentStationName": station_name,
+                        "isRefactor": True,
+                        "usePreSorting": False
+                    }
+                    ok_da, msg_da, _ = executar_post_imile("/lm/express/ops/v1/biz/ofdAndReturnOfd/submit", payload_assign)
+                    if not ok_da:
+                        msg_low = (msg_da or "").lower()
+                        if any(k in msg_low for k in ["success", "sucesso", "já atribuído", "já atribuido", "repetido", "duplicad", "repeat"]):
+                            ok_da = True
+                    return cod_pkg, ok_da, msg_da
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+                    for cod_pkg, ok_da, msg_da in executor.map(_reatribuir_imile, codigos_unicos):
+                        if ok_da:
+                            ok_site_count += 1
+                        else:
+                            erros_site.append(f"{cod_pkg}: {msg_da}")
+
+            elif eh_anjun:
+                sessao = atualizar_sessao_anjun()
+                token = sessao.get("token")
+                if not token:
+                    conn.close()
+                    return jsonify({
+                        "status": "erro",
+                        "mensagem": "Sessão da Anjun não encontrada no Chrome. Abra a Anjun no sistema antes de transferir no site (ou desmarque a opção de lançar no site)."
+                    }), 400
+
+                da_obj = resolver_motorista_anjun_api(mot_destino)
+                if not da_obj:
+                    conn.close()
+                    return jsonify({
+                        "status": "erro",
+                        "mensagem": f"Motorista '{mot_destino}' não localizado na lista de DAs da Anjun."
+                    }), 400
+
+                da_id = da_obj["id"]
+                da_username = da_obj["username"]
+                mot_final_destino = da_username
+
+                def _reatribuir_anjun(cod_pkg):
+                    payload_assign = {
+                        "waybillNumber": str(cod_pkg).strip().upper(),
+                        "dispatchUserId": da_id,
+                        "dispatchUserName": da_username
+                    }
+                    ok_da, msg_da, _ = executar_post_anjun("/api/wms/console/v1/storage/dispatch/taskAllocation", payload_assign)
+                    if not ok_da:
+                        msg_low = (msg_da or "").lower()
+                        if any(k in msg_low for k in ["sucesso", "success", "já atribuído", "já atribuido", "atribuído", "atribuido", "já alocado", "ja alocado", "já vinculado", "aguardando entrega", "não repita", "duplicad", "repetid"]):
+                            ok_da = True
+                    return cod_pkg, ok_da, msg_da
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+                    for cod_pkg, ok_da, msg_da in executor.map(_reatribuir_anjun, codigos_unicos):
+                        if ok_da:
+                            ok_site_count += 1
+                        else:
+                            erros_site.append(f"{cod_pkg}: {msg_da}")
+
+        # 2. Atualiza banco de dados local (historico e lote_pendente_anjun)
+        if ids_hist:
+            placeholders = ",".join(["?"] * len(ids_hist))
+            cursor.execute(
+                f"UPDATE historico SET motorista = ?, motorista_entrega = ? WHERE id IN ({placeholders})",
+                tuple([mot_final_destino, mot_final_destino] + ids_hist)
+            )
+
+        if eh_anjun and codigos_unicos:
+            try:
+                placeholders_cod = ",".join(["?"] * len(codigos_unicos))
+                cursor.execute(
+                    f"UPDATE lote_pendente_anjun SET motorista = ? WHERE motorista = ? AND waybill IN ({placeholders_cod})",
+                    tuple([mot_final_destino, mot_origem] + codigos_unicos)
+                )
+            except Exception:
+                pass
+
+        conn.commit()
+        conn.close()
+
+        # Atualiza contadores em memória
+        try:
+            qtd_movida = len(codigos_unicos)
+            if mot_origem in contagem_motoristas:
+                contagem_motoristas[mot_origem] = max(0, contagem_motoristas[mot_origem] - qtd_movida)
+            contagem_motoristas[mot_final_destino] = contagem_motoristas.get(mot_final_destino, 0) + qtd_movida
+        except Exception:
+            pass
+
+        msg_resumo = f"{len(codigos_unicos)} pacote(s) transferido(s) de '{mot_origem}' para '{mot_final_destino}'!"
+        if lancar_no_site and (eh_anjun or eh_imile):
+            msg_resumo += f" ({ok_site_count}/{len(codigos_unicos)} reatribuídos direto no site)."
+
+        return jsonify({
+            "status": "sucesso",
+            "total_pacotes": len(codigos_unicos),
+            "lancados_site": ok_site_count,
+            "erros_site": erros_site[:10],
+            "motorista_origem": mot_origem,
+            "motorista_destino": mot_final_destino,
+            "mensagem": msg_resumo
+        })
     except Exception as e:
         return jsonify({"status": "erro", "mensagem": str(e)}), 500
 
@@ -3698,6 +6392,113 @@ def limpar_alertas_gerencia():
     alertas_gerencia.clear()
     return jsonify({"status": "sucesso"})
 
+@app.route('/sessao/status', methods=['GET'])
+def verificar_sessao_status():
+    """
+    Verifica se a plataforma ativa no Chrome está conectada e autenticada.
+    Suporta Anjun e Loggi com auto-reconexão e detecção de tela de login.
+    """
+    global driver, cache_sessao_anjun, plataforma_ativa
+    plat = request.args.get("plataforma", plataforma_ativa or "anjun").lower()
+    
+    if not driver:
+        return jsonify({"status": "erro", "logado": False, "mensagem": "Chrome não iniciado."})
+        
+    if "anjun" in plat:
+        try:
+            curr_url = ""
+            try:
+                curr_url = driver.current_url.lower()
+            except Exception:
+                pass
+            
+            if "login" in curr_url:
+                return jsonify({"status": "desconectado", "logado": False, "mensagem": "Na tela de login da Anjun."})
+                
+            cache_sessao_anjun["token"] = None
+            sessao = atualizar_sessao_anjun(forcar=True)
+            token = sessao.get("token")
+            if token and len(token) > 20:
+                print(f"[+] [Anjun] Sessão revalidada pós-login/captcha! Token: {token[:12]}...")
+                return jsonify({"status": "conectado", "logado": True, "token": token[:10]})
+            else:
+                return jsonify({"status": "desconectado", "logado": False, "mensagem": "Aguardando token da Anjun."})
+        except Exception as e:
+            return jsonify({"status": "erro", "logado": False, "mensagem": str(e)})
+
+    elif "imile" in plat:
+        try:
+            curr_url = ""
+            try:
+                curr_url = driver.current_url.lower()
+            except Exception:
+                pass
+            if "login" in curr_url:
+                return jsonify({"status": "desconectado", "logado": False, "mensagem": "Na tela de login da iMile."})
+
+            cache_sessao_imile["token"] = None
+            sessao = atualizar_sessao_imile(forcar=True)
+            token = sessao.get("token")
+            if token and len(token) > 20:
+                print(f"[+] [iMile] Sessão revalidada! Token: {token[:12]}...")
+                return jsonify({"status": "conectado", "logado": True, "token": token[:10]})
+            else:
+                return jsonify({"status": "desconectado", "logado": False, "mensagem": "Aguardando login na iMile no Chrome."})
+        except Exception as e:
+            return jsonify({"status": "erro", "logado": False, "mensagem": str(e)})
+
+    elif "loggi" in plat:
+        try:
+            # 1. Verifica se alguma aba está na tela de login
+            na_tela_login = False
+            for h in driver.window_handles:
+                try:
+                    driver.switch_to.window(h)
+                    if verificar_tela_login_loggi(driver):
+                        na_tela_login = True
+                        clicou = tentar_clicar_login_google_loggi(driver)
+                        if clicou:
+                            print("[*] [Loggi] Botão 'Entrar com o Google' clicado automaticamente!")
+                        break
+                except Exception:
+                    continue
+                    
+            if na_tela_login:
+                return jsonify({
+                    "status": "desconectado",
+                    "logado": False,
+                    "mensagem": "Na tela de login da Loggi. Clique em 'Entrar com o Google'."
+                })
+                
+            # 2. Se nenhuma aba está na tela de login, verifica se temos acesso às abas Loggi (/AV3/...)
+            tem_aba_ativa = False
+            for h in driver.window_handles:
+                try:
+                    driver.switch_to.window(h)
+                    u = driver.current_url.lower()
+                    if "arco.loggi.com" in u and ("av3" in u or "na-base" in u or "colecoes" in u or "hoje" in u):
+                        tem_aba_ativa = True
+                        break
+                except Exception:
+                    continue
+                    
+            if tem_aba_ativa:
+                garantir_abas_loggi(driver)
+                ctx = obter_contexto_loggi(forcar=True)
+                token = ctx.get("token")
+                exp = ctx.get("exp", 0)
+                if not token:
+                    return jsonify({"status": "desconectado", "logado": False, "mensagem": "Token da Loggi não encontrado. Verifique se o login foi concluído."})
+                if exp > 0 and time.time() >= exp:
+                    return jsonify({"status": "desconectado", "logado": False, "mensagem": "Sessão da Loggi expirada. Renovando..."})
+                return jsonify({"status": "conectado", "logado": True, "token": token[:10]})
+            else:
+                return jsonify({"status": "desconectado", "logado": False, "mensagem": "Aguardando conclusão do login no Google."})
+        except Exception as e:
+            return jsonify({"status": "erro", "logado": False, "mensagem": str(e)})
+
+    return jsonify({"status": "conectado", "logado": True})
+
 @app.route('/atribuicao/iniciar', methods=['POST'])
 @requer_licenca_ativa
 def atribuicao_iniciar():
@@ -3707,8 +6508,11 @@ def atribuicao_iniciar():
     
     if not motorista:
         return jsonify({"status": "erro", "mensagem": "Motorista não especificado."}), 400
-    if not driver or not aba_atribuicao_anjun:
-        return jsonify({"status": "erro", "mensagem": "Navegador de atribuição não está ativo."}), 400
+    if not driver:
+        return jsonify({"status": "erro", "mensagem": "Navegador não está ativo."}), 400
+    garantir_abas_anjun(driver)
+    if not aba_atribuicao_anjun:
+        return jsonify({"status": "erro", "mensagem": "Aba de atribuição não está ativa."}), 400
         
     driver_lock.acquire()
     try:
@@ -4018,9 +6822,2740 @@ def selecionar_motorista_imile(driver, motorista):
                 pass
             time.sleep(0.3)
 
-    return False, f"O motorista '{mot_clean}' não foi localizado no cadastro do site da iMile. Verifique se o nome está idêntico ao cadastrado no site da iMile.", None
+# ==============================================================================
+# ENGINE DIRETA DE API DA IMILE (REQUEST & RESPONSE - MODO ULTRA-RÁPIDO ~80ms)
+# ==============================================================================
+
+cache_sessao_imile = {
+    "token": "376ea814-8b8a-4790-8d65-27cb9905c885",
+    "currentStationCode": "S210570001",
+    "userCode": "2106085001",
+    "orgId": 10,
+    "stationName": "DS AVR",
+    "timestamp": 0
+}
+
+cache_motoristas_imile = {
+    "lista": [],
+    "mapa": {},
+    "timestamp": 0
+}
+
+def carregar_tokens_imile_salvos():
+    try:
+        if os.path.exists(CONFIG_IMILE_TOKENS):
+            with open(CONFIG_IMILE_TOKENS, 'r', encoding='utf-8') as f:
+                return json.load(f) or {}
+    except Exception:
+        pass
+    return {}
+
+def salvar_token_imile_conta(sess_dict, conta_id=None):
+    try:
+        if not sess_dict or not sess_dict.get("token"):
+            return
+        ucode = str(sess_dict.get("userCode") or "").strip()
+        cid_alvo = str(conta_id or "").strip()
+        todas_contas = carregar_contas_plataformas().get("imile", {}).get("contas", [])
+        if ucode:
+            for c in todas_contas:
+                if str(c.get("login_usuario") or "").strip().lower() == ucode.lower():
+                    cid_alvo = c.get("id")
+                    break
+        if not cid_alvo:
+            cid_alvo, _ = obter_conta_ativa_plataforma("imile")
+        dados = carregar_tokens_imile_salvos()
+        dados[cid_alvo] = {
+            "conta_id": cid_alvo,
+            "token": sess_dict.get("token"),
+            "currentStationCode": sess_dict.get("currentStationCode"),
+            "userCode": ucode,
+            "orgId": sess_dict.get("orgId", 10),
+            "stationName": sess_dict.get("stationName", ""),
+            "timestamp": time.time()
+        }
+        with open(CONFIG_IMILE_TOKENS, 'w', encoding='utf-8') as f:
+            json.dump(dados, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[Aviso] Falha ao salvar token iMile por conta: {e}")
+
+def atualizar_sessao_imile(drv=None, forcar=False, conta_id=None):
+    """
+    Captura automaticamente o token de autorização, cookies e dados do galpão
+    a partir da janela do Chrome onde o usuário está logado na iMile, isolando por base/conta.
+    """
+    global cache_sessao_imile, driver
+    cid, conta_obj = obter_conta_ativa_plataforma("imile", conta_id)
+    login_esperado = str(conta_obj.get("login_usuario") or "").strip()
+
+    # Se não for forçado e o cache atual pertencer à mesma conta/userCode
+    if not forcar and cache_sessao_imile.get("token") and (time.time() - cache_sessao_imile.get("timestamp", 0) < 600):
+        uc_cache = str(cache_sessao_imile.get("userCode") or "").strip()
+        if not login_esperado or not uc_cache or uc_cache.lower() == login_esperado.lower():
+            return cache_sessao_imile
+
+    alvo_driver = drv if drv else (driver if (not plataforma_ativa or 'imile' in str(plataforma_ativa).lower()) else None)
+    aba_imile_encontrada = False
+
+    if alvo_driver and (not conta_id or cid == conta_ativa or not conta_ativa):
+        try:
+            if hasattr(alvo_driver, 'window_handles') and alvo_driver.window_handles:
+                try:
+                    curr_url = alvo_driver.current_url.lower()
+                except Exception:
+                    curr_url = ""
+                if "imile" in curr_url:
+                    aba_imile_encontrada = True
+                else:
+                    for h in alvo_driver.window_handles:
+                        try:
+                            alvo_driver.switch_to.window(h)
+                            if "imile" in alvo_driver.current_url.lower():
+                                aba_imile_encontrada = True
+                                break
+                        except Exception:
+                            pass
+            if aba_imile_encontrada:
+                cookies = alvo_driver.get_cookies()
+                token = None
+                current_oc = None
+                user_info = None
+
+                for c in cookies:
+                    name = c.get('name', '')
+                    val = c.get('value', '')
+                    if name == 'IMILE_ACCESS_TOKEN' and val:
+                        token = val
+                    elif name == 'ACCESS_TOKEN' and val and not token:
+                        token = val.replace('Bearer ', '').replace('Bearer%20', '').strip()
+                    elif name == 'currentOcCode' and val:
+                        current_oc = val
+                    elif name == 'UserInfo' and val:
+                        try:
+                            import urllib.parse
+                            user_info = json.loads(urllib.parse.unquote(val))
+                        except Exception:
+                            pass
+
+                if not token:
+                    try:
+                        ls_token = alvo_driver.execute_script(
+                            "return window.localStorage.getItem('token') || "
+                            "window.localStorage.getItem('ACCESS_TOKEN') || "
+                            "window.localStorage.getItem('IMILE_ACCESS_TOKEN');"
+                        )
+                        if ls_token:
+                            token = ls_token.replace('Bearer ', '').strip()
+                    except Exception:
+                        pass
+
+                if token:
+                    uc_capturado = (user_info.get("userCode") if isinstance(user_info, dict) else None) or login_esperado or cache_sessao_imile.get("userCode")
+                    if not login_esperado or not uc_capturado or str(uc_capturado).strip().lower() == login_esperado.lower():
+                        cache_sessao_imile["token"] = token
+                        cache_sessao_imile["timestamp"] = time.time()
+                        if current_oc:
+                            cache_sessao_imile["currentStationCode"] = current_oc
+                        if isinstance(user_info, dict):
+                            cache_sessao_imile["userCode"] = user_info.get("userCode", uc_capturado)
+                            cache_sessao_imile["orgId"] = user_info.get("orgId", cache_sessao_imile.get("orgId", 10))
+                            cache_sessao_imile["stationName"] = user_info.get("stationName", cache_sessao_imile.get("stationName", ""))
+                        elif uc_capturado:
+                            cache_sessao_imile["userCode"] = uc_capturado
+                        salvar_token_imile_conta(cache_sessao_imile, cid)
+                        print(f"[+] [iMile API] Sessão capturada do Chrome (Base {cid})! Estação: {cache_sessao_imile.get('currentStationCode')} | Token: {token[:8]}...")
+                        return cache_sessao_imile
+        except Exception as e:
+            print(f"[Aviso] [iMile API] Não foi possível extrair sessão do navegador: {str(e)}")
+
+    # Fallback para token salvo especificamente desta base/conta em config_imile_tokens.json
+    salvos = carregar_tokens_imile_salvos()
+    sess_salva = salvos.get(cid)
+    if not sess_salva and login_esperado:
+        for v in salvos.values():
+            if isinstance(v, dict) and str(v.get("userCode") or "").strip().lower() == login_esperado.lower():
+                sess_salva = v
+                break
+
+    if sess_salva and sess_salva.get("token"):
+        cache_sessao_imile.update(sess_salva)
+        cache_sessao_imile["timestamp"] = time.time()
+        return dict(sess_salva)
+
+    # Se a conta ativa tem login_esperado diferente do userCode em cache_sessao_imile, não usa token de outra base!
+    if login_esperado and str(cache_sessao_imile.get("userCode") or "").strip().lower() != login_esperado.lower():
+        return {"token": None, "currentStationCode": "", "userCode": login_esperado}
+
+    return cache_sessao_imile
+
+def carregar_motoristas_imile_api(forcar=False, conta_id=None):
+    """
+    Obtém via API oficial da iMile (/hrms/user/associate/list) os entregadores
+    ativos cadastrados especificamente na BASE ATIVA (conta_id), com seus respectivos daCode e daName.
+    """
+    global cache_motoristas_imile, cache_motoristas_imile_por_conta
+    cid, conta_obj = obter_conta_ativa_plataforma("imile", conta_id)
+    
+    cache_conta = cache_motoristas_imile_por_conta.get(cid)
+    if not forcar and cache_conta and cache_conta.get("lista") and (time.time() - cache_conta.get("timestamp", 0) < 600):
+        return cache_conta["lista"], cache_conta["mapa"]
+
+    sessao = atualizar_sessao_imile(forcar=forcar, conta_id=cid)
+    token = sessao.get("token")
+    station_code = sessao.get("currentStationCode", "S210570001")
+    
+    if not token or not station_code:
+        if cache_conta and cache_conta.get("lista"):
+            return cache_conta["lista"], cache_conta["mapa"]
+        salvos_base = obter_motoristas_da_base_salvos("imile", cid)
+        if salvos_base:
+            lista_fb = [{"daCode": "", "daName": n, "id": idx} for idx, n in enumerate(salvos_base)]
+            mapa_fb = {remover_acentos(n.lower()): obj for n, obj in zip(salvos_base, lista_fb)}
+            return lista_fb, mapa_fb
+        return [], {}
+
+    url = "https://ds.imile.com/hrms/user/associate/list"
+    headers = {
+        "accept": "application/json, text/plain, */*",
+        "authorization": f"Bearer {token}",
+        "content-type": "application/json",
+        "hubcode": station_code,
+        "lang": "pt_BR",
+        "origin": "https://ds.imile.com",
+        "referer": "https://ds.imile.com/",
+        "sys-name": "DS",
+        "sys-portal": "DS",
+        "timezone": "-3",
+        "front-sec": json.dumps({"orgId": sessao.get("orgId", 10), "entId": 10, "userCode": sessao.get("userCode", "2106085001"), "moduleId": 10007, "client": "pc"}),
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"
+    }
+    data = json.dumps({"ocCodeList": [station_code], "isDriver": 1, "status": "ACTIVE"}).encode('utf-8')
+
+    try:
+        req = urllib.request.Request(url, data=data, headers=headers)
+        with urllib.request.urlopen(req, timeout=4.0) as resp:
+            res = json.loads(resp.read().decode('utf-8'))
+            drivers_raw = res.get("resultObject", [])
+            
+            lista = []
+            mapa = {}
+            for d in drivers_raw:
+                nome_oficial = (d.get("userName") or "").strip()
+                da_code = (d.get("userCode") or "").strip()
+                if not nome_oficial or not da_code:
+                    continue
+                
+                obj = {
+                    "daCode": da_code,
+                    "daName": nome_oficial,
+                    "id": d.get("id")
+                }
+                lista.append(obj)
+                
+                # Normalização para busca
+                norm_nome = remover_acentos(nome_oficial.lower())
+                mapa[norm_nome] = obj
+                
+                partes = norm_nome.split()
+                if len(partes) >= 2:
+                    mapa[" ".join(partes[:2])] = obj
+                    mapa[partes[-1]] = obj
+                    mapa[partes[0]] = obj
+
+            if lista:
+                cache_motoristas_imile["lista"] = lista
+                cache_motoristas_imile["mapa"] = mapa
+                cache_motoristas_imile["timestamp"] = time.time()
+                cache_motoristas_imile_por_conta[cid] = {
+                    "lista": lista,
+                    "mapa": mapa,
+                    "timestamp": time.time()
+                }
+                salvar_motoristas_da_base("imile", cid, [m["daName"] for m in lista])
+                print(f"[+] [iMile API] {len(lista)} motoristas ativos sincronizados da base {cid} ({station_code})!")
+                
+                # Sincroniza também no banco de dados SQLite caso ainda não tenha cidade vinculada
+                try:
+                    conn = conectar_banco()
+                    cursor = conn.cursor()
+                    for mot in lista:
+                        nome = mot["daName"]
+                        cursor.execute(
+                            "SELECT 1 FROM motoristas_plataforma WHERE LOWER(motorista) = LOWER(?) AND LOWER(plataforma) = 'imile' LIMIT 1",
+                            (nome,)
+                        )
+                        if cursor.fetchone():
+                            continue
+                        cidade_cand = "Geral"
+                        for c_item in carregar_cidades():
+                            if c_item and remover_acentos(c_item.lower()) in remover_acentos(nome.lower()):
+                                cidade_cand = c_item
+                                break
+                        cursor.execute("""
+                            INSERT OR IGNORE INTO motoristas_plataforma (cidade, motorista, plataforma)
+                            VALUES (?, ?, 'imile')
+                        """, (cidade_cand, nome))
+                    conn.commit()
+                    conn.close()
+                    invalidar_cache_ram_cidades_motoristas()
+                    try:
+                        excel_path = obter_caminho_excel()
+                        gerar_planilha_motoristas_excel(excel_path)
+                        if os.path.exists(excel_path):
+                            meta_mtime_file = os.path.join(BASE_DIR, '.excel_sync_meta')
+                            with open(meta_mtime_file, 'w') as f_meta:
+                                f_meta.write(str(os.path.getmtime(excel_path)))
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+                
+            return lista, mapa
+    except Exception as e:
+        print(f"[Aviso] [iMile API] Falha ao sincronizar motoristas da API ({cid}): {str(e)}")
+        if cache_conta and cache_conta.get("lista"):
+            return cache_conta["lista"], cache_conta["mapa"]
+        salvos_base = obter_motoristas_da_base_salvos("imile", cid)
+        if salvos_base:
+            lista_fb = [{"daCode": "", "daName": n, "id": idx} for idx, n in enumerate(salvos_base)]
+            mapa_fb = {remover_acentos(n.lower()): obj for n, obj in zip(salvos_base, lista_fb)}
+            return lista_fb, mapa_fb
+        return [], {}
+
+def resolver_motorista_imile_api(mot_clean):
+    """
+    Localiza o objeto do motorista {daCode, daName} por aproximação inteligente.
+    """
+    if not mot_clean:
+        return None
+        
+    lista, mapa = carregar_motoristas_imile_api()
+    if not lista:
+        lista, mapa = carregar_motoristas_imile_api(forcar=True)
+        
+    if not lista:
+        return None
+
+    try:
+        imile_map, _ = carregar_mapeamento_motoristas()
+        mot_clean = imile_map.get(mot_clean.lower(), mot_clean)
+    except Exception:
+        pass
+
+    nb = remover_acentos(mot_clean.strip().lower())
+
+    # 1. Match exato no mapa
+    if nb in mapa:
+        return mapa[nb]
+
+    # 2. Match exato no userName
+    for d in lista:
+        if remover_acentos(d["daName"].lower()) == nb:
+            return d
+
+    # 3. Match por substring
+    for d in lista:
+        dn = remover_acentos(d["daName"].lower())
+        if nb in dn or dn in nb:
+            return d
+
+    # 4. Match por pontuação de palavras (Tokens)
+    tokens = [t for t in re.split(r'[\s\-_]+', nb) if len(t) >= 2]
+    best = None
+    best_score = 0
+    for d in lista:
+        dn = remover_acentos(d["daName"].lower())
+        score = sum(1 for t in tokens if t in dn)
+        if score > best_score:
+            best_score = score
+            best = d
+    if best and best_score >= 1:
+        return best
+
+    return None
+
+def executar_post_imile(endpoint_path, payload):
+    """
+    Executa POST na API da iMile em ~25ms com os headers e token de sessão.
+    Retorna (sucesso: bool, mensagem: str, dados_resposta: dict)
+    """
+    sessao = atualizar_sessao_imile()
+    token = sessao.get("token")
+    if not token:
+        sessao = atualizar_sessao_imile(forcar=True)
+        token = sessao.get("token")
+    station_code = sessao.get("currentStationCode", "S210570001")
+    
+    if not token:
+        return False, "Sessão da iMile não encontrada no navegador Chrome", {}
+
+    url = f"https://ds.imile.com{endpoint_path}"
+    headers = {
+        "accept": "application/json, text/plain, */*",
+        "authorization": f"Bearer {token}",
+        "content-type": "application/json",
+        "hubcode": station_code,
+        "lang": "pt_BR",
+        "origin": "https://ds.imile.com",
+        "referer": "https://ds.imile.com/",
+        "sys-name": "DS",
+        "sys-portal": "DS",
+        "timezone": "-3",
+        "front-sec": json.dumps({"orgId": sessao.get("orgId", 10), "entId": 10, "userCode": sessao.get("userCode", "2106085001"), "moduleId": 10007, "client": "pc"}),
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"
+    }
+    if "track/query" in endpoint_path:
+        headers["resource-code"] = "dsTrackQuery"
+        headers["x-page-path"] = "https://ds.imile.com/#/DSOperation/WaybillManagement/dsTrackQuery"
+
+    data = json.dumps(payload).encode('utf-8')
+    ultimo_erro = ""
+    for tentativa in range(1, 4):
+        try:
+            req = urllib.request.Request(url, data=data, headers=headers)
+            with urllib.request.urlopen(req, timeout=8.0) as resp:
+                raw = resp.read().decode('utf-8')
+                res = json.loads(raw) if raw else {}
+                if not isinstance(res, dict):
+                    res = {}
+                
+                st = res.get("status") or res.get("resultCode") or res.get("code")
+                msg = res.get("message") or res.get("msg") or ""
+                
+                # Validação do resultObject da iMile
+                obj = res.get("resultObject")
+                if isinstance(obj, dict):
+                    voice_type = str(obj.get("voiceType", "")).lower()
+                    block_info = (obj.get("blockInfo") or obj.get("warnMsg") or obj.get("interceptReason") or obj.get("problemDesc") or obj.get("problemReason") or "").strip()
+                    
+                    # Só é erro se a iMile expressamente rejeitar com voiceType='fail' ou mensagem de bloqueio
+                    if voice_type == "fail" or (block_info and not obj.get("repeat") and not any(k in block_info.lower() for k in ["success", "sucesso", "ok", "operacao realizada"])):
+                        err_msg = block_info if block_info else (msg or "Pacote recusado pela iMile")
+                        return False, err_msg.strip(), res
+
+                if st in ["success", 200, "200"] or "success" in str(msg).lower():
+                    return True, msg or "Operação realizada com sucesso", res
+                elif str(res.get("resultCode")) in ["44882", "50000", "20000"] or any(k in str(msg).lower() for k in ["system is busy", "system abnormality", "tente novamente"]):
+                    # Oscilação momentânea de carga do servidor da iMile - aguarda 120ms e retenta na próxima tentativa do loop
+                    if tentativa < 3:
+                        time.sleep(0.12 * tentativa)
+                        continue
+                    return False, msg or "Sistema iMile temporariamente ocupado", res
+                elif st in [401, "401", 403, "403"] or any(k in str(msg).lower() for k in ["sessão", "sessao", "token", "unauthorized", "login", "expired"]):
+                    cache_sessao_imile["token"] = None
+                    if tentativa == 1:
+                        sessao_nova = atualizar_sessao_imile(forcar=True)
+                        tk_novo = sessao_nova.get("token")
+                        if tk_novo:
+                            headers["authorization"] = f"Bearer {tk_novo}"
+                            print("[*] [iMile API] Token renovado automaticamente! Retentando requisição...")
+                            continue
+                    return False, f"Sessão expirada: {msg}", res
+                else:
+                    return False, msg or "Erro retornado pela iMile", res
+        except urllib.error.HTTPError as he:
+            if he.code in (401, 403):
+                cache_sessao_imile["token"] = None
+                if tentativa == 1:
+                    sessao_nova = atualizar_sessao_imile(forcar=True)
+                    tk_novo = sessao_nova.get("token")
+                    if tk_novo:
+                        headers["authorization"] = f"Bearer {tk_novo}"
+                        print(f"[*] [iMile API] HTTP {he.code} recebido. Token renovado automaticamente, retentando...")
+                        continue
+            try:
+                err_body = he.read().decode('utf-8')
+                err_json = json.loads(err_body) if err_body else {}
+                if not isinstance(err_json, dict):
+                    err_json = {}
+                msg = err_json.get("message") or err_json.get("msg") or str(he)
+                return False, f"Sessão expirada ({he.code}): {msg}" if he.code in (401, 403) else msg, err_json
+            except Exception:
+                return False, f"Erro HTTP {he.code}: {str(he)}", {}
+        except Exception as e:
+            ultimo_erro = str(e)
+            print(f"[!] [iMile API] Oscilação de internet em {endpoint_path} (Tentativa {tentativa}/3): {ultimo_erro}")
+            if tentativa < 3:
+                time.sleep(0.4)
+                continue
+    return False, f"Internet lenta / oscilação na iMile ({ultimo_erro})", {}
+
+def bipar_pacote_imile_api(codigo_qr, motorista, pacote_solto=False):
+    """
+    Executa a bipagem ultra-rápida via API na iMile em ~80-150ms:
+    1. Descarregamento (se modo pacote solto)
+    2. Entrada / Chegada no Galpão (inbound/submit)
+    3. Consulta de Dados de Destino (track/query -> Cidade, CEP, Endereço)
+    4. Conferência Anti-Divergência Automática (Cidade vs Motorista)
+    5. Atribuição ao Entregador (ofdAndReturnOfd/submit)
+    Retorna (sucesso: bool/str, mensagem: str, motorista_atribuido: str, cidade: str, cep: str, destinatario: str, endereco: str)
+    """
+    sessao = atualizar_sessao_imile()
+    token = sessao.get("token")
+    if not token:
+        sessao = atualizar_sessao_imile(forcar=True)
+        token = sessao.get("token")
+    if not token:
+        return "aguardando_login", "Sessão da iMile desconectada. Faça o login na iMile no Chrome.", "", "", "", "", ""
+        
+    station_code = sessao.get("currentStationCode", "S210570001")
+    codigo_limpo = str(codigo_qr).strip()
+
+    # 1. Descarregamento (se modo pacote solto)
+    if pacote_solto:
+        payload_desc = {
+            "currentStationCode": station_code,
+            "unloadingPictureUrls": [],
+            "scanNumber": codigo_limpo
+        }
+        ok_desc, msg_desc, _ = executar_post_imile("/lm/express/ops/v1/biz/unloading/submit", payload_desc)
+        if not ok_desc:
+            msg_low = (msg_desc or "").lower()
+            if any(k in msg_low for k in ["success", "sucesso", "já descarregado", "ja descarregado", "repetido", "duplicad", "já existe"]):
+                ok_desc = True
+            elif any(k in msg_low for k in ["sessão", "sessao", "token", "401", "unauthorized"]):
+                cache_sessao_imile["token"] = None
+                return "aguardando_login", f"Sessão da iMile expirada: {msg_desc}", "", "", "", "", ""
+            else:
+                print(f"[!] [iMile API] Erro no Descarregamento: {msg_desc}")
+                return False, f"Descarregamento: {msg_desc}", "", "", "", "", ""
+
+    # 2. Entrada / Chegada (ArrivalScan)
+    from datetime import datetime
+    hoje_str = datetime.now().strftime("%Y-%m-%d")
+    payload_inbound = {
+        "currentStationCode": station_code,
+        "nextWorkDay": hoje_str,
+        "autoGetDa": True,
+        "scanNumber": codigo_limpo
+    }
+    ok_in, msg_in, res_in = executar_post_imile("/lm/express/ops/v1/biz/inbound/submit", payload_inbound)
+    if not ok_in:
+        msg_low = (msg_in or "").lower()
+        ro_in = (res_in.get("resultObject") or {}) if isinstance(res_in, dict) else {}
+        if not isinstance(ro_in, dict):
+            ro_in = {}
+        block_code = str(ro_in.get("blockCode") or ro_in.get("msgCode") or "")
+        scan_desc = str(ro_in.get("scanTypeDesc") or "").lower()
+        if (block_code in ["1121"] or "recebido no ds" in scan_desc or 
+            any(k in msg_low for k in ["success", "sucesso", "já escaneado", "já bipado", "já recepcionado", "repetido", "duplicad", "já existe", "ja existe", "motivo não registrado", "motivo nao registrado"])):
+            print(f"[*] [iMile API] Pacote {codigo_limpo} já possui entrada no galpão ({msg_in} / code: {block_code}). Prosseguindo para atribuição...")
+            ok_in = True
+        elif any(k in msg_low for k in ["sessão", "sessao", "token", "401", "unauthorized"]):
+            cache_sessao_imile["token"] = None
+            return "aguardando_login", f"Sessão da iMile expirada: {msg_in}", "", "", "", "", ""
+        else:
+            print(f"[!] [iMile API] Erro na Entrada: {msg_in}")
+            return False, f"Entrada: {msg_in}", "", "", "", "", ""
+
+    # 3. Consulta de Dados de Destino (Cidade, CEP, Endereço, Bairro, Telefone, Loja, Produto, Valor via track/query)
+    cidade_pacote = ""
+    cep_pacote = ""
+    endereco_pacote = ""
+    destinatario_pacote = ""
+    waybill_pacote = ""
+    try:
+        # Se for código de referência ou alfanumérico (ex: KW..., BR..., LP...), prioriza referenceNo; caso numérico puro, prioriza waybillNo
+        cod_upper = codigo_limpo.upper()
+        if cod_upper.startswith(("KW", "BR", "LP", "NL", "BZ")) or not codigo_limpo.isdigit():
+            tipos_busca = ["referenceNo", "waybillNo"]
+        else:
+            tipos_busca = ["waybillNo", "referenceNo"]
+
+        for stype in tipos_busca:
+            ok_query, _, res_query = executar_post_imile("/saastms/v1/biz/track/query", {
+                "searchType": stype,
+                "searchValue": codigo_limpo
+            })
+            if ok_query and isinstance(res_query, dict):
+                ro = res_query.get("resultObject")
+                if isinstance(ro, dict):
+                    ci = ro.get("consigneeInfo") or {}
+                    si = ro.get("shipperInfo") or {}
+                    wi = ro.get("waybillInfo") or ro.get("orderInfo") or {}
+                    base = ro.get("baseInfo") or {}
+
+                    waybill_pacote = str(base.get("waybillNo") or ro.get("waybillNo") or "").strip()
+                    cidade_pacote = (ci.get("consigneeCity") or base.get("consigneeCity") or "").strip()
+                    cep_pacote = (ci.get("consigneeZipCode") or base.get("consigneeZipCode") or "").strip()
+                    endereco_pacote = (ci.get("consigneeAddress") or base.get("consigneeAddress") or "").strip()
+                    destinatario_pacote = (ci.get("consignee") or base.get("consigneeName") or "").strip()
+                    bairro_pacote = (ci.get("consigneeArea") or ci.get("consigneeDistrict") or ci.get("consigneeTown") or "").strip()
+                    if destinatario_pacote == "****" or not destinatario_pacote:
+                        destinatario_pacote = bairro_pacote
+                    tel_pacote = str(ci.get("consigneePhone") or ci.get("consigneeMobile") or ci.get("consigneeTel") or ro.get("consigneePhone") or "").strip()
+                    emp_pacote = str(ro.get("customerName") or ro.get("clientName") or ro.get("platformSource") or si.get("shipperCompany") or si.get("shipperName") or wi.get("customerName") or wi.get("sellerName") or "").strip()
+                    prod_pacote = str(ro.get("goodsName") or ro.get("skuName") or ro.get("itemName") or wi.get("goodsName") or wi.get("itemName") or "").strip()
+                    val_pacote = str(ro.get("declaredValue") or ro.get("goodsValue") or wi.get("declaredValue") or wi.get("goodsValue") or "").strip()
+                    registrar_detalhes_extras_pacote(
+                        [codigo_qr, codigo_limpo, waybill_pacote],
+                        bairro=bairro_pacote,
+                        telefone=tel_pacote,
+                        negocios=emp_pacote,
+                        produto=prod_pacote,
+                        valor_declarado=val_pacote,
+                        recebedor=destinatario_pacote,
+                        cep=cep_pacote,
+                        endereco=endereco_pacote
+                    )
+                    if cidade_pacote or cep_pacote:
+                        print(f"[+] [iMile API] Consulta de rastreio exitosa via {stype} ({codigo_limpo}): Cidade='{cidade_pacote}', CEP='{cep_pacote}'")
+                        break
+
+        # Se a cidade veio em branco mas a iMile informou o CEP, descobre a cidade instantaneamente pelo CEP!
+        if not cidade_pacote and cep_pacote:
+            cid_por_cep = obter_cidade_por_cep(cep_pacote)
+            if cid_por_cep:
+                cidade_pacote = cid_por_cep
+                print(f"[+] [iMile API] Cidade resolvida instantaneamente pelo CEP {cep_pacote}: {cidade_pacote}")
+
+        if cidade_pacote:
+            print(f"[+] [iMile API] Informações obtidas: Cidade: {cidade_pacote} | CEP: {cep_pacote} | Endereço: {endereco_pacote}")
+    except Exception as e_q:
+        print(f"[Aviso] [iMile API] Não foi possível consultar detalhes do pacote: {e_q}")
+
+    # 4. Verificação de Divergência de Cidade / CEP vs Motorista (Anti-Divergência Automático)
+    mot_clean = str(motorista).strip() if motorista else ""
+    if mot_clean and mot_clean not in ["---", "Apenas Entrada (Sem Atribuição)"] and cidade_pacote:
+        lista_cidades = carregar_cidades()
+        cidade_map = encontrar_cidade_mapeada(cidade_pacote, lista_cidades) or cidade_pacote
+        mots_esperados = carregar_motoristas_cidade(cidade_map, "imile", cep=cep_pacote)
+        if not mots_esperados and cidade_map != cidade_pacote:
+            mots_esperados = carregar_motoristas_cidade(cidade_pacote, "imile", cep=cep_pacote)
+            
+        if mots_esperados:
+            norm_mot = remover_acentos(mot_clean.lower()).replace('-', '').replace('_', '').replace(' ', '')
+            da_obj_check = resolver_motorista_imile_api(mot_clean)
+            da_uname_norm = remover_acentos(da_obj_check["daName"].lower()).replace('-', '').replace('_', '').replace(' ', '') if da_obj_check else norm_mot
+            
+            mots_esp_norm = [remover_acentos(m.lower()).replace('-', '').replace('_', '').replace(' ', '') for m in mots_esperados]
+            
+            if norm_mot not in mots_esp_norm and da_uname_norm not in mots_esp_norm:
+                esp_display = " / ".join(mots_esperados)
+                cep_info = f" (CEP {cep_pacote})" if cep_pacote else ""
+                print(f"[!] [iMile API] DIVERGÊNCIA! Pacote de {cidade_pacote}{cep_info} pertence a {esp_display}, mas lote ativo é de {mot_clean}!")
+                return "divergente", f"Pacote de {cidade_pacote}{cep_info} pertence ao motorista {esp_display}, mas você está bipando a pilha de {mot_clean}!", esp_display, cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
+
+    # 5. Atribuição ao Entregador (assignDA)
+    mot_nome_final = motorista
+    if mot_clean and mot_clean not in ["---", "Apenas Entrada (Sem Atribuição)"]:
+        da_obj = resolver_motorista_imile_api(mot_clean)
+        if not da_obj:
+            return False, f"Motorista '{mot_clean}' não localizado na lista oficial da iMile", "", cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
+            
+        da_code = da_obj["daCode"]
+        da_name = da_obj["daName"]
+        mot_nome_final = da_name
+        
+        payload_assign = {
+            "daCode": da_code,
+            "scanNumber": codigo_limpo,
+            "ocCode": station_code,
+            "forceOperate": True,
+            "fromAssign": 1,
+            "daName": da_name,
+            "currentStationCode": station_code,
+            "currentStationName": sessao.get("stationName", "DS AVR"),
+            "isRefactor": True,
+            "usePreSorting": False
+        }
+        ok_da, msg_da, _ = executar_post_imile("/lm/express/ops/v1/biz/ofdAndReturnOfd/submit", payload_assign)
+        if not ok_da:
+            msg_low = msg_da.lower()
+            if any(k in msg_low for k in ["success", "sucesso", "já atribuído", "já atribuido", "repetido", "duplicad", "repeat scan", "repeat"]):
+                ok_da = True
+            else:
+                # Retentativa rápida caso o servidor da iMile tenha levado alguns milissegundos para processar a Entrada
+                time.sleep(0.25)
+                # Se tivermos o waybill oficial retornado pelo rastreio, tenta atribuir por ele se o código original falhar
+                if waybill_pacote and waybill_pacote != codigo_limpo:
+                    payload_assign["scanNumber"] = waybill_pacote
+                ok_da, msg_da, _ = executar_post_imile("/lm/express/ops/v1/biz/ofdAndReturnOfd/submit", payload_assign)
+                msg_low = (msg_da or "").lower()
+                if ok_da or any(k in msg_low for k in ["success", "sucesso", "já atribuído", "já atribuido", "repetido", "duplicad", "repeat scan", "repeat"]):
+                    ok_da = True
+                else:
+                    print(f"[!] [iMile API] Erro na Atribuição ({da_name}): {msg_da}")
+                    return False, f"Atribuição ({da_name}): {msg_da}", da_name, cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
+
+    cidade_retorno = cidade_pacote if cidade_pacote else "Cidade Não Informada (Conferir)"
+    return True, "Pacote bipado com sucesso na iMile (API Ultra-Rápida)!", mot_nome_final, cidade_retorno, cep_pacote, destinatario_pacote, endereco_pacote
+
+# ==============================================================================
+# MOTOR DE REQUISIÇÕES DIRETAS (API ULTRA-RÁPIDA) - ANJUN EXPRESS
+# ==============================================================================
+
+cache_sessao_anjun = {
+    "token": None,
+    "siteId": 383,
+    "siteCode": "SPRD093",
+    "siteName": "SP-R-D093",
+    "orgId": 383,
+    "siteAddress": "R. Alferes José Ignatios, 26 - Parque Santa Elizabeth I, Avaré - SP, 18701-700",
+    "siteArea": "parquesantaelizabeth",
+    "siteCity": "Avaré",
+    "siteLat": -23.1069575,
+    "siteLng": -48.9104678,
+    "siteState": "SP",
+    "siteStreet": "R. Alferes José Ignatios, 26",
+    "siteZipCode": "18701700",
+    "timestamp": 0
+}
+
+cache_motoristas_anjun = {
+    "lista": [],
+    "mapa": {},
+    "timestamp": 0
+}
+
+# ========================================================
+# MOTOR DE BIPAGEM E GERENCIAMENTO DIRETO VIA API LOGGI (ARCO)
+# ========================================================
+
+cache_sessao_loggi = {
+    "token": None,
+    "exp": 0,
+    "company_id": None,
+    "dc_id": None,
+    "routing_code": "AV3",
+    "timestamp": 0
+}
+
+grupo_loggi_ativo = {
+    "licensePlate": None,
+    "tags": [],
+    "cidade": None,
+    "modo": "novo" # 'novo' ou 'existente'
+}
+
+def obter_contexto_loggi(drv=None, forcar=False):
+    global cache_sessao_loggi, driver
+    if not forcar and cache_sessao_loggi.get("token"):
+        exp = cache_sessao_loggi.get("exp", 0)
+        if (exp == 0 or time.time() < (exp - 60)) and (time.time() - cache_sessao_loggi.get("timestamp", 0) < 300):
+            return cache_sessao_loggi
+        
+    alvo = drv if drv else driver
+    if not alvo:
+        porta_loggi = PORTAS_DEBUG.get("loggi", 9224)
+        if is_chrome_debug_active(porta_loggi):
+            try:
+                conectar_chrome_existente("loggi")
+                alvo = driver
+            except Exception:
+                pass
+    if not alvo:
+        return cache_sessao_loggi
+        
+    try:
+        handles = getattr(alvo, 'window_handles', [])
+        for h in handles:
+            try:
+                alvo.switch_to.window(h)
+                if "arco.loggi.com" in (alvo.current_url or '').lower():
+                    break
+            except Exception:
+                pass
+                
+        script_tok = '''
+            var lastUser = '';
+            for (var i = 0; i < localStorage.length; i++) {
+                var k = localStorage.key(i);
+                if (k.includes('LastAuthUser')) {
+                    lastUser = localStorage.getItem(k);
+                    break;
+                }
+            }
+            for (var i = 0; i < localStorage.length; i++) {
+                var k = localStorage.key(i);
+                if (lastUser && k.includes(lastUser) && k.endsWith('.idToken')) {
+                    return localStorage.getItem(k);
+                }
+                if (k.endsWith('.idToken')) {
+                    return localStorage.getItem(k);
+                }
+            }
+            return '';
+        '''
+        tok = alvo.execute_script(script_tok)
+        if not tok:
+            return cache_sessao_loggi
+            
+        import base64, json, re
+        parts = tok.split('.')
+        payload_raw = parts[1] + '=' * (-len(parts[1]) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_raw).decode('utf-8'))
+        exp = int(payload.get('exp', 0))
+        
+        # Se forçar e o token do localStorage estiver vencido, tenta dar refresh na aba para Cognito renovar
+        if forcar and exp > 0 and time.time() >= exp:
+            print("[*] [Loggi] Token expirado detectado no Chrome. Atualizando aba para renovar sessão...")
+            try:
+                alvo.refresh()
+                time.sleep(2.0)
+                tok_novo = alvo.execute_script(script_tok)
+                if tok_novo:
+                    tok = tok_novo
+                    parts = tok.split('.')
+                    payload_raw = parts[1] + '=' * (-len(parts[1]) % 4)
+                    payload = json.loads(base64.urlsafe_b64decode(payload_raw).decode('utf-8'))
+                    exp = int(payload.get('exp', 0))
+            except Exception as e_rf:
+                print(f"[Aviso] Falha ao recarregar aba Loggi: {e_rf}")
+                
+        custom_access = json.loads(payload.get('custom:access', '{}'))
+        last_mile = custom_access.get('lastMile', [{}])[0]
+        lm_id = last_mile.get('id', '')
+        company_id, dc_id = lm_id.split(':') if ':' in lm_id else ('leve-sp-avare-3-centro_ec7b', '1378')
+        
+        routing_code = 'AV3'
+        try:
+            curr_u = (alvo.current_url or '').lower()
+            m = re.search(r'/(av\w+)/', curr_u)
+            if m:
+                routing_code = m.group(1).upper()
+        except Exception:
+            pass
+            
+        cache_sessao_loggi["token"] = tok
+        cache_sessao_loggi["exp"] = exp
+        cache_sessao_loggi["company_id"] = company_id
+        cache_sessao_loggi["dc_id"] = int(dc_id) if str(dc_id).isdigit() else 1378
+        cache_sessao_loggi["routing_code"] = routing_code
+        cache_sessao_loggi["timestamp"] = time.time()
+        print(f"[+] Contexto Loggi atualizado: {company_id} | DC: {dc_id} | {routing_code} (Expira em: {max(0, int(exp - time.time()))}s)")
+    except Exception as e:
+        print(f"[Aviso] Falha ao capturar contexto Loggi via Chrome: {e}")
+        
+    return cache_sessao_loggi
+
+def executar_requisicao_loggi(url, payload_bytes=None, headers=None, metodo=None, max_tentativas=2):
+    """
+    Executa requisição HTTP para a API da Loggi.
+    Se receber 401 Unauthorized ou 403 Forbidden, força atualização do token via Chrome e tenta novamente.
+    Retorna (sucesso: bool, status_code: int, dados: dict/str)
+    """
+    for tentativa in range(1, max_tentativas + 1):
+        ctx = obter_contexto_loggi(forcar=(tentativa > 1))
+        token = ctx.get("token")
+        if not token:
+            return False, 401, "Token de autenticação da Loggi ausente no Chrome."
+            
+        req_headers = {
+            'accept': 'application/json, text/plain, */*',
+            'appversion': 'prod-20260922.01',
+            'authorization': f"Bearer {token}",
+            'content-type': 'application/json;charset=UTF-8',
+            'origin': 'https://arco.loggi.com',
+            'referer': 'https://arco.loggi.com/',
+            'service': 'arco',
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        if headers:
+            req_headers.update(headers)
+            req_headers['authorization'] = f"Bearer {token}"
+            
+        try:
+            req = urllib.request.Request(url, data=payload_bytes, headers=req_headers, method=metodo)
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                corpo = resp.read().decode('utf-8')
+                try:
+                    dados = json.loads(corpo) if corpo else {}
+                except Exception:
+                    dados = corpo
+                return True, resp.status, dados
+        except urllib.error.HTTPError as e:
+            corpo_erro = ""
+            try:
+                corpo_erro = e.read().decode('utf-8')
+            except Exception:
+                pass
+            print(f"[!] [Loggi API] HTTP {e.code} em {url} (Tentativa {tentativa}/{max_tentativas}): {e.reason}")
+            if e.code in [401, 403]:
+                if tentativa < max_tentativas:
+                    print("[*] [Loggi API] 401/403 detectado. Forçando renovação imediata do token...")
+                    cache_sessao_loggi["token"] = None
+                    obter_contexto_loggi(forcar=True)
+                    time.sleep(1.0)
+                    continue
+                else:
+                    return False, e.code, "Sessão da Loggi expirada (401). Faça login no Chrome."
+            else:
+                return False, e.code, corpo_erro or str(e)
+        except Exception as e_geral:
+            print(f"[!] [Loggi API] Oscilação de internet em {url} (Tentativa {tentativa}/{max_tentativas}): {e_geral}")
+            if tentativa < max_tentativas:
+                time.sleep(0.4)
+                continue
+            return False, 500, f"Internet lenta / oscilação na Loggi ({e_geral})"
+            
+    return False, 500, "Falha na comunicação com a Loggi."
+
+_lock_grupo_loggi = threading.Lock()
+
+def loggi_listar_grupos_api():
+    ctx = obter_contexto_loggi()
+    if not ctx.get("company_id") or not ctx.get("dc_id"):
+        return []
+    url = f"https://leve.loggi.com/api/v1/last_mile/{ctx['company_id']}:{ctx['dc_id']}/unit_load"
+    payload = json.dumps({
+        'citiesFilter': [],
+        'page': 1,
+        'itemsPerPage': 200,
+        'orderBy': 'last_awaiting_resolution_promised_date_annotation.annotation.awaiting_resolution_promised_date.promised_date.promised_date',
+        'view': 'base',
+        'viewFilterBy': 'last_last_mile_promised_date_annotation.annotation.last_mile_promised_date.promised_date.promised_date',
+        'aggregatedField': 'unit_load',
+        'lastMileCompanyType': 'LEVE',
+        'distribution_center_id': ctx['dc_id'],
+        'last_mile_company_id': ctx['company_id'],
+        'routing_code': ctx['routing_code']
+    }).encode('utf-8')
+    
+    ok, status, data = executar_requisicao_loggi(url, payload_bytes=payload)
+    if not ok or not isinstance(data, dict):
+        return []
+        
+    grupos = []
+    for g in (data.get('data') or []):
+        if not isinstance(g, dict):
+            continue
+        plate = g.get('licensePlate', '')
+        tags = g.get('packageGroupTags') or []
+        station = g.get('station', '')
+        qty = g.get('quantityPackages', 0)
+        if plate and plate != f"{ctx['routing_code']} COL 01":
+            grupos.append({
+                "licensePlate": plate,
+                "station": station,
+                "tags": tags,
+                "tag_display": ", ".join(tags) if tags else plate,
+                "quantity": qty
+            })
+    return grupos
+
+def loggi_criar_novo_grupo_api(cidade, forcar_novo=False):
+    global grupo_loggi_ativo, aba_atribuicao_anjun, driver
+    with _lock_grupo_loggi:
+        ctx = obter_contexto_loggi()
+        from datetime import datetime
+        dia_mes = datetime.now().strftime("%d-%m")
+        cid_limpa = str(cidade or "Geral").strip().title()
+        tag_nome = f"{cid_limpa} {dia_mes}"
+
+        # 0. Verifica se já está ativo na memória para esta mesma cidade E com a data de HOJE
+        placa_mem = grupo_loggi_ativo.get("licensePlate")
+        cid_mem = grupo_loggi_ativo.get("cidade")
+        tags_mem = grupo_loggi_ativo.get("tags") or []
+        if not forcar_novo and placa_mem and (cidades_sao_iguais(cid_limpa, cid_mem) or any(cidades_sao_iguais(cid_limpa, t) for t in tags_mem)):
+            tag_mem_0 = str(tags_mem[0] if tags_mem else "")
+            # Só reaproveita a memória se contiver a data de HOJE
+            if dia_mes in tag_mem_0:
+                tag_ret = tags_mem[0] if tags_mem else tag_nome
+                return placa_mem, tag_ret
+
+        # 0.1 Consulta na API da Loggi se JÁ EXISTE um grupo aberto para esta cidade HOJE!
+        # Regra obrigatória: Só reutiliza grupos abertos da DATA DE HOJE (ex: '09-10').
+        # Grupos de datas anteriores (ex: '08-10') NUNCA devem ser reutilizados para bipagem nova!
+        if not forcar_novo:
+            try:
+                grupos_abertos = loggi_listar_grupos_api()
+                for g in grupos_abertos:
+                    tags_list = g.get("tags", [])
+                    tags_str = " ".join(tags_list)
+                    bateu_cidade = any(cidades_sao_iguais(cid_limpa, t) for t in tags_list) or cidades_sao_iguais(cid_limpa, tags_str)
+                    if bateu_cidade and dia_mes in tags_str:
+                        placa_existente = g["licensePlate"]
+                        tag_existente = tags_list[0] if tags_list else tag_nome
+                        grupo_loggi_ativo["licensePlate"] = placa_existente
+                        grupo_loggi_ativo["tags"] = tags_list or [tag_existente]
+                        grupo_loggi_ativo["cidade"] = cid_limpa
+                        grupo_loggi_ativo["quantity"] = g.get("quantity", 0)
+                        print(f"[+] [Loggi API] Grupo existente de HOJE ({dia_mes}) localizado para '{cid_limpa}': Placa {placa_existente} ({tag_existente}). Reutilizando!")
+                        return placa_existente, tag_existente
+            except Exception as e_chk:
+                print(f"[Aviso] Falha ao consultar grupos existentes antes de criar: {e_chk}")
+        
+        # 1. Gera nova placa de unitLoad (somente se não existir nenhum grupo aberto para a cidade)
+        url_ul = 'https://leve.loggi.com/proxy/wms/api/v1/get-create-unitload'
+        payload_ul = json.dumps({
+            'prefixLicensePlate': ctx['routing_code'],
+            'distribution_center_id': ctx['dc_id'],
+            'last_mile_company_id': ctx['company_id'],
+            'routing_code': ctx['routing_code']
+        }).encode('utf-8')
+        
+        ok_ul, status_ul, data_ul = executar_requisicao_loggi(url_ul, payload_bytes=payload_ul)
+        if not ok_ul or not isinstance(data_ul, dict):
+            raise Exception(f"Falha ao gerar nova placa de grupo na Loggi: {data_ul}")
+            
+        nova_placa = (data_ul.get('unitLoad') or {}).get('license_plate')
+        if not nova_placa:
+            raise Exception("Placa de grupo retornada vazia pela Loggi.")
+            
+        # 2. Cria o grupo com a palavra-chave (Cidade Dia-Mês)
+        url_create = f"https://leve.loggi.com/api/v1/last_mile/{ctx['company_id']}:{ctx['dc_id']}/package-group/create"
+        payload_create = json.dumps({
+            "licensePlate": nova_placa,
+            "tags": [tag_nome],
+            "markSomeCircleThisUser": False,
+            "distribution_center_id": ctx['dc_id'],
+            "last_mile_company_id": ctx['company_id'],
+            "routing_code": ctx['routing_code']
+        }).encode('utf-8')
+        
+        ok_c, status_c, data_c = executar_requisicao_loggi(url_create, payload_bytes=payload_create)
+        if not ok_c:
+            raise Exception(f"Falha ao registrar novo grupo na Loggi: {data_c}")
+            
+        grupo_loggi_ativo["licensePlate"] = nova_placa
+        grupo_loggi_ativo["tags"] = [tag_nome]
+        grupo_loggi_ativo["cidade"] = cid_limpa
+        grupo_loggi_ativo["modo"] = "novo"
+        grupo_loggi_ativo["quantity"] = 0
+        
+        # Recarrega a aba 3 (Grupos) no Chrome para exibir o novo grupo imediatamente
+        try:
+            if aba_atribuicao_anjun and driver:
+                with _lock_selenium:
+                    driver.switch_to.window(aba_atribuicao_anjun)
+                    driver.execute_script("window.location.reload();")
+        except Exception as e_rf:
+            print(f"[Aviso] Falha ao atualizar aba 3 no Chrome: {e_rf}")
+            
+        print(f"[+] [Loggi API] Novo grupo criado com sucesso: Placa {nova_placa} | Palavra-chave '{tag_nome}'")
+        return nova_placa, tag_nome
+
+def resolver_pacote_avulso_loggi(codigo_procurado, ctx):
+    """
+    Quando um pacote foi recebido na base mas retrieve_and_validate falhou pelo código de barras,
+    busca nos pacotes avulsos em AV3 COL 01 para encontrar o pacote correspondente.
+    Bate por tracking_key, barcode, loggiKey, package_id ou nome do destinatário.
+    """
+    try:
+        url = "https://leve.loggi.com/api/v2/last_mile/packages/filter_search"
+        payload = {
+            "citiesFilter": [],
+            "page": 1,
+            "itemsPerPage": 200,
+            "unitLoadFilter": [f"{ctx['routing_code']} COL 01"],
+            "orderBy": "last_awaiting_resolution_promised_date_annotation.annotation.awaiting_resolution_promised_date.promised_date.promised_date",
+            "view": "base",
+            "viewFilterBy": "last_last_mile_promised_date_annotation.annotation.last_mile_promised_date.promised_date.promised_date",
+            "aggregatedField": "unit_load",
+            "lastMileCompanyType": "LEVE",
+            "distribution_center_id": ctx['dc_id'],
+            "last_mile_company_id": ctx['company_id'],
+            "routing_code": ctx['routing_code']
+        }
+        
+        ok, status, d = executar_requisicao_loggi(url, payload_bytes=json.dumps(payload).encode('utf-8'))
+        if not ok or not isinstance(d, dict):
+            return None
+            
+        hits = (d.get("hits") or {}).get("hits") or []
+        c_clean = str(codigo_procurado).strip().lower()
+        
+        for h in hits:
+            if not isinstance(h, dict):
+                continue
+            src = h.get("_source") or {}
+            pkg = src.get("package") or {}
+            integ = src.get("package_integration_info") or {}
+            dest = src.get("destination") or {}
+            rec = src.get("recipient") or {}
+            
+            b_code = str(integ.get("barcode") or "").strip().lower()
+            t_key = str(pkg.get("tracking_key") or "").strip().lower()
+            l_key = str(pkg.get("loggiKey") or "").strip().lower()
+            p_id = str(pkg.get("id") or "").strip()
+            r_name = str(rec.get("name") or "").strip().lower()
+            
+            bateu = (c_clean in [b_code, t_key, l_key, p_id])
+            if not bateu and len(c_clean) >= 5:
+                bateu = (c_clean in t_key or c_clean in b_code or c_clean in l_key or t_key in c_clean or b_code in c_clean)
+            if not bateu and len(c_clean) >= 4 and not c_clean.isdigit():
+                bateu = (c_clean in r_name or r_name in c_clean)
+                
+            if bateu:
+                barcode_real = integ.get("barcode") or pkg.get("loggiKey")
+                if barcode_real and "LG" in barcode_real and not barcode_real.startswith("LG"):
+                    idx_lg = barcode_real.find("LG")
+                    barcode_real = barcode_real[idx_lg:]
+                    
+                return {
+                    "package_id": str(pkg.get("id")),
+                    "barcode": barcode_real,
+                    "cidade": dest.get("city", ""),
+                    "cep": dest.get("zip", ""),
+                    "bairro": dest.get("vicinity", "") or dest.get("neighborhood", ""),
+                    "destinatario": rec.get("name", ""),
+                    "telefone": str(rec.get("phone") or rec.get("phoneNumber") or dest.get("phone") or "").strip(),
+                    "endereco": f"{dest.get('address_st', '')}, {dest.get('address_number', '')} - {dest.get('vicinity', '')}".strip(" ,-"),
+                    "empresa": (src.get("company") or {}).get("name", "Loggi"),
+                    "produto": str(pkg.get("description") or pkg.get("content") or "").strip(),
+                    "valor_declarado": str(pkg.get("declared_value") or pkg.get("invoice_value") or "").strip()
+                }
+    except Exception as e:
+        print(f"[Aviso] Falha ao resolver pacote avulso Loggi: {e}")
+    return None
+
+def bipar_pacote_loggi_api(codigo_qr, cidades_selecionadas=None, motorista_lote=None):
+    """
+    Executa a bipagem ultra-rápida via API na Loggi em ~120-200ms:
+    1. Entrada/Recebimento na Base (move-package para AV3 COL 01)
+    2. Validação e extração de Cidade, Bairro, CEP e package_id
+    3. Verificação de Anti-Divergência
+    4. Atribuição direta ao Grupo ativo (novo ou existente) via validate-and-move-packages com re-tentativa automática
+    Retorna (sucesso: bool/str, mensagem: str, motorista_atribuido: str, cidade: str, cep: str, destinatario: str, endereco: str)
+    """
+    global grupo_loggi_ativo
+    ctx = obter_contexto_loggi()
+    token = ctx.get("token")
+    if not token:
+        return False, "Sessão da Loggi desconectada ou token ausente.", "", "", "", "", ""
+        
+    codigo_limpo = str(codigo_qr).strip()
+    
+    # 1. Entrada / Recebimento na Base (Aba 1)
+    url_move_rec = 'https://leve.loggi.com/proxy/wms/api/v1/move-package'
+    payload_rec = json.dumps({
+        "packageBarcode": codigo_limpo,
+        "unitLoadLpn": f"{ctx['routing_code']} COL 01",
+        "sortingContextLpn": f"{ctx['routing_code']} COL",
+        "sideEffectParams": {"applicationName": "arco"}
+    }).encode('utf-8')
+    ok_rec, status_rec, data_rec = executar_requisicao_loggi(url_move_rec, payload_bytes=payload_rec)
+    if not ok_rec and ("Internet lenta" in str(data_rec) or status_rec in [502, 503, 504]):
+        return False, f"Servidor da Loggi não respondeu na Entrada da Base ({data_rec}). Bipe novamente!", "", "", "", "", ""
+        
+    # 2. Validação do Pacote e Obtenção dos Dados
+    url_validate = f"https://leve.loggi.com/proxy/last-mile/v1/{ctx['company_id']}:{ctx['dc_id']}/group_packages/retrieve_and_validate_packages_by_barcode"
+    def _consultar_validacao_loggi(cod_consulta):
+        p_val = json.dumps({
+            "barcodes": [cod_consulta],
+            "arcoLocation": "IN_BASE",
+            "distribution_center_id": ctx['dc_id'],
+            "last_mile_company_id": ctx['company_id'],
+            "routing_code": ctx['routing_code']
+        }).encode('utf-8')
+        ok_v, _, d_val = executar_requisicao_loggi(url_validate, payload_bytes=p_val)
+        if not ok_v or not isinstance(d_val, dict):
+            return False, None, d_val
+        inf = d_val.get(cod_consulta)
+        if not isinstance(inf, dict):
+            inf = None
+            for k_v, v_v in d_val.items():
+                if isinstance(v_v, dict) and ('destination' in v_v or 'validationMessage' in v_v or 'integrationInfo' in v_v):
+                    inf = v_v
+                    break
+        return True, inf, d_val
+
+    ok_val, info, data_val = _consultar_validacao_loggi(codigo_limpo)
+    if not ok_val:
+        return False, f"Falha ao validar pacote na Loggi: {data_val}", "", "", "", "", ""
+                
+    val_msg = (info.get('validationMessage') or info.get('message') or info.get('errorMsg')) if info else None
+    package_id = str((info.get('integrationInfo') or {}).get('package_id') or info.get('packageId') or '').strip() if info else ''
+    barcode_oficial = str((info.get('integrationInfo') or {}).get('barcode') or info.get('barcode') or '').strip() if info else ''
+    if barcode_oficial:
+        codigo_limpo = barcode_oficial
+    cidade_destino = ((info.get('destination') or {}).get('city', '') or ((info.get('loggiAddress') or {}).get('correiosAddress') or {}).get('cidade', '')) if info else ''
+    cep_inicial = (((info.get('loggiAddress') or {}).get('correiosAddress') or {}).get('cep', '') or (info.get('destination') or {}).get('zip', '')) if info else ''
+    if not cidade_destino and cep_inicial:
+        cidade_destino = obter_cidade_por_cep(cep_inicial) or ''
+        if cidade_destino:
+            print(f"[+] [Loggi API] Cidade resolvida instantaneamente pelo CEP {cep_inicial}: {cidade_destino}")
+    bairro = ""
+    telefone_pacote = ""
+    destinatario_real = ""
+    produto_pacote = ""
+    valor_pacote = ""
+
+    # SE A LOGGI NÃO ACHOU PELO CÓDIGO BIPADO OU A ENTRADA NA BASE AINDA ESTAVA INDEXANDO:
+    # Faz até 2 buscas (com breve pausa de 0.25s se necessário) nos Pacotes Avulsos e na validação!
+    if val_msg or not package_id or not cidade_destino:
+        print(f"[*] Código '{codigo_limpo}' aguardando indexação ou avulso ({val_msg}). Consultando base...")
+        resolvido_extra = False
+        for tent_av in range(2):
+            if tent_av == 1:
+                time.sleep(0.28)
+                ok_v2, info2, _ = _consultar_validacao_loggi(codigo_limpo)
+                if ok_v2 and info2:
+                    v_msg2 = info2.get('validationMessage') or info2.get('message') or info2.get('errorMsg')
+                    pid2 = str((info2.get('integrationInfo') or {}).get('package_id') or info2.get('packageId') or '').strip()
+                    correios_addr = ((info2.get('loggiAddress') or {}).get('correiosAddress') or {})
+                    dest_obj2 = info2.get('destination') or {}
+                    cep2 = correios_addr.get('cep') or dest_obj2.get('zip') or ''
+                    cid2 = dest_obj2.get('city', '') or correios_addr.get('cidade', '')
+                    if not cid2 and cep2:
+                        cid2 = obter_cidade_por_cep(cep2) or ''
+                    if not v_msg2 and pid2:
+                        info = info2
+                        val_msg = None
+                        package_id = pid2
+                        cidade_destino = cid2
+                        bc2 = str((info2.get('integrationInfo') or {}).get('barcode') or info2.get('barcode') or '').strip()
+                        if bc2:
+                            codigo_limpo = bc2
+                        empresa = (info2.get('company') or {}).get('name', 'Loggi')
+                        rec_obj2 = info2.get('recipient') or {}
+                        bairro = correios_addr.get('bairro') or dest_obj2.get('vicinity') or dest_obj2.get('neighborhood') or ''
+                        cep = cep2
+                        logradouro = correios_addr.get('logradouro') or dest_obj2.get('address_st') or ''
+                        numero = correios_addr.get('numero') or dest_obj2.get('address_number') or ''
+                        endereco = f"{logradouro}, {numero}" if logradouro else ""
+                        destinatario_real = rec_obj2.get('name') or (info2.get('loggiAddress') or {}).get('recipientName') or ''
+                        telefone_pacote = str(rec_obj2.get('phone') or rec_obj2.get('phoneNumber') or dest_obj2.get('phone') or '').strip()
+                        resolvido_extra = True
+                        break
+            dados_avulso = resolver_pacote_avulso_loggi(codigo_limpo, ctx)
+            if dados_avulso:
+                package_id = dados_avulso["package_id"]
+                codigo_limpo = dados_avulso["barcode"] or codigo_limpo
+                cep = dados_avulso["cep"]
+                cidade_destino = dados_avulso["cidade"]
+                if not cidade_destino and cep:
+                    cidade_destino = obter_cidade_por_cep(cep) or ""
+                    if cidade_destino:
+                        print(f"[+] [Loggi API] Cidade do pacote avulso resolvida pelo CEP {cep}: {cidade_destino}")
+                bairro = dados_avulso.get("bairro", "")
+                empresa = dados_avulso["empresa"]
+                destinatario_real = dados_avulso.get("destinatario", "")
+                telefone_pacote = dados_avulso.get("telefone", "")
+                produto_pacote = dados_avulso.get("produto", "")
+                valor_pacote = dados_avulso.get("valor_declarado", "")
+                endereco = dados_avulso["endereco"]
+                val_msg = None
+                resolvido_extra = True
+                print(f"[+] [Loggi API] Pacote Avulso resolvido automaticamente via 'AV3 COL 01': {codigo_limpo} ({dados_avulso.get('destinatario')} - {cidade_destino})")
+                break
+        if not resolvido_extra:
+            if not val_msg and package_id and info:
+                # Pacote existe e foi validado, apenas veio sem cidade e sem CEP da Loggi
+                empresa = (info.get('company') or {}).get('name', 'Loggi')
+                loggi_addr = info.get('loggiAddress') or {}
+                correios_addr = loggi_addr.get('correiosAddress') or {}
+                dest_obj = info.get('destination') or {}
+                rec_obj = info.get('recipient') or {}
+                bairro = correios_addr.get('bairro') or dest_obj.get('vicinity') or dest_obj.get('neighborhood') or ''
+                cep = correios_addr.get('cep') or dest_obj.get('zip') or ''
+                logradouro = correios_addr.get('logradouro') or dest_obj.get('address_st') or ''
+                numero = correios_addr.get('numero') or dest_obj.get('address_number') or ''
+                endereco = f"{logradouro}, {numero}" if logradouro else ""
+                destinatario_real = rec_obj.get('name') or loggi_addr.get('recipientName') or ''
+                telefone_pacote = str(rec_obj.get('phone') or rec_obj.get('phoneNumber') or dest_obj.get('phone') or '').strip()
+            else:
+                if val_msg:
+                    print(f"[!] Loggi rejeitou o código '{codigo_limpo}': {val_msg}")
+                    return False, val_msg, "", "", "", "", ""
+                return False, "Pacote não encontrado com o código informado.", "", "", "", "", ""
+    else:
+        empresa = (info.get('company') or {}).get('name', 'Loggi')
+        loggi_addr = info.get('loggiAddress') or {}
+        correios_addr = loggi_addr.get('correiosAddress') or {}
+        dest_obj = info.get('destination') or {}
+        rec_obj = info.get('recipient') or {}
+        bairro = correios_addr.get('bairro') or dest_obj.get('vicinity') or dest_obj.get('neighborhood') or ''
+        cep = correios_addr.get('cep') or dest_obj.get('zip') or ''
+        logradouro = correios_addr.get('logradouro') or dest_obj.get('address_st') or ''
+        numero = correios_addr.get('numero') or dest_obj.get('address_number') or ''
+        endereco = f"{logradouro}, {numero}" if logradouro else ""
+        destinatario_real = rec_obj.get('name') or loggi_addr.get('recipientName') or ''
+        telefone_pacote = str(rec_obj.get('phone') or rec_obj.get('phoneNumber') or dest_obj.get('phone') or '').strip()
+        pkg_det = info.get('packageDetails') or {}
+        produto_pacote = str(pkg_det.get('description') or info.get('description') or info.get('content') or '').strip()
+        valor_pacote = str(pkg_det.get('value') or info.get('declaredValue') or info.get('invoiceValue') or '').strip()
+
+    registrar_detalhes_extras_pacote(
+        [codigo_qr, codigo_limpo],
+        bairro=bairro,
+        telefone=telefone_pacote,
+        negocios=empresa,
+        produto=produto_pacote,
+        valor_declarado=valor_pacote,
+        recebedor=destinatario_real or empresa,
+        cep=cep,
+        endereco=endereco
+    )
+    
+    # 3. Anti-Divergência (Comparação Estrita de Cidade - permite múltiplas cidades no mesmo grupo novo ou existente)
+    cidades_permitidas = []
+    if cidades_selecionadas:
+        cidades_permitidas.extend([str(c).strip() for c in cidades_selecionadas if c])
+    if grupo_loggi_ativo.get("cidades_autorizadas"):
+        cidades_permitidas.extend([str(c).strip() for c in grupo_loggi_ativo.get("cidades_autorizadas", []) if c])
+    if grupo_loggi_ativo.get("tags"):
+        cidades_permitidas.extend([str(c).strip() for c in grupo_loggi_ativo.get("tags", []) if c])
+    if grupo_loggi_ativo.get("cidade"):
+        cidades_permitidas.append(str(grupo_loggi_ativo.get("cidade")).strip())
+    if motorista_lote and str(motorista_lote).strip() not in ["", "---", "Apenas Entrada (Sem Atribuição)"]:
+        cidades_permitidas.append(str(motorista_lote).strip())
+    # Remove duplicados preservando ordem
+    cidades_permitidas = list(dict.fromkeys(c for c in cidades_permitidas if c))
+        
+    if cidades_permitidas and cidade_destino:
+        bateu = any(cidades_sao_iguais(cidade_destino, p) for p in cidades_permitidas)
+        if not bateu:
+            esperado_display = ", ".join(cidades_permitidas) if cidades_permitidas else (grupo_loggi_ativo.get("cidade") or motorista_lote)
+            print(f"[!] [Loggi API] DIVERGÊNCIA DETECTADA! Pacote de '{cidade_destino}', esperado '{esperado_display}'")
+            return "divergente", f"Pacote é de {cidade_destino}, mas o grupo é de {esperado_display}", esperado_display, cidade_destino, cep, empresa, endereco
+
+    # 4. Atribuição ao Grupo Ativo (Único por Cidade + Data)
+    if cidades_selecionadas and len(cidades_selecionadas) > 0 and cidades_selecionadas[0]:
+        cid_para_criar = str(cidades_selecionadas[0]).strip()
+    elif grupo_loggi_ativo.get("modo") == "existente" and grupo_loggi_ativo.get("cidade"):
+        cid_para_criar = str(grupo_loggi_ativo.get("cidade")).strip()
+    else:
+        cid_para_criar = str(cidade_destino or grupo_loggi_ativo.get("cidade") or "Geral").strip()
+
+    placa_grupo = grupo_loggi_ativo.get("licensePlate")
+    if placa_grupo and grupo_loggi_ativo.get("modo") != "existente":
+        cid_grp_atual = grupo_loggi_ativo.get("cidade")
+        tags_grp_atual = grupo_loggi_ativo.get("tags") or []
+        if not (cidades_sao_iguais(cid_para_criar, cid_grp_atual) or any(cidades_sao_iguais(cid_para_criar, t) for t in tags_grp_atual)):
+            placa_grupo = None
+            grupo_loggi_ativo["licensePlate"] = None
+            grupo_loggi_ativo["tags"] = []
+
+    if not placa_grupo:
+        # loggi_criar_novo_grupo_api já verifica automaticamente se existe um grupo aberto para a cidade e o reutiliza!
+        placa_grupo, tag_criada = loggi_criar_novo_grupo_api(cid_para_criar)
+            
+    # Move para o grupo com verificação real e até 3 tentativas automáticas (evita pacote ficar preso em Avulsos!)
+    url_move_group = f"https://leve.loggi.com/proxy/last-mile/v1/{ctx['company_id']}:{ctx['dc_id']}/group-packages/validate-and-move-packages"
+    movido_com_sucesso = False
+    ultimo_erro_grp = ""
+
+    for tent_grp in range(1, 4):
+        if not package_id and tent_grp > 1:
+            _, info_retry, _ = _consultar_validacao_loggi(codigo_limpo)
+            if info_retry:
+                package_id = str((info_retry.get('integrationInfo') or {}).get('package_id') or info_retry.get('packageId') or '').strip()
+            if not package_id:
+                av_retry = resolver_pacote_avulso_loggi(codigo_limpo, ctx)
+                if av_retry and av_retry.get("package_id"):
+                    package_id = av_retry["package_id"]
+                    codigo_limpo = av_retry.get("barcode") or codigo_limpo
+
+        payload_group = json.dumps({
+            "packageIds": [package_id] if package_id else [],
+            "barcodes": [codigo_limpo],
+            "arcoLocation": "IN_BASE",
+            "destinationUnitLoadLicensePlate": placa_grupo,
+            "sideEffectParams": {"applicationName": "arco"},
+            "distribution_center_id": ctx['dc_id'],
+            "last_mile_company_id": ctx['company_id'],
+            "routing_code": ctx['routing_code']
+        }).encode('utf-8')
+
+        ok_grp, status_grp, data_grp = executar_requisicao_loggi(url_move_group, payload_bytes=payload_group)
+        erro_interno_grp = None
+        if isinstance(data_grp, dict):
+            erro_interno_grp = data_grp.get("validationMessage") or data_grp.get("errorMsg") or data_grp.get("message")
+            if not erro_interno_grp and data_grp.get("errors"):
+                erro_interno_grp = str(data_grp.get("errors"))
+            if not erro_interno_grp and data_grp.get("invalidPackages"):
+                erro_interno_grp = str(data_grp.get("invalidPackages"))
+
+        if ok_grp and not erro_interno_grp:
+            movido_com_sucesso = True
+            print(f"[+] [Loggi API] Pacote {codigo_limpo} adicionado ao grupo {placa_grupo} com sucesso (tentativa {tent_grp})!")
+            break
+        else:
+            ultimo_erro_grp = str(erro_interno_grp or data_grp or f"HTTP {status_grp}")
+            print(f"[Aviso] [Loggi API] Tentativa {tent_grp}/3 de mover pacote {codigo_limpo} para o grupo {placa_grupo} aguardando base: {ultimo_erro_grp}")
+            if tent_grp < 3:
+                # Re-confirma a entrada na base e aguarda 350ms para o banco da Loggi finalizar a indexação
+                executar_requisicao_loggi(url_move_rec, payload_bytes=payload_rec)
+                time.sleep(0.35)
+
+    if not movido_com_sucesso:
+        print(f"[!] [Loggi API] Falha definitiva ao mover pacote {codigo_limpo} para o grupo {placa_grupo}: {ultimo_erro_grp}")
+        return False, f"Pacote deu entrada na base, mas a Loggi demorou para liberar o grupo ({ultimo_erro_grp}). Bipe o pacote novamente!", "", cidade_destino, cep, empresa, endereco
+        
+    tag_atual = ", ".join(grupo_loggi_ativo.get("tags", [])) or placa_grupo
+    cidade_retorno_loggi = cidade_destino if cidade_destino else "Cidade Não Informada (Conferir)"
+    return True, "OK", tag_atual, cidade_retorno_loggi, cep, empresa, endereco
+
+ultimo_bipe_motorista_anjun = {}
+ultimo_bipe_geral_anjun = 0
+
+def adicionar_pacote_lote_anjun(motorista, waybill):
+    """Registra pacote pendente no lote do motorista no banco SQLite."""
+    global ultimo_bipe_motorista_anjun, ultimo_bipe_geral_anjun
+    try:
+        wb_clean = str(waybill).strip()
+        if 'waybills_cancelados_anjun' in globals():
+            waybills_cancelados_anjun.discard(wb_clean)
+        conn = conectar_banco()
+        c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO lote_pendente_anjun (waybill, motorista, timestamp) VALUES (?, ?, CURRENT_TIMESTAMP)", (wb_clean, str(motorista).strip()))
+        conn.commit()
+        conn.close()
+        
+        mot_clean = str(motorista).strip()
+        ultimo_bipe_motorista_anjun[mot_clean] = time.time()
+        ultimo_bipe_geral_anjun = time.time()
+    except Exception as e:
+        print(f"[Aviso] Falha ao registrar pacote pendente Anjun: {e}")
+
+def monitor_auto_finalizacao_anjun():
+    """
+    Monitor contínuo em segundo plano que finaliza automaticamente
+    lotes abertos da Anjun após 1 hora (3600 segundos) de inatividade.
+    Garante que os pacotes apareçam no aplicativo dos motoristas mesmo que o operador esqueça.
+    """
+    time.sleep(20)  # Aguarda inicialização do sistema e conexões
+    print("[+] [Auto-Finalização Anjun] Monitor de inatividade iniciado (limite: 1 hora sem bipar).")
+    
+    while True:
+        try:
+            time.sleep(60)  # Checa a cada 60 segundos
+            agora = time.time()
+            
+            conn = conectar_banco()
+            c = conn.cursor()
+            c.execute("""
+                SELECT motorista, 
+                       COALESCE((strftime('%s', 'now') - strftime('%s', MAX(timestamp))), 999999) AS seg_inativo,
+                       count(*) AS total_pct
+                FROM lote_pendente_anjun
+                WHERE motorista IS NOT NULL AND TRIM(motorista) != ''
+                GROUP BY motorista
+            """)
+            lotes_abertos = c.fetchall()
+            conn.close()
+            
+            if not lotes_abertos:
+                continue
+                
+            for mot, seg_inativo, total_pct in lotes_abertos:
+                mot_limpo = str(mot).strip()
+                if not mot_limpo or total_pct <= 0:
+                    continue
+                
+                # Prioriza o timestamp em memória se for mais recente que o do banco
+                if mot_limpo in ultimo_bipe_motorista_anjun:
+                    seg_memoria = agora - ultimo_bipe_motorista_anjun[mot_limpo]
+                    seg_inativo = min(seg_inativo, seg_memoria)
+                    
+                if seg_inativo >= 3600:
+                    minutos_parado = int(seg_inativo / 60)
+                    print(f"[*] [Auto-Finalização Anjun] Motorista '{mot_limpo}' com {total_pct} pacote(s) sem novos bipes há {minutos_parado} min (>= 60 min). Finalizando lote automaticamente...")
+                    
+                    ok_fin, qtd_fin = finalizar_lote_anjun_api(mot_limpo, reload_tab=False)
+                    if ok_fin:
+                        contagem = qtd_fin if qtd_fin > 0 else total_pct
+                        registrar_lote_finalizado(mot_limpo, contagem, plataforma="anjun")
+                        limpar_pacotes_lote_anjun(mot_limpo)
+                        zerar_contagem_motorista_memoria(mot_limpo)
+                        ultimo_bipe_motorista_anjun.pop(mot_limpo, None)
+                        print(f"[+] [Auto-Finalização Anjun] Lote de '{mot_limpo}' finalizado com sucesso ({contagem} pacotes)! Liberado no aplicativo da Anjun.")
+                    else:
+                        print(f"[Aviso] [Auto-Finalização Anjun] Tentativa de finalizar lote de '{mot_limpo}' falhou temporariamente. O monitor tentará novamente no próximo minuto.")
+                        
+        except Exception as e_mon:
+            print(f"[Aviso] Erro no ciclo do monitor de auto-finalização Anjun: {e_mon}")
+            time.sleep(15)
+
+def obter_pacotes_lote_anjun(motorista):
+    """Retorna a lista de waybills pendentes no lote do motorista (busca exata e sem acentos/case/espaços)."""
+    if not motorista:
+        return []
+    try:
+        alvo_norm = remover_acentos(str(motorista).strip().lower()).replace('-', '').replace('_', '').replace(' ', '')
+        conn = conectar_banco()
+        c = conn.cursor()
+        c.execute("SELECT waybill, motorista FROM lote_pendente_anjun")
+        rows = c.fetchall()
+        conn.close()
+        res = []
+        for wb, mot_db in rows:
+            if not wb or not mot_db:
+                continue
+            norm_db = remover_acentos(str(mot_db).strip().lower()).replace('-', '').replace('_', '').replace(' ', '')
+            if norm_db == alvo_norm or alvo_norm in norm_db or norm_db in alvo_norm:
+                res.append(wb)
+        return res
+    except Exception as e:
+        print(f"[Aviso] Falha ao obter pacotes pendentes Anjun: {e}")
+        return []
+
+def limpar_pacotes_lote_anjun(motorista):
+    """Limpa os pacotes do lote pendente do motorista após finalização ou cancelamento."""
+    if not motorista:
+        return 0
+    try:
+        alvo_norm = remover_acentos(str(motorista).strip().lower()).replace('-', '').replace('_', '').replace(' ', '')
+        conn = conectar_banco()
+        c = conn.cursor()
+        c.execute("SELECT DISTINCT motorista FROM lote_pendente_anjun")
+        rows = c.fetchall()
+        removidos = 0
+        for (mot_db,) in rows:
+            if not mot_db:
+                continue
+            norm_db = remover_acentos(str(mot_db).strip().lower()).replace('-', '').replace('_', '').replace(' ', '')
+            if norm_db == alvo_norm or alvo_norm in norm_db or norm_db in alvo_norm:
+                c.execute("DELETE FROM lote_pendente_anjun WHERE motorista = ?", (mot_db,))
+                removidos += c.rowcount
+        conn.commit()
+        conn.close()
+        return removidos
+    except Exception as e:
+        print(f"[Aviso] Falha ao limpar pacotes pendentes Anjun: {e}")
+        return 0
+
+def obter_motoristas_com_lote_aberto_anjun(forcar_sync=False):
+    """Retorna lista de nomes de motoristas que possuem pacotes pendentes em lote_pendente_anjun."""
+    try:
+        try:
+            sincronizar_lotes_pendentes_anjun_api(forcar=forcar_sync)
+        except Exception:
+            pass
+        conn = conectar_banco()
+        c = conn.cursor()
+        c.execute("SELECT DISTINCT motorista FROM lote_pendente_anjun")
+        rows = c.fetchall()
+        conn.close()
+        return [r[0] for r in rows if r[0]]
+    except Exception as e:
+        print(f"[Aviso] Falha ao consultar motoristas com lote aberto Anjun: {e}")
+        return []
+
+CONFIG_ANJUN_TOKENS = os.path.join(BASE_DIR, 'config_anjun_tokens.json')
+cache_sessoes_anjun_por_conta = {}
+mapa_motorista_sessao_anjun = {}
+waybills_cancelados_anjun = set()
+_ultimo_sync_lotes_anjun = 0
+
+def carregar_tokens_anjun_salvos():
+    try:
+        if os.path.exists(CONFIG_ANJUN_TOKENS):
+            with open(CONFIG_ANJUN_TOKENS, 'r', encoding='utf-8') as f:
+                return json.load(f) or {}
+    except Exception:
+        pass
+    return {}
+
+def _extrair_dados_jwt_anjun(token):
+    if not token or not isinstance(token, str) or '.' not in token:
+        return {}
+    try:
+        import base64
+        partes = token.split('.')
+        if len(partes) < 2:
+            return {}
+        payload_b64 = partes[1]
+        pad = len(payload_b64) % 4
+        if pad:
+            payload_b64 += '=' * (4 - pad)
+        raw = base64.urlsafe_b64decode(payload_b64.encode('utf-8')).decode('utf-8')
+        return json.loads(raw) or {}
+    except Exception:
+        return {}
+
+def salvar_token_anjun_conta(sess_dict, conta_id=None):
+    try:
+        if not sess_dict or not sess_dict.get("token"):
+            return
+        tk = sess_dict.get("token")
+        jwt_info = _extrair_dados_jwt_anjun(tk)
+        uname_jwt = str(jwt_info.get("username") or sess_dict.get("username") or "").strip()
+        cid_alvo = str(conta_id or sess_dict.get("conta_id") or "").strip()
+        todas_contas = carregar_contas_plataformas().get("anjun", {}).get("contas", [])
+        if uname_jwt:
+            for c in todas_contas:
+                if str(c.get("login_usuario") or "").strip().lower() == uname_jwt.lower():
+                    cid_alvo = c.get("id")
+                    break
+        if not cid_alvo:
+            cid_alvo, _ = obter_conta_ativa_plataforma("anjun")
+
+        chave = str(sess_dict.get("siteName") or jwt_info.get("siteName") or sess_dict.get("siteId") or cid_alvo or "default").strip()
+        dados = carregar_tokens_anjun_salvos()
+        dados[chave] = {
+            "conta_id": cid_alvo,
+            "username": uname_jwt,
+            "token": tk,
+            "siteId": sess_dict.get("siteId") or jwt_info.get("siteId"),
+            "siteCode": sess_dict.get("siteCode") or jwt_info.get("siteCode"),
+            "siteName": sess_dict.get("siteName") or jwt_info.get("siteName"),
+            "orgId": sess_dict.get("orgId") or jwt_info.get("orgId"),
+            "timestamp": time.time()
+        }
+        with open(CONFIG_ANJUN_TOKENS, 'w', encoding='utf-8') as f:
+            json.dump(dados, f, ensure_ascii=False, indent=2)
+        cache_sessoes_anjun_por_conta[chave] = dict(dados[chave])
+    except Exception as e:
+        print(f"[Aviso] Falha ao salvar token Anjun por conta: {e}")
+
+def _token_pertence_a_outra_conta_anjun(uname_jwt, cid_atual):
+    if not uname_jwt:
+        return False
+    uname_low = str(uname_jwt).strip().lower()
+    todas_contas = carregar_contas_plataformas().get("anjun", {}).get("contas", [])
+    for c in todas_contas:
+        c_login = str(c.get("login_usuario") or "").strip().lower()
+        if c_login and c_login == uname_low and c.get("id") != cid_atual:
+            return True
+    return False
+
+def obter_sessao_anjun_da_conta(conta_id=None, forcar=False):
+    cid, conta_obj = obter_conta_ativa_plataforma("anjun", conta_id)
+    login_esperado = str(conta_obj.get("login_usuario") or "").strip().lower()
+
+    # Se for a conta ativa no Chrome, tenta atualizar do navegador primeiro
+    if not conta_id or cid == conta_ativa or not conta_ativa:
+        atualizar_sessao_anjun(forcar=forcar)
+
+    salvos = carregar_tokens_anjun_salvos()
+    # 1. Procura pelo login_usuario exato no JWT
+    for v in salvos.values():
+        if not isinstance(v, dict) or not v.get("token"):
+            continue
+        tk = v.get("token")
+        jwt_info = _extrair_dados_jwt_anjun(tk)
+        uname_jwt = str(jwt_info.get("username") or v.get("username") or "").strip().lower()
+        if login_esperado and uname_jwt and uname_jwt == login_esperado:
+            return dict(v)
+
+    # 2. Procura pelo conta_id salvo (mesmo que o usuário tenha digitado login provisório como 'j')
+    for v in salvos.values():
+        if not isinstance(v, dict) or not v.get("token"):
+            continue
+        tk = v.get("token")
+        jwt_info = _extrair_dados_jwt_anjun(tk)
+        uname_jwt = str(jwt_info.get("username") or v.get("username") or "").strip().lower()
+        if v.get("conta_id") and v.get("conta_id") == cid and not _token_pertence_a_outra_conta_anjun(uname_jwt, cid):
+            return dict(v)
+
+    # 3. Procura se login_esperado está contido no siteName/siteCode (ex: 'b176' em 'SP-R-D176')
+    if login_esperado:
+        num_login = "".join(filter(str.isdigit, login_esperado))
+        for k, v in salvos.items():
+            if not isinstance(v, dict) or not v.get("token"):
+                continue
+            sname = str(v.get("siteName") or k or "").lower()
+            scode = str(v.get("siteCode") or "").lower()
+            if login_esperado in sname or login_esperado in scode or (num_login and len(num_login) >= 2 and (num_login in sname or num_login in scode)):
+                return dict(v)
+
+    # 4. Fallback para a sessão ativa caso não pertença a outra conta
+    if cache_sessao_anjun and cache_sessao_anjun.get("token"):
+        uname_c = str(_extrair_dados_jwt_anjun(cache_sessao_anjun.get("token")).get("username") or "").strip().lower()
+        if not _token_pertence_a_outra_conta_anjun(uname_c, cid):
+            return dict(cache_sessao_anjun)
+
+    return {}
+
+def atualizar_sessao_anjun(drv=None, forcar=False):
+    """
+    Captura automaticamente o token de autorização JWT e dados do galpão Anjun
+    a partir da janela do Chrome onde o usuário está logado, respeitando a conta_ativa.
+    Nunca captura token de abas de outras plataformas (ex: iMile/Loggi).
+    """
+    global cache_sessao_anjun, driver
+    cid, conta_obj = obter_conta_ativa_plataforma("anjun")
+    login_esperado = str(conta_obj.get("login_usuario") or "").strip().lower()
+
+    if not forcar and cache_sessao_anjun.get("token") and (time.time() - cache_sessao_anjun.get("timestamp", 0) < 120):
+        uname_cache = str(_extrair_dados_jwt_anjun(cache_sessao_anjun.get("token")).get("username") or "").strip().lower()
+        if (not login_esperado or not uname_cache or uname_cache == login_esperado) or not _token_pertence_a_outra_conta_anjun(uname_cache, cid):
+            return cache_sessao_anjun
+
+    alvo_driver = drv if drv else (driver if (not plataforma_ativa or 'anjun' in str(plataforma_ativa).lower()) else None)
+    aba_anjun_encontrada = False
+
+    if alvo_driver:
+        try:
+            if hasattr(alvo_driver, 'window_handles') and alvo_driver.window_handles:
+                try:
+                    curr_url = alvo_driver.current_url.lower()
+                except Exception:
+                    curr_url = ""
+                if "anjun" in curr_url:
+                    aba_anjun_encontrada = True
+                else:
+                    for h in alvo_driver.window_handles:
+                        try:
+                            alvo_driver.switch_to.window(h)
+                            if "anjun" in alvo_driver.current_url.lower():
+                                aba_anjun_encontrada = True
+                                break
+                        except Exception:
+                            pass
+
+            # SOMENTE lê localStorage se estivermos de fato em uma aba da Anjun!
+            if aba_anjun_encontrada:
+                user_raw = alvo_driver.execute_script("return window.localStorage.getItem('anjun-user');")
+                if user_raw:
+                    try:
+                        u_obj = json.loads(user_raw)
+                        token = u_obj.get("token")
+                        if token:
+                            info = u_obj.get("userInfo") or {}
+                            uname_tok = str(_extrair_dados_jwt_anjun(token).get("username") or info.get("username") or "").strip().lower()
+                            novo_site_id = info.get("siteId") or cache_sessao_anjun.get("siteId")
+                            if cache_sessao_anjun.get("siteId") and novo_site_id and cache_sessao_anjun.get("siteId") != novo_site_id:
+                                cache_motoristas_anjun["lista"] = []
+                                cache_motoristas_anjun["mapa"] = {}
+                                cache_motoristas_anjun["timestamp"] = 0
+                            sess_capturada = {
+                                "token": token,
+                                "timestamp": time.time(),
+                                "siteId": info.get("siteId") or cache_sessao_anjun.get("siteId"),
+                                "siteCode": info.get("siteCode") or cache_sessao_anjun.get("siteCode"),
+                                "siteName": info.get("siteName") or cache_sessao_anjun.get("siteName"),
+                                "orgId": info.get("orgId") or cache_sessao_anjun.get("orgId"),
+                                "username": uname_tok
+                            }
+                            salvar_token_anjun_conta(sess_capturada, conta_id=cid)
+                            if (not login_esperado or not uname_tok or uname_tok == login_esperado) or not _token_pertence_a_outra_conta_anjun(uname_tok, cid):
+                                cache_sessao_anjun.update(sess_capturada)
+                                print(f"[+] [Anjun API] Sessão capturada do Chrome! Estação: {cache_sessao_anjun.get('siteName')} | Token: {token[:12]}...")
+                                return cache_sessao_anjun
+                    except Exception:
+                        pass
+
+                ls_token = alvo_driver.execute_script("return window.localStorage.getItem('token') || window.sessionStorage.getItem('token') || window.localStorage.getItem('Admin-Token');")
+                if ls_token:
+                    tk_clean = ls_token.replace('Bearer ', '').strip()
+                    uname_tok = str(_extrair_dados_jwt_anjun(tk_clean).get("username") or "").strip().lower()
+                    salvar_token_anjun_conta({"token": tk_clean}, conta_id=cid)
+                    if (not login_esperado or not uname_tok or uname_tok == login_esperado) or not _token_pertence_a_outra_conta_anjun(uname_tok, cid):
+                        cache_sessao_anjun["token"] = tk_clean
+                        cache_sessao_anjun["timestamp"] = time.time()
+                        print(f"[+] [Anjun API] Token direto capturado do Chrome: {cache_sessao_anjun['token'][:12]}...")
+                        return cache_sessao_anjun
+        except Exception as e:
+            print(f"[Aviso] [Anjun API] Não foi possível extrair sessão do Chrome: {e}")
+
+    # Usa o token salvo correspondente especificamente à CONTA ATIVA da Anjun
+    salvos = carregar_tokens_anjun_salvos()
+    if salvos:
+        escolhido = None
+        for k, v in salvos.items():
+            if not isinstance(v, dict) or not v.get("token"):
+                continue
+            uname_jwt = str(_extrair_dados_jwt_anjun(v["token"]).get("username") or v.get("username") or "").strip().lower()
+            if login_esperado and uname_jwt and uname_jwt == login_esperado:
+                escolhido = v
+                break
+        if not escolhido:
+            for k, v in salvos.items():
+                if not isinstance(v, dict) or not v.get("token"):
+                    continue
+                uname_jwt = str(_extrair_dados_jwt_anjun(v["token"]).get("username") or v.get("username") or "").strip().lower()
+                if v.get("conta_id") and v.get("conta_id") == cid and not _token_pertence_a_outra_conta_anjun(uname_jwt, cid):
+                    escolhido = v
+                    break
+        if not escolhido and login_esperado:
+            num_login = "".join(filter(str.isdigit, login_esperado))
+            for k, v in salvos.items():
+                if not isinstance(v, dict) or not v.get("token"):
+                    continue
+                sname = str(v.get("siteName") or k or "").lower()
+                if login_esperado in sname or (num_login and len(num_login) >= 2 and num_login in sname):
+                    escolhido = v
+                    break
+        if not escolhido and not cache_sessao_anjun.get("token"):
+            escolhido = max(salvos.values(), key=lambda x: x.get("timestamp", 0))
+        if escolhido and escolhido.get("token"):
+            cache_sessao_anjun.update(escolhido)
+            cache_sessao_anjun["timestamp"] = time.time()
+
+    return cache_sessao_anjun
+
+def obter_todas_sessoes_anjun_conhecidas():
+    """Retorna lista de dicionários de sessão Anjun (ativa + salvas por conta)."""
+    sess_principal = atualizar_sessao_anjun()
+    salvos = carregar_tokens_anjun_salvos()
+    for k, v in salvos.items():
+        if v and v.get("token"):
+            cache_sessoes_anjun_por_conta[k] = v
+
+    lista_sess = []
+    tokens_vistos = set()
+    if sess_principal and sess_principal.get("token"):
+        lista_sess.append(dict(sess_principal))
+        tokens_vistos.add(sess_principal["token"])
+    for v in cache_sessoes_anjun_por_conta.values():
+        tk = v.get("token")
+        if tk and tk not in tokens_vistos:
+            lista_sess.append(dict(v))
+            tokens_vistos.add(tk)
+    return lista_sess
+
+def executar_post_anjun(endpoint_path, payload, token_override=None):
+    """
+    Executa POST na API da Anjun em ~25-60ms com os headers e token de sessão.
+    Retorna (sucesso: bool, mensagem: str, dados_resposta: dict)
+    """
+    sessao = atualizar_sessao_anjun()
+    token = token_override or sessao.get("token")
+    if not token and not token_override:
+        sessao = atualizar_sessao_anjun(forcar=True)
+        token = sessao.get("token")
+    if not token:
+        return False, "Sessão da Anjun não encontrada no navegador Chrome", {}
+
+    url = f"https://newsupplier.anjunexpress.com{endpoint_path}"
+    headers = {
+        "accept": "application/json, text/plain, */*",
+        "content-type": "application/json",
+        "token": token,
+        "origin": "https://newsupplier.anjunexpress.com",
+        "referer": "https://newsupplier.anjunexpress.com/",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"
+    }
+
+    data = json.dumps(payload).encode('utf-8')
+    ultimo_erro = ""
+    for tentativa in range(1, 4):
+        try:
+            req = urllib.request.Request(url, data=data, headers=headers)
+            with urllib.request.urlopen(req, timeout=8.0) as resp:
+                raw = resp.read().decode('utf-8')
+                res = json.loads(raw) if raw else {}
+                if not isinstance(res, dict):
+                    res = {}
+                
+                code = res.get("code")
+                msg = res.get("msg") or res.get("message") or ""
+                
+                if code in [200, "200", 0, "0"] or (code is None and "data" in res):
+                    return True, msg or "Operação realizada com sucesso", res
+                elif code in [401, "401", 403, "403"] or any(k in (msg or "").lower() for k in ["sessão", "sessao", "token", "unauthorized", "login"]):
+                    if not token_override:
+                        cache_sessao_anjun["token"] = None
+                        if tentativa == 1:
+                            sessao_nova = atualizar_sessao_anjun(forcar=True)
+                            tk_novo = sessao_nova.get("token")
+                            if tk_novo:
+                                headers["token"] = tk_novo
+                                print("[*] [Anjun API] Token renovado automaticamente! Retentando requisição...")
+                                continue
+                    return False, f"Sessão expirada: {msg}", res
+                else:
+                    return False, msg or f"Erro retornado pela Anjun (code: {code})", res
+        except urllib.error.HTTPError as he:
+            if he.code in (401, 403) and not token_override:
+                cache_sessao_anjun["token"] = None
+                if tentativa == 1:
+                    sessao_nova = atualizar_sessao_anjun(forcar=True)
+                    tk_novo = sessao_nova.get("token")
+                    if tk_novo:
+                        headers["token"] = tk_novo
+                        print(f"[*] [Anjun API] HTTP {he.code} recebido. Token renovado automaticamente, retentando...")
+                        continue
+            try:
+                err_body = he.read().decode('utf-8')
+                err_json = json.loads(err_body) if err_body else {}
+                if not isinstance(err_json, dict):
+                    err_json = {}
+                msg = err_json.get("msg") or err_json.get("message") or str(he)
+                return False, f"Sessão expirada ({he.code}): {msg}" if he.code in (401, 403) else msg, err_json
+            except Exception:
+                return False, f"Erro HTTP {he.code}: {str(he)}", {}
+        except Exception as e:
+            ultimo_erro = str(e)
+            print(f"[!] [Anjun API] Oscilação de internet em {endpoint_path} (Tentativa {tentativa}/3): {ultimo_erro}")
+            if tentativa < 3:
+                time.sleep(0.4)
+                continue
+    return False, f"Internet lenta / oscilação na Anjun ({ultimo_erro})", {}
+
+def extrair_registros_pagina_anjun(res):
+    """Extrai a lista de registros de /admin/taskAllocation/page tanto quando data é list quanto quando é dict."""
+    if not isinstance(res, dict):
+        return []
+    d = res.get("data")
+    if isinstance(d, list):
+        return d
+    if isinstance(d, dict):
+        return d.get("records") or d.get("list") or []
+    return []
+
+def sincronizar_lotes_pendentes_anjun_api(forcar=False):
+    """
+    Consulta na API da Anjun (/admin/taskAllocation/page com finalScanOperationType=3)
+    todos os pacotes que estão abertos (não finalizados) na tabela de atribuição
+    de todas as contas Anjun conhecidas, sincronizando-os em lote_pendente_anjun.
+    """
+    global _ultimo_sync_lotes_anjun, mapa_motorista_sessao_anjun
+    agora = time.time()
+    if not forcar and (agora - _ultimo_sync_lotes_anjun < 8.0):
+        return
+    _ultimo_sync_lotes_anjun = agora
+
+    sessoes = obter_todas_sessoes_anjun_conhecidas()
+    if not sessoes:
+        return
+
+    novos_pares = []
+    for sess in sessoes:
+        tk = sess.get("token")
+        if not tk:
+            continue
+        ok, _, res = executar_post_anjun("/admin/taskAllocation/page", {
+            "finalScanOperationType": 3,
+            "pageNo": 1,
+            "pageSize": 500
+        }, token_override=tk)
+        if not ok or not isinstance(res, dict):
+            continue
+        records = extrair_registros_pagina_anjun(res)
+        for r in records:
+            if not isinstance(r, dict):
+                continue
+            wb = str(r.get("waybillNumber") or "").strip()
+            mot = str(r.get("dispatchUserName") or "").strip()
+            uid = r.get("dispatchUserId")
+            if not wb or not mot:
+                continue
+            if wb in waybills_cancelados_anjun:
+                continue
+            novos_pares.append((wb, mot))
+            norm_m = remover_acentos(mot.lower())
+            mapa_motorista_sessao_anjun[norm_m] = {
+                "token": tk,
+                "dispatchUserId": uid,
+                "dispatchUserName": mot,
+                "siteName": sess.get("siteName", "SP-R-D093"),
+                "siteId": sess.get("siteId")
+            }
+
+    if novos_pares:
+        try:
+            conn = conectar_banco()
+            c = conn.cursor()
+            c.executemany("INSERT OR REPLACE INTO lote_pendente_anjun (waybill, motorista, timestamp) VALUES (?, ?, CURRENT_TIMESTAMP)", novos_pares)
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"[Aviso] Falha ao sincronizar lote_pendente_anjun da API: {e}")
+
+def carregar_motoristas_anjun_api(forcar=False, conta_id=None):
+    """
+    Obtém via API oficial da Anjun (/user/pm/account/pageQuery) os entregadores
+    ativos cadastrados especificamente na BASE ATIVA (conta_id), com seus respectivos id e username.
+    """
+    global cache_motoristas_anjun, cache_motoristas_anjun_por_conta
+    cid, conta_obj = obter_conta_ativa_plataforma("anjun", conta_id)
+
+    cache_conta = cache_motoristas_anjun_por_conta.get(cid)
+    if not forcar and cache_conta and cache_conta.get("lista") and (time.time() - cache_conta.get("timestamp", 0) < 600):
+        return cache_conta["lista"], cache_conta["mapa"]
+
+    sess_conta = obter_sessao_anjun_da_conta(cid, forcar=forcar)
+    token_alvo = sess_conta.get("token")
+
+    if not token_alvo:
+        if cache_conta and cache_conta.get("lista"):
+            return cache_conta["lista"], cache_conta["mapa"]
+        salvos_base = obter_motoristas_da_base_salvos("anjun", cid)
+        if salvos_base:
+            lista_fb = [{"id": idx + 1, "username": n, "realName": n, "code": ""} for idx, n in enumerate(salvos_base)]
+            mapa_fb = {remover_acentos(n.lower()): obj for n, obj in zip(salvos_base, lista_fb)}
+            return lista_fb, mapa_fb
+        return [], {}
+
+    url = "https://newsupplier.anjunexpress.com/user/pm/account/pageQuery"
+    payload = {
+        "pageNumber": 1,
+        "pageSize": 200,
+        "params": {
+            "code": "",
+            "username": "",
+            "orgId": "",
+            "accountState": 1,
+            "userState": -1,
+            "accountRole": -1
+        }
+    }
+
+    records = []
+    headers = {
+        "accept": "application/json, text/plain, */*",
+        "content-type": "application/json",
+        "token": token_alvo,
+        "origin": "https://newsupplier.anjunexpress.com",
+        "referer": "https://newsupplier.anjunexpress.com/",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"
+    }
+    try:
+        data = json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(url, data=data, headers=headers)
+        with urllib.request.urlopen(req, timeout=8.0) as resp:
+            res = json.loads(resp.read().decode('utf-8'))
+            d_obj = res.get("data") if isinstance(res, dict) else {}
+            recs = (d_obj.get("records") if isinstance(d_obj, dict) else []) or []
+            if isinstance(recs, list):
+                records.extend(recs)
+    except Exception as e:
+        print(f"[Aviso] [Anjun API] Falha ao consultar motoristas da base {cid}: {e}")
+
+    if not records:
+        if cache_conta and cache_conta.get("lista"):
+            return cache_conta["lista"], cache_conta["mapa"]
+        salvos_base = obter_motoristas_da_base_salvos("anjun", cid)
+        if salvos_base:
+            lista_fb = [{"id": idx + 1, "username": n, "realName": n, "code": ""} for idx, n in enumerate(salvos_base)]
+            mapa_fb = {remover_acentos(n.lower()): obj for n, obj in zip(salvos_base, lista_fb)}
+            return lista_fb, mapa_fb
+        return [], {}
+
+    try:
+        lista = []
+        mapa = {}
+        ids_vistos = set()
+        for d in records:
+            uname = (d.get("username") or "").strip()
+            rname = (d.get("realName") or "").strip()
+            uid = d.get("id")
+            if not uname or not uid or uid in ids_vistos:
+                continue
+            ids_vistos.add(uid)
+            
+            obj = {
+                "id": uid,
+                "username": uname,
+                "realName": rname or uname,
+                "code": d.get("code") or ""
+            }
+            lista.append(obj)
+            
+            # Normalização para busca
+            norm_u = remover_acentos(uname.lower())
+            norm_r = remover_acentos(rname.lower()) if rname else norm_u
+            
+            mapa[norm_u] = obj
+            mapa[norm_r] = obj
+            
+            for n in [norm_u, norm_r]:
+                partes = n.split()
+                if len(partes) >= 2:
+                    mapa[" ".join(partes[:2])] = obj
+                    mapa[partes[-1]] = obj
+                    mapa[partes[0]] = obj
+
+        cache_motoristas_anjun["lista"] = lista
+        cache_motoristas_anjun["mapa"] = mapa
+        cache_motoristas_anjun["timestamp"] = time.time()
+        cache_motoristas_anjun_por_conta[cid] = {
+            "lista": lista,
+            "mapa": mapa,
+            "timestamp": time.time()
+        }
+        salvar_motoristas_da_base("anjun", cid, [m["username"] for m in lista])
+        print(f"[+] [Anjun API] {len(lista)} entregadores ativos sincronizados da base {cid} ({sess_conta.get('siteName', '')})!")
+        
+        # Sincroniza no banco SQLite apenas se o motorista ainda não tiver nenhuma cidade vinculada
+        try:
+            conn = conectar_banco()
+            cursor = conn.cursor()
+            for mot in lista:
+                nome = mot["username"]
+                cursor.execute(
+                    "SELECT 1 FROM motoristas_plataforma WHERE LOWER(motorista) = LOWER(?) AND LOWER(plataforma) = 'anjun' LIMIT 1",
+                    (nome,)
+                )
+                if cursor.fetchone():
+                    continue
+                cidade_cand = "Geral"
+                for c_item in carregar_cidades():
+                    if c_item and remover_acentos(c_item.lower()) in remover_acentos(nome.lower()):
+                        cidade_cand = c_item
+                        break
+                cursor.execute("""
+                    INSERT OR IGNORE INTO motoristas_plataforma (cidade, motorista, plataforma)
+                    VALUES (?, ?, 'anjun')
+                """, (cidade_cand, nome))
+            conn.commit()
+            conn.close()
+            invalidar_cache_ram_cidades_motoristas()
+            try:
+                excel_path = obter_caminho_excel()
+                gerar_planilha_motoristas_excel(excel_path)
+                if os.path.exists(excel_path):
+                    meta_mtime_file = os.path.join(BASE_DIR, '.excel_sync_meta')
+                    with open(meta_mtime_file, 'w') as f_meta:
+                        f_meta.write(str(os.path.getmtime(excel_path)))
+            except Exception:
+                pass
+        except Exception:
+            pass
+            
+        return lista, mapa
+    except Exception as e:
+        print(f"[Aviso] [Anjun API] Falha ao sincronizar motoristas da API ({cid}): {e}")
+        return cache_motoristas_anjun.get("lista", []), cache_motoristas_anjun.get("mapa", {})
+
+def resolver_motorista_anjun_api(mot_clean):
+    """
+    Localiza o objeto do entregador Anjun {id, username, realName} por aproximação inteligente.
+    """
+    if not mot_clean:
+        return None
+        
+    lista, mapa = carregar_motoristas_anjun_api()
+    if not lista:
+        lista, mapa = carregar_motoristas_anjun_api(forcar=True)
+        
+    if not lista:
+        return None
+
+    try:
+        anjun_map, _ = carregar_mapeamento_motoristas()
+        mot_clean = anjun_map.get(mot_clean.lower(), mot_clean)
+    except Exception:
+        pass
+
+    nb = remover_acentos(mot_clean.strip().lower()).replace('-', '').replace('_', '').replace(' ', '')
+    
+    # 1. Match direto no mapa
+    norm_direct = remover_acentos(mot_clean.strip().lower())
+    if norm_direct in mapa:
+        return mapa[norm_direct]
+
+    # 2. Match exato normalizado sem espaços ou símbolos
+    for d in lista:
+        u_clean = remover_acentos(d["username"].lower()).replace('-', '').replace('_', '').replace(' ', '')
+        r_clean = remover_acentos(d["realName"].lower()).replace('-', '').replace('_', '').replace(' ', '')
+        if nb == u_clean or nb == r_clean:
+            return d
+
+    # 3. Match por substring
+    for d in lista:
+        u_clean = remover_acentos(d["username"].lower()).replace('-', '').replace('_', '').replace(' ', '')
+        r_clean = remover_acentos(d["realName"].lower()).replace('-', '').replace('_', '').replace(' ', '')
+        if nb in u_clean or u_clean in nb or nb in r_clean or r_clean in nb:
+            return d
+
+    # 4. Match por pontuação de palavras (Tokens)
+    tokens = [t for t in re.split(r'[\s\-_]+', remover_acentos(mot_clean.strip().lower())) if len(t) >= 2]
+    best = None
+    best_score = 0
+    for d in lista:
+        combined = (remover_acentos(d["username"].lower()) + " " + remover_acentos(d["realName"].lower()))
+        score = sum(1 for t in tokens if t in combined)
+        if score > best_score:
+            best_score = score
+            best = d
+    if best and best_score >= 1:
+        return best
+
+    return None
+
+def bipar_pacote_anjun_api(codigo_qr, motorista):
+    """
+    Executa a bipagem ultra-rápida via API na Anjun Express em ~60-100ms:
+    1. Entrada na Base (warehousingScan + queryList + warehousingUpload)
+    2. Atribuição ao Entregador (taskAllocation)
+    Retorna (sucesso: bool, mensagem: str, motorista_atribuido: str, cidade: str, cep: str, destinatario: str, endereco: str)
+    """
+    sessao = atualizar_sessao_anjun()
+    token = sessao.get("token")
+    if not token:
+        sessao = atualizar_sessao_anjun(forcar=True)
+        token = sessao.get("token")
+    if not token:
+        return "aguardando_login", "Sessão da Anjun ausente no navegador", "", "", "", "", ""
+
+    codigo_limpo = str(codigo_qr).strip().upper()
+    
+    # 1. ENTRADA NA BASE
+    payload_scan = {
+        "waybillNumber": codigo_limpo,
+        "lastOrderNumber": ""
+    }
+    ok_scan, msg_scan, res_scan = executar_post_anjun("/api/wms/console/v1/storage/dispatch/warehousingScan", payload_scan)
+    
+    shelves = "187"
+    scan_id = None
+    order_num_ql = None
+    first = None
+    
+    if ok_scan:
+        # Consulta área / scanId para confirmação
+        ok_ql, _, res_ql = executar_post_anjun("/admin/scanRecord/warehousing/queryList", {"finalScanOperationType": 2})
+        if ok_ql and isinstance(res_ql, dict):
+            records = res_ql.get("data") or []
+            if isinstance(records, list) and len(records) > 0 and isinstance(records[0], dict):
+                first = records[0]
+                scan_id = first.get("id")
+                shelves = first.get("shelves") or shelves
+                order_num_ql = first.get("orderNumber") or first.get("waybillNumber")
+                
+        # Finaliza a entrada com warehousingUpload
+        payload_upload = {
+            "source": 1,
+            "waybillNumberList": [codigo_limpo],
+            "scanIds": [scan_id] if scan_id else [],
+            "createTaskParamList": [
+                {
+                    "waybillNumber": codigo_limpo,
+                    "dispatchUserId": None,
+                    "dispatchUserName": None,
+                    "shelves": shelves
+                }
+            ]
+        }
+        ok_up, msg_up, _ = executar_post_anjun("/api/wms/console/v1/storage/dispatch/warehousingUpload", payload_upload)
+        if not ok_up:
+            msg_up_low = (msg_up or "").lower()
+            if not any(k in msg_up_low for k in ["sucesso", "success", "já possui entrada", "ja possui entrada", "não repita", "nao repita", "já registrado", "ja registrado", "duplicad"]):
+                time.sleep(0.25)
+                ok_up, msg_up, _ = executar_post_anjun("/api/wms/console/v1/storage/dispatch/warehousingUpload", payload_upload)
+                msg_up_low = (msg_up or "").lower()
+                if not ok_up and not any(k in msg_up_low for k in ["sucesso", "success", "já possui entrada", "ja possui entrada", "não repita", "nao repita", "já registrado", "ja registrado", "duplicad"]):
+                    print(f"[!] [Anjun API] Erro no warehousingUpload: {msg_up}")
+                    return False, f"Entrada Anjun não confirmada pelo servidor: {msg_up}", "", "", "", "", ""
+    else:
+        msg_low = (msg_scan or "").lower()
+        if any(k in msg_low for k in ["já possui entrada", "ja possui entrada", "possui entrada", "não repita", "nao repita", "já bipado", "ja bipado", "duplicad", "já recepcionado", "ja recepcionado", "já registrado", "ja registrado", "armazém", "armazem", "já existe", "ja existe", "já escaneado", "ja escaneado"]):
+            # Já possui entrada na base, prossegue diretamente para a consulta e atribuição ao motorista!
+            print(f"[*] [Anjun API] Pacote {codigo_limpo} já possui entrada na base ({msg_scan}). Prosseguindo para atribuição ao motorista...")
+            pass
+        elif any(k in msg_low for k in ["sessão", "sessao", "token", "401", "unauthorized"]):
+            cache_sessao_anjun["token"] = None
+            return "aguardando_login", f"Sessão expirada: {msg_scan}", "", "", "", "", ""
+        else:
+            # Erro impeditivo real da Anjun
+            return False, msg_scan or "Erro na entrada Anjun", "", "", "", "", ""
+
+    # Extrai possíveis códigos alternativos (ex: código AJ... se foi escaneado um código TT...)
+    order_num_scan = None
+    d_scan = {}
+    if isinstance(res_scan, dict):
+        d_scan_raw = res_scan.get("data")
+        if isinstance(d_scan_raw, dict):
+            d_scan = d_scan_raw
+            order_num_scan = d_scan.get("orderNumber") or d_scan.get("waybillNumber") or d_scan.get("expressNumber")
+            
+    codigos_busca = list(dict.fromkeys([c for c in [codigo_limpo, order_num_ql, order_num_scan] if c]))
+
+    # 2. DETALHES DE CIDADE, CEP, DESTINATÁRIO, BAIRRO, TELEFONE, EMPRESA, PRODUTO E VALOR
+    cidade_pacote = ""
+    cep_pacote = ""
+    destinatario_pacote = ""
+    endereco_pacote = ""
+    bairro_pacote = ""
+    tel_pacote = ""
+    emp_pacote = ""
+    prod_pacote = ""
+    val_pacote = ""
+
+    def _extrair_extras_anjun(obj):
+        nonlocal bairro_pacote, tel_pacote, emp_pacote, prod_pacote, val_pacote
+        if not isinstance(obj, dict):
+            return
+        if not bairro_pacote:
+            bairro_pacote = str(obj.get("receiveArea") or obj.get("receiveNeighborhood") or obj.get("receiveDistrict") or obj.get("areaName") or "").strip()
+        if not tel_pacote:
+            tel_pacote = str(obj.get("receivePhone") or obj.get("receiveMobile") or obj.get("receiveTel") or obj.get("consigneePhone") or "").strip()
+        if not emp_pacote:
+            emp_pacote = str(obj.get("customerName") or obj.get("merchantName") or obj.get("senderName") or obj.get("clientName") or obj.get("platformName") or obj.get("channelName") or "").strip()
+        if not prod_pacote:
+            prod_pacote = str(obj.get("goodsName") or obj.get("itemName") or obj.get("cargoName") or obj.get("productName") or obj.get("cargoTypeDesc") or "").strip()
+        if not val_pacote:
+            v_cand = obj.get("totalParcelDeclaredValue") or obj.get("declaredValue") or obj.get("goodsValue") or obj.get("parcelValue")
+            if v_cand is not None and str(v_cand).strip() not in ["", "0", "0.0"]:
+                val_pacote = str(v_cand).strip()
+
+    _extrair_extras_anjun(d_scan)
+    _extrair_extras_anjun(first)
+
+    # Se for código com prefixo 'TT' (TikTok) ou de parceiro, consulta imediatamente /admin/package/pageQuery
+    # para obter a cidade e o waybill oficial (AJ...) antes das demais tentativas
+    if codigo_limpo.upper().startswith("TT"):
+        try:
+            payload_pq_ini = {
+                "pageNumber": 1,
+                "pageSize": 50,
+                "params": {
+                    "type": 1,
+                    "searchTimeType": 0,
+                    "number": codigo_limpo,
+                    "scanNumberList": [codigo_limpo]
+                }
+            }
+            ok_pq_ini, _, res_pq_ini = executar_post_anjun("/admin/package/pageQuery", payload_pq_ini)
+            if ok_pq_ini and isinstance(res_pq_ini, dict):
+                d_pq_ini = res_pq_ini.get("data") if isinstance(res_pq_ini.get("data"), dict) else {}
+                recs_pq_ini = d_pq_ini.get("records") or []
+                if recs_pq_ini and len(recs_pq_ini) > 0 and isinstance(recs_pq_ini[0], dict):
+                    p_rec_ini = recs_pq_ini[0]
+                    cidade_pacote = (p_rec_ini.get("receiveCity") or p_rec_ini.get("city") or "").strip()
+                    cep_pacote = cep_pacote or (p_rec_ini.get("receiveZipcode") or "").strip()
+                    destinatario_pacote = destinatario_pacote or (p_rec_ini.get("receiveName") or "").strip()
+                    endereco_pacote = endereco_pacote or (p_rec_ini.get("receiveAddress") or "").strip()
+                    bairro_pacote = bairro_pacote or (p_rec_ini.get("receiveArea") or "").strip()
+                    aj_pkg_ini = (p_rec_ini.get("packageNumber") or "").strip()
+                    if aj_pkg_ini and aj_pkg_ini not in codigos_busca:
+                        codigos_busca.append(aj_pkg_ini)
+                        order_num_scan = aj_pkg_ini
+                    _extrair_extras_anjun(p_rec_ini)
+                    if cidade_pacote:
+                        print(f"[+] [Anjun API] Pacote TT resolvido via /admin/package/pageQuery: Cidade='{cidade_pacote}' | AJ='{aj_pkg_ini}'")
+        except Exception as e_ini:
+            print(f"[Aviso] [Anjun API] Erro na consulta prioritária de TT: {e_ini}")
+
+    # Tentativa 1: taskAllocation/printList (mais rápido e detalhado)
+    if not cidade_pacote:
+        try:
+            ok_info, _, res_info = executar_post_anjun("/admin/taskAllocation/printList", {
+                "dispatchUserName": "",
+                "waybillNumberList": codigos_busca
+            })
+            if ok_info and isinstance(res_info, dict):
+                d_info = res_info.get("data") if isinstance(res_info.get("data"), dict) else {}
+                vol = d_info.get("voList") or []
+                # Se acabou de dar entrada e não veio na 1ª tentativa, espera 120ms e tenta novamente
+                if not vol and ok_scan:
+                    time.sleep(0.12)
+                    ok_info, _, res_info = executar_post_anjun("/admin/taskAllocation/printList", {
+                        "dispatchUserName": "",
+                        "waybillNumberList": codigos_busca
+                    })
+                    if ok_info and isinstance(res_info, dict):
+                        d_info = res_info.get("data") if isinstance(res_info.get("data"), dict) else {}
+                        vol = d_info.get("voList") or []
+                if vol and len(vol) > 0 and isinstance(vol[0], dict):
+                    p_item = vol[0]
+                    cidade_pacote = (p_item.get("receiveCity") or "").strip()
+                    cep_pacote = (p_item.get("receiveZipcode") or "").strip()
+                    destinatario_pacote = (p_item.get("receiveName") or "").strip()
+                    endereco_pacote = (p_item.get("receiveAddress") or "").strip()
+                    _extrair_extras_anjun(p_item)
+        except Exception as e_info:
+            print(f"[Aviso] [Anjun API] Erro ao consultar printList: {e_info}")
+
+    # Tentativa 2: Extrair do scanRecord/queryList caso printList não tenha retornado
+    if not cidade_pacote and first:
+        cidade_pacote = (first.get("receiveCity") or first.get("destination") or first.get("areaName") or "").strip()
+        cep_pacote = cep_pacote or (first.get("receiveZipcode") or "").strip()
+        destinatario_pacote = destinatario_pacote or (first.get("receiveName") or "").strip()
+        endereco_pacote = endereco_pacote or (first.get("receiveAddress") or "").strip()
+
+    # Tentativa 3: Se não encontrou, busca na página de alocação de tarefas (/admin/taskAllocation/page)
+    if not cidade_pacote:
+        for cod in codigos_busca:
+            try:
+                ok_page, _, res_page = executar_post_anjun("/admin/taskAllocation/page", {
+                    "waybillNumber": cod,
+                    "pageNo": 1,
+                    "pageSize": 10
+                })
+                if ok_page and isinstance(res_page, dict):
+                    page_list = extrair_registros_pagina_anjun(res_page)
+                    if page_list and len(page_list) > 0 and isinstance(page_list[0], dict):
+                        p_rec = page_list[0]
+                        cidade_pacote = (p_rec.get("receiveCity") or p_rec.get("city") or "").strip()
+                        cep_pacote = cep_pacote or (p_rec.get("receiveZipcode") or "").strip()
+                        destinatario_pacote = destinatario_pacote or (p_rec.get("receiveName") or "").strip()
+                        endereco_pacote = endereco_pacote or (p_rec.get("receiveAddress") or "").strip()
+                        _extrair_extras_anjun(p_rec)
+                        if cidade_pacote:
+                            break
+            except Exception:
+                pass
+
+    # Tentativa 3.5: Consulta geral de pacotes Anjun (/admin/package/pageQuery)
+    # Essencial para qualquer pacote que não trouxe cidade nas telas de alocação
+    if not cidade_pacote:
+        for cod in list(codigos_busca):
+            try:
+                payload_pq = {
+                    "pageNumber": 1,
+                    "pageSize": 50,
+                    "params": {
+                        "type": 1,
+                        "searchTimeType": 0,
+                        "number": cod,
+                        "scanNumberList": [cod]
+                    }
+                }
+                ok_pq, _, res_pq = executar_post_anjun("/admin/package/pageQuery", payload_pq)
+                if ok_pq and isinstance(res_pq, dict):
+                    d_pq = res_pq.get("data") if isinstance(res_pq.get("data"), dict) else {}
+                    recs_pq = d_pq.get("records") or []
+                    if recs_pq and len(recs_pq) > 0 and isinstance(recs_pq[0], dict):
+                        p_rec = recs_pq[0]
+                        cidade_pacote = (p_rec.get("receiveCity") or p_rec.get("city") or "").strip()
+                        cep_pacote = cep_pacote or (p_rec.get("receiveZipcode") or "").strip()
+                        destinatario_pacote = destinatario_pacote or (p_rec.get("receiveName") or "").strip()
+                        endereco_pacote = endereco_pacote or (p_rec.get("receiveAddress") or "").strip()
+                        bairro_pacote = bairro_pacote or (p_rec.get("receiveArea") or "").strip()
+                        aj_pkg = (p_rec.get("packageNumber") or "").strip()
+                        if aj_pkg:
+                            if aj_pkg not in codigos_busca:
+                                codigos_busca.append(aj_pkg)
+                            if not order_num_scan:
+                                order_num_scan = aj_pkg
+                        _extrair_extras_anjun(p_rec)
+                        if cidade_pacote:
+                            print(f"[+] [Anjun API] Cidade encontrada via /admin/package/pageQuery para {cod}: {cidade_pacote} (AJ: {aj_pkg or cod})")
+                            break
+            except Exception as e_pq:
+                print(f"[Aviso] [Anjun API] Erro ao consultar /admin/package/pageQuery: {e_pq}")
+
+    # Tentativa 4: Se temos o CEP mas a cidade não veio, resolve pelo CEP via ViaCEP/cache local!
+    if not cidade_pacote and cep_pacote:
+        try:
+            cid_cep = obter_cidade_por_cep(cep_pacote)
+            if cid_cep:
+                cidade_pacote = cid_cep
+                print(f"[+] [Anjun API] Cidade resolvida com sucesso a partir do CEP {cep_pacote}: {cidade_pacote}")
+        except Exception:
+            pass
+
+    registrar_detalhes_extras_pacote(
+        codigos_busca + [codigo_qr],
+        bairro=bairro_pacote,
+        telefone=tel_pacote,
+        negocios=emp_pacote,
+        produto=prod_pacote,
+        valor_declarado=val_pacote,
+        recebedor=destinatario_pacote,
+        cep=cep_pacote,
+        endereco=endereco_pacote
+    )
+
+    if cidade_pacote:
+        print(f"[+] [Anjun API] Informações obtidas: Cidade: {cidade_pacote} | CEP: {cep_pacote} | Endereço: {endereco_pacote} | Destinatário: {destinatario_pacote}")
+
+    # 3. VERIFICAÇÃO DE DIVERGÊNCIA DE CIDADE / CEP vs MOTORISTA
+    mot_clean = str(motorista).strip() if motorista else ""
+    if mot_clean and mot_clean not in ["---", "Apenas Entrada (Sem Atribuição)"]:
+        if cidade_pacote:
+            lista_cidades = carregar_cidades()
+            cidade_map = encontrar_cidade_mapeada(cidade_pacote, lista_cidades) or cidade_pacote
+            mots_esperados = carregar_motoristas_cidade(cidade_map, "anjun", cep=cep_pacote)
+            if not mots_esperados and cidade_map != cidade_pacote:
+                mots_esperados = carregar_motoristas_cidade(cidade_pacote, "anjun", cep=cep_pacote)
+                
+            if mots_esperados:
+                norm_mot = remover_acentos(mot_clean.lower()).replace('-', '').replace('_', '').replace(' ', '')
+                da_obj_check = resolver_motorista_anjun_api(mot_clean)
+                da_uname_norm = remover_acentos(da_obj_check["username"].lower()).replace('-', '').replace('_', '').replace(' ', '') if da_obj_check else norm_mot
+                
+                mots_esp_norm = [remover_acentos(m.lower()).replace('-', '').replace('_', '').replace(' ', '') for m in mots_esperados]
+                
+                if norm_mot not in mots_esp_norm and da_uname_norm not in mots_esp_norm:
+                    # NOVA REGRA INTELIGENTE DE AUTO-ATRIBUIÇÃO PARA GRUPO ABERTO!
+                    # 1. Verifica quais motoristas têm pacotes pendentes (grupo aberto) na Anjun atualmente
+                    def _buscar_candidatos_abertos(forcar=False):
+                        mots_com_lote = obter_motoristas_com_lote_aberto_anjun(forcar_sync=forcar)
+                        encontrados = []
+                        chaves_vistas = set()
+                        for m_esp in mots_esperados:
+                            norm_esp = remover_acentos(m_esp.lower()).replace('-', '').replace('_', '').replace(' ', '')
+                            da_esp = resolver_motorista_anjun_api(m_esp)
+                            da_uname_esp = remover_acentos(da_esp["username"].lower()).replace('-', '').replace('_', '').replace(' ', '') if da_esp and da_esp.get("username") else norm_esp
+                            da_rname_esp = remover_acentos(da_esp["realName"].lower()).replace('-', '').replace('_', '').replace(' ', '') if da_esp and da_esp.get("realName") else norm_esp
+                            chave_mot = str(da_esp.get("id") or da_uname_esp or norm_esp) if da_esp else norm_esp
+                            for m_aberto in mots_com_lote:
+                                norm_ab = remover_acentos(m_aberto.lower()).replace('-', '').replace('_', '').replace(' ', '')
+                                if not norm_ab:
+                                    continue
+                                if (norm_esp == norm_ab or da_uname_esp == norm_ab or da_rname_esp == norm_ab or
+                                    norm_ab in norm_esp or norm_esp in norm_ab or norm_ab in da_uname_esp or da_uname_esp in norm_ab):
+                                    if chave_mot not in chaves_vistas:
+                                        chaves_vistas.add(chave_mot)
+                                        encontrados.append(m_esp)
+                                    break
+                        return encontrados
+
+                    candidatos_abertos = _buscar_candidatos_abertos(forcar=False)
+                    if not candidatos_abertos:
+                        candidatos_abertos = _buscar_candidatos_abertos(forcar=True)
+                    
+                    cep_info = f" (CEP {cep_pacote})" if cep_pacote else ""
+                    if len(candidatos_abertos) == 1:
+                        # Exatamente um motorista desta cidade/CEP tem grupo aberto! Redireciona automaticamente!
+                        mot_auto = candidatos_abertos[0]
+                        print(f"[+] [Anjun Auto-Atribuição] Pacote de {cidade_pacote}{cep_info} redirecionado automaticamente para o grupo aberto de {mot_auto}!")
+                        mot_clean = mot_auto
+                    else:
+                        # Nenhum grupo aberto ou mais de um grupo aberto (ambiguidade). Alerta o operador!
+                        esp_display = " / ".join(mots_esperados)
+                        if not candidatos_abertos:
+                            msg_alerta = f"Pacote de {cidade_pacote}{cep_info} pertence a {esp_display}, mas não há grupo aberto. Selecione o motorista na tela para iniciar o lote."
+                        else:
+                            msg_alerta = f"Pacote de {cidade_pacote}{cep_info} possui mais de um grupo aberto ({', '.join(candidatos_abertos)}). Selecione o motorista desejado na tela."
+                        print(f"[!] [Anjun API] DIVERGÊNCIA! {msg_alerta}")
+                        return "divergente", msg_alerta, esp_display, cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
+
+    # 4. ATRIBUIÇÃO AO ENTREGADOR (Aba 3)
+    mot_nome_final = motorista
+    if mot_clean and mot_clean not in ["---", "Apenas Entrada (Sem Atribuição)"]:
+        da_obj = resolver_motorista_anjun_api(mot_clean)
+        if not da_obj:
+            return False, f"Motorista '{mot_clean}' não localizado na lista de DAs da Anjun", "", cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
+            
+        da_id = da_obj["id"]
+        da_username = da_obj["username"]
+        mot_nome_final = da_username
+        
+        wb_lote = order_num_scan or order_num_ql or codigo_limpo
+        payload_assign = {
+            "waybillNumber": codigo_limpo,
+            "dispatchUserId": da_id,
+            "dispatchUserName": da_username
+        }
+        ok_da, msg_da, res_da = executar_post_anjun("/api/wms/console/v1/storage/dispatch/taskAllocation", payload_assign)
+        if not ok_da:
+            msg_da_low = (msg_da or "").lower()
+            if any(k in msg_da_low for k in ["sucesso", "success", "já atribuído", "já atribuido", "atribuído", "atribuido", "já alocado", "ja alocado", "já vinculado", "ja vinculado", "aguardando entrega", "não repita", "nao repita", "duplicad", "repetid", "já escaneado", "ja escaneado", "já bipado", "ja bipado"]):
+                print(f"[*] [Anjun API] Pacote {codigo_limpo} confirmado na atribuição ({msg_da}) para {da_username}.")
+                ok_da = True
+            elif any(k in msg_da_low for k in ["sessão", "sessao", "token", "401", "unauthorized", "login"]):
+                cache_sessao_anjun["token"] = None
+                return "aguardando_login", f"Sessão expirada: {msg_da}", "", cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
+            else:
+                # Retentativa rápida caso o servidor da Anjun tenha levado alguns milissegundos para processar a Entrada
+                time.sleep(0.25)
+                payload_retry = {
+                    "waybillNumber": wb_lote,
+                    "dispatchUserId": da_id,
+                    "dispatchUserName": da_username
+                }
+                ok_da, msg_da, res_da = executar_post_anjun("/api/wms/console/v1/storage/dispatch/taskAllocation", payload_retry)
+                msg_da_low = (msg_da or "").lower()
+                if ok_da or any(k in msg_da_low for k in ["sucesso", "success", "já atribuído", "já atribuido", "atribuído", "atribuido", "já alocado", "ja alocado", "já vinculado", "ja vinculado", "aguardando entrega", "não repita", "nao repita", "duplicad", "repetid", "já escaneado", "ja escaneado", "já bipado", "ja bipado"]):
+                    ok_da = True
+                else:
+                    return False, f"Atribuição Anjun: {msg_da}", "", cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
+                
+        # Registra pacote pendente no lote do motorista (usando o waybill oficial AJ... quando disponível)
+        adicionar_pacote_lote_anjun(da_username, wb_lote)
+        if wb_lote != codigo_limpo:
+            try:
+                conn_rm = conectar_banco()
+                conn_rm.execute("DELETE FROM lote_pendente_anjun WHERE UPPER(waybill) = UPPER(?)", (codigo_limpo,))
+                conn_rm.commit()
+                conn_rm.close()
+            except Exception:
+                pass
+        
+    cidade_retorno_anjun = cidade_pacote if cidade_pacote else "Cidade Não Informada (Conferir)"
+    return True, "Pacote processado com sucesso!", mot_nome_final, cidade_retorno_anjun, cep_pacote, destinatario_pacote, endereco_pacote
+
+def finalizar_lote_anjun_api(motorista, reload_tab=True):
+    """
+    Finaliza o lote acumulado de pacotes do motorista na Anjun,
+    gerando um único grupo/tarefa no aplicativo do entregador.
+    Chama printList -> sortByAddrList -> printListTaskNumber -> page.
+    Nunca clica no botão físico da tela web (pois a tabela web mistura todos os motoristas do galpão).
+    """
+    global driver, aba_atribuicao_anjun, mapa_motorista_sessao_anjun
+    mot_clean = str(motorista).strip() if motorista else ""
+    if not mot_clean:
+        return False, 0
+
+    norm_alvo = remover_acentos(mot_clean.lower()).replace('-', '').replace('_', '').replace(' ', '')
+
+    # 1. Consulta os lotes abertos diretamente nas sessões Anjun conhecidas para descobrir a conta exata,
+    #    o dispatchUserId exato e a lista real de waybills abertos deste motorista no site!
+    sessoes = obter_todas_sessoes_anjun_conhecidas()
+    token_usado = None
+    sess_usada = None
+    da_username = None
+    da_id = None
+    pacotes_site = []
+    alguma_sessao_ok = False
+
+    for sess in sessoes:
+        tk = sess.get("token")
+        if not tk:
+            continue
+        ok_pg, _, res_pg = executar_post_anjun("/admin/taskAllocation/page", {
+            "finalScanOperationType": 3,
+            "pageNo": 1,
+            "pageSize": 500
+        }, token_override=tk)
+        if not ok_pg or not isinstance(res_pg, dict):
+            continue
+        alguma_sessao_ok = True
+        records = extrair_registros_pagina_anjun(res_pg)
+        wbs_encontrados = []
+        uname_encontrado = None
+        uid_encontrado = None
+        for r in records:
+            if not isinstance(r, dict):
+                continue
+            r_mot = str(r.get("dispatchUserName") or "").strip()
+            r_wb = str(r.get("waybillNumber") or "").strip()
+            r_uid = r.get("dispatchUserId")
+            if not r_mot or not r_wb:
+                continue
+            norm_r = remover_acentos(r_mot.lower()).replace('-', '').replace('_', '').replace(' ', '')
+            if norm_r == norm_alvo or norm_alvo in norm_r or norm_r in norm_alvo:
+                wbs_encontrados.append(r_wb)
+                uname_encontrado = r_mot
+                if r_uid:
+                    uid_encontrado = r_uid
+        if wbs_encontrados:
+            token_usado = tk
+            sess_usada = sess
+            da_username = uname_encontrado
+            da_id = uid_encontrado
+            pacotes_site = list(dict.fromkeys(wbs_encontrados))
+            break
+
+    # 2. Fallback para cache/banco local se não veio da listagem page
+    if not token_usado:
+        info_map = mapa_motorista_sessao_anjun.get(remover_acentos(mot_clean.lower()))
+        if info_map:
+            token_usado = info_map.get("token")
+            da_id = da_id or info_map.get("dispatchUserId")
+            da_username = da_username or info_map.get("dispatchUserName")
+    if not sess_usada:
+        sess_usada = atualizar_sessao_anjun()
+    if not token_usado and sess_usada:
+        token_usado = sess_usada.get("token")
+
+    if not da_id or not da_username:
+        da_obj = resolver_motorista_anjun_api(mot_clean)
+        if da_obj:
+            da_username = da_username or da_obj.get("username")
+            da_id = da_id or da_obj.get("id")
+
+    da_username = da_username or mot_clean
+    pacotes_banco = obter_pacotes_lote_anjun(da_username)
+    if not pacotes_banco and mot_clean != da_username:
+        pacotes_banco = obter_pacotes_lote_anjun(mot_clean)
+
+    # Se a API da Anjun respondeu normalmente e já não há mais nenhum pacote em aberto no site para este motorista:
+    if alguma_sessao_ok and not pacotes_site and not pacotes_banco:
+        limpar_pacotes_lote_anjun(da_username)
+        if mot_clean != da_username:
+            limpar_pacotes_lote_anjun(mot_clean)
+        zerar_contagem_motorista_memoria(da_username)
+        if mot_clean != da_username:
+            zerar_contagem_motorista_memoria(mot_clean)
+        print(f"[+] [Anjun API] Lote de {da_username} já se encontra finalizado no site da Anjun.")
+        return True, 0
+
+    # Une os pacotes abertos no site Anjun com os pacotes registrados no banco local (garante que nenhum pacote fique de fora)
+    pacotes_lote = list(dict.fromkeys((pacotes_site or []) + (pacotes_banco or [])))
+    print(f"[*] [Anjun API] Finalizando lote de {da_username} (ID: {da_id}, {len(pacotes_lote)} pacotes)...")
+
+    if not token_usado or not pacotes_lote or not da_username or not da_id:
+        print(f"[!] [Anjun API] Dados insuficientes para finalizar lote de {da_username}: token={bool(token_usado)}, pacotes={len(pacotes_lote)}, da_id={da_id}")
+        return False, 0
+
+    sucesso_api = False
+    try:
+        # Etapa 1: printList filtrando exclusivamente pelos pacotes deste motorista
+        ok_pl, msg_pl, res_pl = executar_post_anjun("/admin/taskAllocation/printList", {
+            "dispatchUserName": da_username,
+            "waybillNumberList": pacotes_lote
+        }, token_override=token_usado)
+        vo_list = []
+        d_pl = {}
+        if ok_pl and isinstance(res_pl, dict):
+            d_pl = res_pl.get("data") or {}
+            if isinstance(d_pl, dict):
+                vo_list = d_pl.get("voList", []) or []
+            elif isinstance(d_pl, list):
+                vo_list = d_pl
+                d_pl = {}
+
+        # Garante que vo_list contenha apenas pacotes deste motorista / lote
+        set_lote = set(str(x).strip() for x in pacotes_lote)
+        if vo_list and isinstance(vo_list, list):
+            vo_filtrado = [
+                item for item in vo_list
+                if not isinstance(item, dict) or str(item.get("waybillNumber") or "").strip() in set_lote
+            ]
+            if vo_filtrado:
+                vo_list = vo_filtrado
+
+        # Etapa 2: sortByAddrList
+        sorted_vo = vo_list
+        site_lng = (d_pl.get("siteLng") if isinstance(d_pl, dict) else None) or sess_usada.get("siteLng", -48.9104678)
+        site_lat = (d_pl.get("siteLat") if isinstance(d_pl, dict) else None) or sess_usada.get("siteLat", -23.1069575)
+        if vo_list and isinstance(vo_list, list):
+            try:
+                ok_sort, _, res_sort = executar_post_anjun("/admin/pm/address/v1/sortByAddrList", {
+                    "sortLng": site_lng,
+                    "sortLat": site_lat,
+                    "voList": vo_list
+                }, token_override=token_usado)
+                if ok_sort and isinstance(res_sort, dict):
+                    d_sort = res_sort.get("data")
+                    if isinstance(d_sort, list):
+                        sorted_vo = d_sort
+                    elif isinstance(d_sort, dict) and "voList" in d_sort:
+                        sorted_vo = d_sort.get("voList", [])
+            except Exception:
+                sorted_vo = vo_list
+
+        # Etapa 3: printListTaskNumber
+        from datetime import datetime
+        payload_task = {
+            "dispatchUserName": da_username,
+            "waybillNumberList": pacotes_lote,
+            "dispatchUserId": da_id,
+            "packageCount": len(pacotes_lote),
+            "siteAddress": (d_pl.get("siteAddress") if isinstance(d_pl, dict) else None) or sess_usada.get("siteAddress", "R. Alferes José Ignatios, 26 - Parque Santa Elizabeth I, Avaré - SP, 18701-700"),
+            "siteArea": (d_pl.get("siteArea") if isinstance(d_pl, dict) else None) or sess_usada.get("siteArea", "parquesantaelizabeth"),
+            "siteCity": (d_pl.get("siteCity") if isinstance(d_pl, dict) else None) or sess_usada.get("siteCity", "Avaré"),
+            "siteLat": site_lat,
+            "siteLng": site_lng,
+            "siteName": (d_pl.get("siteName") if isinstance(d_pl, dict) else None) or sess_usada.get("siteName", "SP-R-D093"),
+            "siteState": (d_pl.get("siteState") if isinstance(d_pl, dict) else None) or sess_usada.get("siteState", "SP"),
+            "siteStreet": (d_pl.get("siteStreet") if isinstance(d_pl, dict) else None) or sess_usada.get("siteStreet", "R. Alferes José Ignatios, 26"),
+            "siteZipCode": (d_pl.get("siteZipCode") if isinstance(d_pl, dict) else None) or sess_usada.get("siteZipCode", "18701700"),
+            "taskCreateTime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "voList": sorted_vo
+        }
+        ok_tn, msg_tn, _ = executar_post_anjun(
+            "/api/wms/console/v1/storage/dispatch/printListTaskNumber",
+            payload_task,
+            token_override=token_usado
+        )
+
+        # Etapa 4: page refresh
+        executar_post_anjun("/admin/taskAllocation/page", {"finalScanOperationType": 3}, token_override=token_usado)
+
+        if ok_tn:
+            sucesso_api = True
+            print(f"[+] [Anjun API] Lote de {len(pacotes_lote)} pacotes finalizado com sucesso via API para {da_username}!")
+        else:
+            print(f"[!] [Anjun API] printListTaskNumber falhou para {da_username}: {msg_tn}")
+    except Exception as e_fin:
+        print(f"[!] [Anjun API] Erro na finalização via API: {e_fin}")
+
+    if not sucesso_api:
+        return False, 0
+
+    # Sincroniza Aba 3 no navegador Chrome apenas se a API teve sucesso
+    if reload_tab:
+        try:
+            if driver and aba_atribuicao_anjun and aba_atribuicao_anjun in driver.window_handles:
+                driver.switch_to.window(aba_atribuicao_anjun)
+                if "anjun" in driver.current_url.lower():
+                    fechar_popups_finalizacao_anjun(driver)
+                    time.sleep(0.3)
+                    driver.execute_script("window.location.reload();")
+                    time.sleep(0.8)
+                    fechar_popups_finalizacao_anjun(driver)
+        except Exception as e_aba:
+            print(f"[Aviso] Sincronização de tela Anjun: {e_aba}")
+
+    limpar_pacotes_lote_anjun(da_username)
+    if mot_clean != da_username:
+        limpar_pacotes_lote_anjun(mot_clean)
+
+    return True, len(pacotes_lote)
 
 def preparar_motorista_no_site(plataforma_id, motorista):
+
     global driver, aba_recebimento, aba_descarregamento, aba_atribuicao, aba_atribuicao_anjun, plataforma_ativa, motorista_atribuicao_ativa
     
     # 1. Garante que o navegador esteja aberto e na plataforma correta
@@ -4073,16 +9608,7 @@ def preparar_motorista_no_site(plataforma_id, motorista):
                             
         elif plataforma_id == 'anjun':
             print(f"[*] Posicionando motorista Anjun no Chrome: {mot_clean}...")
-            if not aba_atribuicao_anjun or aba_atribuicao_anjun not in driver.window_handles:
-                for handle in driver.window_handles:
-                    try:
-                        driver.switch_to.window(handle)
-                        url_cur = driver.current_url.lower()
-                        if "taskassignment" in url_cur or "task" in url_cur or "operatingcenter" in url_cur:
-                            aba_atribuicao_anjun = handle
-                            break
-                    except Exception:
-                        continue
+            garantir_abas_anjun(driver)
             if aba_atribuicao_anjun:
                 mudar_aba_acelerado(driver, aba_atribuicao_anjun)
                 time.sleep(0.3)
@@ -4155,60 +9681,18 @@ def atribuicao_bip():
         return jsonify({"status": "erro", "mensagem": "Código vazio"}), 400
     if not motorista_atribuicao_ativa:
         return jsonify({"status": "erro", "mensagem": "Nenhum motorista ativo para atribuição."}), 400
-    if not driver or not aba_atribuicao_anjun:
-        return jsonify({"status": "erro", "mensagem": "Navegador de atribuição não está ativo."}), 400
+    if not driver:
+        return jsonify({"status": "erro", "mensagem": "Navegador não está ativo."}), 400
+    garantir_abas_anjun(driver)
+    if not aba_atribuicao_anjun:
+        return jsonify({"status": "erro", "mensagem": "Aba de atribuição não está ativa."}), 400
         
     driver_lock.acquire()
     try:
         driver.switch_to.window(aba_atribuicao_anjun)
-        
-        # Localiza campo de bipe de pacote
-        candidatos_pacote = [
-            "//input[@placeholder='Favor digitalizar ou digitar']",
-            "//label[contains(., 'Bipar o')]/following::input[1]",
-            "//*[contains(text(), 'Bipar o')]/following::input[1]"
-        ]
-        campo_pacote = None
-        for xpath in candidatos_pacote:
-            try:
-                campo_pacote = driver.find_element(By.XPATH, xpath)
-                if campo_pacote.is_displayed():
-                    break
-            except Exception:
-                continue
-        
-        if not campo_pacote:
-            raise Exception("Não foi possível localizar o campo de input de bipe de pacote.")
-        
-        campo_pacote.click()
-        campo_pacote.send_keys(Keys.CONTROL + "a")
-        campo_pacote.send_keys(Keys.BACKSPACE)
-        time.sleep(0.1)
-        
-        print(f"[*] Enviando bipe do pacote {codigo} para o motorista {motorista_atribuicao_ativa}...")
-        campo_pacote.send_keys(codigo + Keys.ENTER)
-        time.sleep(0.5)
-        
-        # Tenta ler a contagem do site após o bipe
-        contagem_site = None
-        try:
-            xpath_contagem = [
-                "//span[contains(@class, 'hasScan')]//i",
-                "//*[@id='app']/section/section/main/div/div[2]/div/div[1]/div/div[2]/span/i"
-            ]
-            for xp in xpath_contagem:
-                try:
-                    el_cont = driver.find_element(By.XPATH, xp)
-                    if el_cont.is_displayed():
-                        val_str = el_cont.text.strip()
-                        if val_str.isdigit():
-                            contagem_site = int(val_str)
-                            print(f"[+] Contagem do site após bipe manual: {contagem_site}")
-                            break
-                except Exception:
-                    continue
-        except Exception:
-            pass
+        sucesso_bip, contagem_site, erro_msg = bipar_pacote_atribuicao_anjun(driver, codigo)
+        if not sucesso_bip:
+            raise Exception(erro_msg or "Falha ao enviar bipe na Aba 3.")
             
         if contagem_site is not None:
             contagem_motoristas[motorista_atribuicao_ativa] = contagem_site
@@ -4276,48 +9760,42 @@ def mudar_aba_acelerado(driver, handle, delay=0.08):
             pass
 
 def fechar_popups_finalizacao_anjun(driver):
-    # 1. Fechar o popup "Sequência de etiqueta"
-    try:
-        dialog_seq = WebDriverWait(driver, 5).until(
-            EC.visibility_of_element_located((By.XPATH, "//div[@role='dialog' and (contains(@aria-label, 'etiqueta') or contains(., 'Sequência de etiqueta'))]"))
-        )
-        btn_fechar_seq = None
-        candidatos_fechar_seq = [
-            ".//button[contains(., 'Fechar') or contains(., 'Close') or contains(., 'Confirmar') or contains(., 'Confirm')]",
-            ".//button[contains(@class, 'el-button--primary')]",
-            ".//button"
-        ]
-        for xpath_fechar in candidatos_fechar_seq:
-            try:
-                el_btn = dialog_seq.find_element(By.XPATH, xpath_fechar)
-                if el_btn.is_displayed():
-                    btn_fechar_seq = el_btn
-                    break
-            except Exception:
-                continue
-        if btn_fechar_seq:
-            try:
-                btn_fechar_seq.click()
-            except Exception:
-                driver.execute_script("arguments[0].click();", btn_fechar_seq)
-            print("[+] Popup 'Sequência de etiqueta' fechado!")
-            time.sleep(0.5)
-    except Exception as e_seq:
-        print(f"[Aviso] Falha ao fechar popup de sequência: {str(e_seq)}")
+    """
+    Fecha popups de confirmação ('Deseja finalizar atribuição?') e 'Sequência de etiqueta' na Anjun.
+    Executa de forma rápida e robusta em Javascript/DOM sem timeouts lentos de 5 segundos.
+    """
+    if not driver:
+        return
         
-    # 2. Clicar em "Confirmar" na janela de Dica
-    try:
-        btn_confirmar = WebDriverWait(driver, 5).until(
-            EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Confirmar') or contains(., 'Confirm') or contains(., 'OK') or contains(., 'Ok') or contains(span, 'Confirmar')]"))
-        )
+    for _ in range(3):
         try:
-            btn_confirmar.click()
+            clicou = driver.execute_script("""
+                var alterou = false;
+                // 1. Clica no botão Confirmar ou OK do popup de confirmação do Element-UI
+                var cBtns = document.querySelectorAll('.el-message-box__btns button, .el-dialog__footer button, .el-message-box button');
+                for (var i = 0; i < cBtns.length; i++) {
+                    var t = (cBtns[i].innerText || cBtns[i].textContent || '').trim().toLowerCase();
+                    if (t === 'confirmar' || t === 'confirm' || t === 'ok' || t === 'sim' || t === '确定') {
+                        try { cBtns[i].click(); alterou = true; } catch(e){}
+                    }
+                }
+                
+                // 2. Procura botão 'Fechar' em popups de sequência de etiquetas ou diálogos
+                var dBtns = document.querySelectorAll('.el-dialog__headerbtn, .el-dialog button');
+                for (var j = 0; j < dBtns.length; j++) {
+                    var td = (dBtns[j].innerText || dBtns[j].textContent || '').trim().toLowerCase();
+                    if (td.includes('fecha') || td.includes('close') || td.includes('deixar')) {
+                        try { dBtns[j].click(); alterou = true; } catch(e){}
+                    }
+                }
+                return alterou;
+            """)
+            if clicou:
+                time.sleep(0.3)
+            else:
+                time.sleep(0.15)
         except Exception:
-            driver.execute_script("arguments[0].click();", btn_confirmar)
-        print("[+] Lote confirmado com sucesso na janela 'Dica'!")
-        time.sleep(0.5)
-    except Exception as e_conf:
-        print(f"[Aviso] Falha ao clicar no botão Confirmar da dica: {str(e_conf)}")
+            pass
 
 def selecionar_motorista_anjun(driver, motorista):
     """
@@ -4586,7 +10064,15 @@ def selecionar_motorista_anjun(driver, motorista):
             if res_fast and res_fast.get("status") == "clicked":
                 nome_sel = res_fast.get("text", mot_clean)
                 print(f"[+] [Fast-Path] Motorista Anjun selecionado instantaneamente: {nome_sel}")
-                time.sleep(0.15)
+                try:
+                    driver.execute_script("""
+                        if (document.activeElement) { document.activeElement.blur(); }
+                        var poppers = document.querySelectorAll('.el-select__popper, .el-popper');
+                        for (var p = 0; p < poppers.length; p++) { poppers[p].style.display = 'none'; }
+                    """)
+                except Exception:
+                    pass
+                time.sleep(0.3)
                 return True
 
             # 3. Digitação robusta no campo:
@@ -4619,7 +10105,15 @@ def selecionar_motorista_anjun(driver, motorista):
                 time.sleep(0.06)
 
             if clicado:
-                time.sleep(0.15)
+                try:
+                    driver.execute_script("""
+                        if (document.activeElement) { document.activeElement.blur(); }
+                        var poppers = document.querySelectorAll('.el-select__popper, .el-popper');
+                        for (var p = 0; p < poppers.length; p++) { poppers[p].style.display = 'none'; }
+                    """)
+                except Exception:
+                    pass
+                time.sleep(0.3)
                 return True
             else:
                 raise Exception(f"Motorista '{mot_clean}' não encontrado nas opções do dropdown da Anjun.")
@@ -4657,8 +10151,15 @@ def registrar_lote_finalizado(motorista, quantidade, plataforma=None):
         cursor = conn.cursor()
         
         # Busca cidades do motorista
-        cursor.execute("SELECT cidade FROM cidades WHERE motorista = ?", (motorista,))
-        cidades_list = [row[0] for row in cursor.fetchall()]
+        cidades_list = []
+        try:
+            cursor.execute("SELECT DISTINCT cidade FROM motoristas_plataforma WHERE LOWER(motorista) = LOWER(?)", (motorista,))
+            cidades_list = [row[0] for row in cursor.fetchall() if row[0]]
+            if not cidades_list:
+                cursor.execute("SELECT DISTINCT cidade FROM motoristas WHERE LOWER(motorista) = LOWER(?)", (motorista,))
+                cidades_list = [row[0] for row in cursor.fetchall() if row[0]]
+        except Exception:
+            cidades_list = []
         cidades_str = ", ".join(cidades_list) if cidades_list else "Sem Cidades"
         
         # Insere o lote
@@ -4672,6 +10173,149 @@ def registrar_lote_finalizado(motorista, quantidade, plataforma=None):
     except Exception as e:
         print(f"[Erro] Falha ao registrar lote finalizado: {str(e)}")
 
+def zerar_contagem_motorista_memoria(motorista):
+    """Zera a contagem de pacotes na memória para o motorista informado (case/accent/space insensitive)."""
+    global contagem_motoristas, motorista_atribuicao_ativa, contagem_atribuicao_ativa
+    if not motorista:
+        return
+    alvo_norm = remover_acentos(str(motorista).strip().lower()).replace('-', '').replace('_', '').replace(' ', '')
+    for k in list(contagem_motoristas.keys()):
+        norm_k = remover_acentos(str(k).strip().lower()).replace('-', '').replace('_', '').replace(' ', '')
+        if norm_k == alvo_norm or alvo_norm in norm_k or norm_k in alvo_norm:
+            contagem_motoristas[k] = 0
+    contagem_motoristas[motorista] = 0
+    if motorista_atribuicao_ativa:
+        norm_at = remover_acentos(str(motorista_atribuicao_ativa).strip().lower()).replace('-', '').replace('_', '').replace(' ', '')
+        if norm_at == alvo_norm or alvo_norm in norm_at or norm_at in alvo_norm:
+            contagem_atribuicao_ativa = 0
+
+@app.route('/atribuicao/cancelar-lote-anjun', methods=['POST'])
+@requer_licenca_ativa
+def atribuicao_cancelar_lote_anjun():
+    """Cancela/limpa o lote aberto de um motorista (ou de todos) na Anjun sem emitir folha no site."""
+    global motorista_atribuicao_ativa, contagem_atribuicao_ativa, contagem_motoristas, waybills_cancelados_anjun
+    dados = request.json or {}
+    todos = bool(dados.get("todos"))
+    motorista = dados.get("motorista")
+    
+    try:
+        sincronizar_lotes_pendentes_anjun_api(forcar=True)
+        if todos:
+            conn = conectar_banco()
+            c = conn.cursor()
+            c.execute("SELECT waybill FROM lote_pendente_anjun")
+            wbs = [r[0] for r in c.fetchall() if r and r[0]]
+            for wb in wbs:
+                waybills_cancelados_anjun.add(str(wb).strip())
+            total_removidos = len(wbs)
+            c.execute("DELETE FROM lote_pendente_anjun")
+            conn.commit()
+            conn.close()
+            for k in list(contagem_motoristas.keys()):
+                contagem_motoristas[k] = 0
+            contagem_atribuicao_ativa = 0
+            print(f"[+] [Anjun] Todos os lotes abertos foram cancelados/limpos ({total_removidos} pacotes).")
+            return jsonify({"status": "sucesso", "removidos": total_removidos})
+            
+        if not motorista:
+            return jsonify({"status": "erro", "mensagem": "Motorista não informado."}), 400
+            
+        mot_clean = str(motorista).strip()
+        wbs_mot = obter_pacotes_lote_anjun(mot_clean)
+        for wb in wbs_mot:
+            waybills_cancelados_anjun.add(str(wb).strip())
+        removidos = limpar_pacotes_lote_anjun(mot_clean)
+        try:
+            da_obj = resolver_motorista_anjun_api(mot_clean)
+            if da_obj and da_obj.get("username"):
+                for wb in obter_pacotes_lote_anjun(da_obj["username"]):
+                    waybills_cancelados_anjun.add(str(wb).strip())
+                removidos += limpar_pacotes_lote_anjun(da_obj["username"])
+        except Exception:
+            pass
+            
+        zerar_contagem_motorista_memoria(mot_clean)
+        print(f"[+] [Anjun] Lote aberto de '{mot_clean}' cancelado/limpo ({removidos} pacotes).")
+        return jsonify({"status": "sucesso", "motorista": mot_clean, "removidos": removidos})
+    except Exception as e:
+        print(f"[Erro] Falha ao cancelar lote Anjun: {e}")
+        return jsonify({"status": "erro", "mensagem": str(e)}), 500
+
+@app.route('/atribuicao/finalizar-todos-anjun', methods=['POST'])
+@requer_licenca_ativa
+def atribuicao_finalizar_todos_anjun():
+    """Finaliza de uma só vez todos os lotes abertos na Anjun via API Ultra-Rápida, separando motorista por motorista."""
+    global driver, aba_atribuicao_anjun, motorista_atribuicao_ativa, contagem_atribuicao_ativa, contagem_motoristas
+    dados = request.json or {}
+    lista_extra = dados.get("motoristas") or []
+    
+    try:
+        sincronizar_lotes_pendentes_anjun_api(forcar=True)
+        motoristas_banco = obter_motoristas_com_lote_aberto_anjun()
+        todos_candidatos = []
+        vistos = set()
+        for m in list(motoristas_banco) + list(lista_extra):
+            if not m:
+                continue
+            m_norm = remover_acentos(str(m).strip().lower()).replace('-', '').replace('_', '').replace(' ', '')
+            if m_norm and m_norm not in vistos:
+                vistos.add(m_norm)
+                todos_candidatos.append(str(m).strip())
+                
+        if not todos_candidatos:
+            return jsonify({"status": "sucesso", "total_motoristas": 0, "total_pacotes": 0, "motoristas": []})
+            
+        print(f"[*] [Anjun API] Finalizando TODOS os lotes abertos ({len(todos_candidatos)} motoristas): {todos_candidatos}")
+        total_pacotes = 0
+        motoristas_finalizados = []
+        motoristas_falha = []
+        
+        for mot in todos_candidatos:
+            ok_fin, qtd_fin = finalizar_lote_anjun_api(mot, reload_tab=False)
+            if ok_fin:
+                contagem_lote = qtd_fin if qtd_fin > 0 else contagem_motoristas.get(mot, 0)
+                registrar_lote_finalizado(mot, contagem_lote, plataforma="anjun")
+                limpar_pacotes_lote_anjun(mot)
+                zerar_contagem_motorista_memoria(mot)
+                total_pacotes += contagem_lote
+                motoristas_finalizados.append({"motorista": mot, "quantidade": contagem_lote})
+            else:
+                motoristas_falha.append(mot)
+                
+        if not motoristas_falha:
+            contagem_atribuicao_ativa = 0
+            
+        # Recarrega a Aba 3 no Chrome apenas uma única vez ao final se estiver na Anjun
+        try:
+            if driver and aba_atribuicao_anjun and aba_atribuicao_anjun in driver.window_handles:
+                driver.switch_to.window(aba_atribuicao_anjun)
+                if "anjun" in driver.current_url.lower():
+                    fechar_popups_finalizacao_anjun(driver)
+                    driver.execute_script("window.location.reload();")
+                    time.sleep(0.8)
+                    fechar_popups_finalizacao_anjun(driver)
+        except Exception as e_aba:
+            print(f"[Aviso] Sincronização de tela após finalizar todos Anjun: {e_aba}")
+            
+        if not motoristas_finalizados and motoristas_falha:
+            return jsonify({
+                "status": "erro",
+                "mensagem": f"Não foi possível finalizar os lotes de: {', '.join(motoristas_falha)}. Verifique se a conta Anjun está logada no Chrome.",
+                "falhas": motoristas_falha
+            }), 400
+
+        print(f"[+] [Anjun API] Finalização em massa concluída: {len(motoristas_finalizados)} motoristas, {total_pacotes} pacotes!")
+        return jsonify({
+            "status": "sucesso",
+            "total_motoristas": len(motoristas_finalizados),
+            "total_pacotes": total_pacotes,
+            "motoristas": motoristas_finalizados,
+            "falhas": motoristas_falha
+        })
+    except Exception as e:
+        print(f"[Erro] Falha ao finalizar todos os lotes Anjun: {e}")
+        return jsonify({"status": "erro", "mensagem": str(e)}), 500
+
 @app.route('/atribuicao/finalizar', methods=['POST'])
 @requer_licenca_ativa
 def atribuicao_finalizar():
@@ -4679,204 +10323,79 @@ def atribuicao_finalizar():
     
     dados = request.json or {}
     motorista = dados.get("motorista") or motorista_atribuicao_ativa
+    plat_req = (dados.get("plataforma") or plataforma_ativa or "anjun").strip().lower()
     
     # Se for iMile, finaliza 100% de forma local no banco de dados e limpa o contador
-    if plataforma_ativa == 'imile':
+    if plat_req == 'imile':
         contagem_lote = 0
         if motorista:
             contagem_lote = contagem_motoristas.get(motorista, 0)
             if contagem_lote == 0:
                 contagem_lote = contagem_atribuicao_ativa
             registrar_lote_finalizado(motorista, contagem_lote, plataforma="imile")
-            contagem_motoristas[motorista] = 0
+            zerar_contagem_motorista_memoria(motorista)
         
         motorista_atribuicao_ativa = None
         contagem_atribuicao_ativa = 0
         print(f"[+] Lote iMile finalizado localmente no banco para {motorista} (Qtd: {contagem_lote}).")
         return jsonify({"status": "sucesso"})
 
-    # Se for Loggi, realiza a finalização do grupo
-    if plataforma_ativa == 'loggi':
-        garantir_abas_loggi(driver)
-        if not driver or not aba_atribuicao_anjun:
-            return jsonify({"status": "erro", "mensagem": "Navegador de atribuição da Loggi não está ativo."}), 400
-            
-        driver_lock.acquire()
-        try:
-            driver.switch_to.window(aba_atribuicao_anjun)
-            time.sleep(0.5)
-            
-            btn_move = driver.find_elements(By.XPATH, "//button[@data-testid='btn-move-packages-to-group']")
-            btn_continue = driver.find_elements(By.XPATH, "//button[@data-testid='btn-set-keywords']")
-            
-            finalizou = False
-            if btn_move and btn_move[0].is_displayed():
-                # Grupo existente: clica em Mover
-                driver.execute_script("arguments[0].click();", btn_move[0])
-                print("[+] Lote Loggi finalizado com sucesso (Mover pacotes para o grupo)!")
-                finalizou = True
-                time.sleep(1.0)
-            elif btn_continue and btn_continue[0].is_displayed():
-                # Novo grupo: clica em Continuar
-                driver.execute_script("arguments[0].click();", btn_continue[0])
-                print("[*] Botão Continuar clicado. Aguardando a tela de palavras-chave...")
-                time.sleep(0.8)
-                
-                # Digita a palavra-chave (motorista/cidade ativa em uppercase + dia/mês atual)
-                data_atual = datetime.datetime.now().strftime('%d/%m')
-                palavra_chave = f"{motorista.upper()} {data_atual}" if motorista else f"GRUPO {data_atual}"
-                try:
-                    # Espera dinamicamente a tela de palavra-chave carregar (máx 5s)
-                    campo_palavra = None
-                    candidatos_palavra = [
-                        "//*[contains(text(), 'identificar o grupo')]/following::input[1]",
-                        "//*[contains(text(), 'Palavras-chave')]/following::input[1]",
-                        "//*[contains(text(), 'Adicione')]/preceding::input[1]",
-                        "//input[contains(@id, '_r_')]",
-                        "//input[@type='text' and not(contains(@placeholder, 'Buscar'))]"
-                    ]
-                    for path_kw in candidatos_palavra:
-                        try:
-                            el = WebDriverWait(driver, 1.5).until(
-                                EC.visibility_of_element_located((By.XPATH, path_kw))
-                            )
-                            if el:
-                                campo_palavra = el
-                                break
-                        except Exception:
-                            continue
-                            
-                    if not campo_palavra:
-                        raise Exception("Não foi possível localizar o campo de input de palavra-chave na tela.")
-                            
-                    campo_palavra.click()
-                    campo_palavra.send_keys(Keys.CONTROL + "a")
-                    campo_palavra.send_keys(Keys.BACKSPACE)
-                    time.sleep(0.1)
-                    campo_palavra.send_keys(palavra_chave + Keys.ENTER)
-                    print(f"[+] Palavra-chave '{palavra_chave}' inserida com sucesso!")
-                    time.sleep(0.5)
-                    
-                    # Clica em Agrupar pacotes no rodapé
-                    btn_agrupar_final = driver.find_element(By.XPATH, "//button[@data-testid='btn-move-packages-to-group']")
-                    driver.execute_script("arguments[0].click();", btn_agrupar_final)
-                    print("[+] Lote Loggi finalizado com sucesso (Criar grupo e agrupar)!")
-                    finalizou = True
-                    time.sleep(1.5)
-                    
-                    # Clica no botão X (closed-drawer) para fechar a gaveta do grupo criado
-                    try:
-                        btn_close_drawer = WebDriverWait(driver, 3.0).until(
-                            EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='closed-drawer']"))
-                        )
-                        driver.execute_script("arguments[0].click();", btn_close_drawer)
-                        print("[+] Botão Fechar Gaveta (closed-drawer) clicado com sucesso!")
-                        time.sleep(0.5)
-                    except Exception as e_close:
-                        print(f"[Aviso] Não foi possível clicar no botão de fechar gaveta: {str(e_close)}")
-                except Exception as e_kw:
-                    print(f"[Erro] Falha ao inserir palavra-chave ou agrupar novo lote Loggi: {str(e_kw)}")
-            
-            # Clica no botão Atualizar (async-refresh-btn) se finalizou
-            if finalizou:
-                try:
-                    btn_refresh = driver.find_element(By.XPATH, "//button[@data-testid='async-refresh-btn']")
-                    driver.execute_script("arguments[0].click();", btn_refresh)
-                    print("[+] Botão Atualizar (async-refresh-btn) clicado com sucesso após finalização!")
-                    time.sleep(0.8)
-                except Exception as e_ref:
-                    print(f"[Aviso] Falha ao clicar no botão de atualizar após finalizar lote Loggi: {str(e_ref)}")
-                
-            contagem_lote = 0
-            if motorista:
-                contagem_lote = contagem_motoristas.get(motorista, 0)
-                if contagem_lote == 0:
-                    contagem_lote = contagem_atribuicao_ativa
-                    
-            if motorista:
-                registrar_lote_finalizado(motorista, contagem_lote, plataforma="loggi")
-                contagem_motoristas[motorista] = 0
-                
-            motorista_atribuicao_ativa = None
-            contagem_atribuicao_ativa = 0
-            return jsonify({"status": "sucesso"})
-        except Exception as e:
-            print(f"[Erro] Falha ao finalizar lote Loggi: {str(e)}")
-            return jsonify({"status": "erro", "mensagem": str(e)}), 500
-        finally:
-            driver_lock.release()
-
-    # Para Anjun e outras plataformas, realiza a finalização física no site via Selenium
-    if not driver or not aba_atribuicao_anjun:
-        return jsonify({"status": "erro", "mensagem": "Navegador de atribuição não está ativo."}), 400
-        
-    driver_lock.acquire()
-    try:
-        driver.switch_to.window(aba_atribuicao_anjun)
-        fechar_possiveis_lembretes(driver)
-        
-        # Tenta ler a contagem real do site antes de finalizar o lote
+    # Se for Loggi, realiza a finalização do lote/grupo
+    if plat_req == 'loggi':
         contagem_lote = 0
-        if motorista:
-            try:
-                xpath_contagem = [
-                    "//span[contains(@class, 'hasScan')]//i",
-                    "//*[@id='app']/section/section/main/div/div[2]/div/div[1]/div/div[2]/span/i"
-                ]
-                for xp in xpath_contagem:
-                    try:
-                        el_cont = driver.find_element(By.XPATH, xp)
-                        if el_cont.is_displayed():
-                            val_str = el_cont.text.strip()
-                            if val_str.isdigit():
-                                contagem_lote = int(val_str)
-                                print(f"[+] Contagem lida do site para {motorista} antes de finalizar: {contagem_lote}")
-                                break
-                    except Exception:
-                        continue
-            except Exception:
-                pass
-                
+        nome_lote = motorista or grupo_loggi_ativo.get("cidade") or (", ".join(grupo_loggi_ativo.get("tags", [])) if grupo_loggi_ativo.get("tags") else "Loggi")
+        if nome_lote:
+            contagem_lote = contagem_motoristas.get(nome_lote, 0)
             if contagem_lote == 0:
-                contagem_lote = contagem_motoristas.get(motorista, 0)
-                if contagem_lote == 0:
-                    contagem_lote = contagem_atribuicao_ativa
+                alvo_norm = remover_acentos(str(nome_lote).strip().lower()).replace('-', '').replace('_', '').replace(' ', '')
+                for k, v in contagem_motoristas.items():
+                    norm_k = remover_acentos(str(k).strip().lower()).replace('-', '').replace('_', '').replace(' ', '')
+                    if (norm_k == alvo_norm or alvo_norm in norm_k or norm_k in alvo_norm) and v > 0:
+                        contagem_lote = v
+                        break
+            if contagem_lote == 0:
+                contagem_lote = contagem_atribuicao_ativa
+            
+            apenas_se_tiver = dados.get("apenas_se_tiver_pacotes", False)
+            if not apenas_se_tiver or contagem_lote > 0:
+                registrar_lote_finalizado(nome_lote, contagem_lote, plataforma="loggi")
+            zerar_contagem_motorista_memoria(nome_lote)
+            
+        # Reseta o grupo ativo da Loggi para o próximo lote
+        grupo_loggi_ativo["licensePlate"] = None
+        grupo_loggi_ativo["tags"] = []
+        grupo_loggi_ativo["cidade"] = None
+        grupo_loggi_ativo["modo"] = "novo"
         
-        print(f"[*] Finalizando lote do motorista: {motorista} (Qtd: {contagem_lote})...")
-        candidatos_finalizar = [
-            "//*[@id='app']/section/section/main/div/div[2]/div/div[1]/div/div[1]/button[1]",
-            "//button[contains(., 'Finalizar') or contains(., 'Concluir') or contains(., 'Gerar') or contains(., 'Emitir') or contains(., 'Emissão') or contains(., 'Tarefa')]",
-            "//button[contains(@class, 'el-button--primary')]"
-        ]
-        finalizou = False
-        for xpath in candidatos_finalizar:
-            try:
-                btn = driver.find_element(By.XPATH, xpath)
-                if btn.is_displayed():
-                    driver.execute_script("arguments[0].click();", btn)
-                    print("[+] Lote finalizado com sucesso!")
-                    time.sleep(1.0)
-                    fechar_popups_finalizacao_anjun(driver)
-                    finalizou = True
-                    break
-            except Exception:
-                continue
-                
-        if not finalizou:
-            print("[Aviso] Botão de finalizar não pôde ser clicado ou não foi encontrado.")
-            
-        if motorista:
-            registrar_lote_finalizado(motorista, contagem_lote)
-            contagem_motoristas[motorista] = 0
-            
         motorista_atribuicao_ativa = None
         contagem_atribuicao_ativa = 0
-        return jsonify({"status": "sucesso"})
-    except Exception as e:
-        print(f"[Erro] Falha ao finalizar lote: {str(e)}")
-        return jsonify({"status": "erro", "mensagem": str(e)}), 500
-    finally:
-        driver_lock.release()
+        print(f"[+] Lote Loggi finalizado com sucesso para {nome_lote} (Qtd: {contagem_lote}).")
+        return jsonify({"status": "sucesso", "quantidade": contagem_lote})
+
+    # Se for Anjun, finaliza exclusivamente via API por motorista (NUNCA clica no botão físico da tela web para não misturar motoristas!)
+    if plat_req == 'anjun' or not plat_req:
+        sincronizar_lotes_pendentes_anjun_api(forcar=True)
+        ok_fin, qtd_fin = finalizar_lote_anjun_api(motorista)
+        if ok_fin:
+            contagem_lote = qtd_fin if qtd_fin > 0 else contagem_motoristas.get(motorista, 0)
+            if contagem_lote == 0:
+                contagem_lote = contagem_atribuicao_ativa
+            if motorista:
+                registrar_lote_finalizado(motorista, contagem_lote, plataforma="anjun")
+                limpar_pacotes_lote_anjun(motorista)
+                zerar_contagem_motorista_memoria(motorista)
+            if motorista and motorista_atribuicao_ativa and remover_acentos(motorista.strip().lower()) == remover_acentos(motorista_atribuicao_ativa.strip().lower()):
+                motorista_atribuicao_ativa = None
+                contagem_atribuicao_ativa = 0
+            print(f"[+] [Anjun API] Lote finalizado com sucesso via API para {motorista} (Qtd: {contagem_lote})!")
+            return jsonify({"status": "sucesso", "quantidade": contagem_lote})
+        else:
+            return jsonify({
+                "status": "erro",
+                "mensagem": f"Não foi possível finalizar o lote de '{motorista}' na Anjun. Verifique se a conta Anjun correspondente está logada."
+            }), 400
+
+    return jsonify({"status": "erro", "mensagem": "Plataforma não reconhecida."}), 400
 
 @app.route('/salvar-cidades', methods=['POST'])
 def salvar_cidades():
@@ -4886,11 +10405,15 @@ def salvar_cidades():
     if not isinstance(cidades, list):
         return jsonify({"status": "erro", "mensagem": "Formato de cidades inválido."}), 400
         
+    cidades_limpas = [
+        str(c).strip() for c in cidades
+        if str(c or "").strip() and str(c).strip().lower() not in ('sem cidade', 'geral', 'imile', 'anjun')
+    ]
     try:
         conn = conectar_banco()
         cursor = conn.cursor()
         cursor.execute("DELETE FROM cidades")
-        for c in cidades:
+        for c in cidades_limpas:
             cursor.execute("INSERT OR IGNORE INTO cidades (cidade) VALUES (?)", (c,))
         conn.commit()
         conn.close()
@@ -4898,12 +10421,27 @@ def salvar_cidades():
         # Sincroniza com o arquivo JSON legado para evitar perda de dados na inicialização
         try:
             with open(CONFIG_CIDADES, 'w', encoding='utf-8') as f:
-                json.dump(cidades, f, indent=4, ensure_ascii=False)
+                json.dump(cidades_limpas, f, indent=4, ensure_ascii=False)
             print("[Banco] config_cidades.json sincronizado com sucesso!")
         except Exception as e_json:
             print(f"[Aviso] Falha ao gravar no config_cidades.json: {str(e_json)}")
+
+        try:
+            excel_path = obter_caminho_excel()
+            gerar_planilha_motoristas_excel(excel_path)
+            if os.path.exists(excel_path):
+                meta_mtime_file = os.path.join(BASE_DIR, '.excel_sync_meta')
+                with open(meta_mtime_file, 'w') as f_meta:
+                    f_meta.write(str(os.path.getmtime(excel_path)))
+        except Exception as e_xl_cid:
+            print(f"[Aviso] Falha ao atualizar planilha após salvar cidades: {e_xl_cid}")
             
-        return jsonify({"status": "sucesso", "mensagem": "Lista de cidades salva com sucesso!"})
+        invalidar_cache_ram_cidades_motoristas()
+        return jsonify({
+            "status": "sucesso",
+            "mensagem": "Lista de cidades salva com sucesso!",
+            "cidades": carregar_cidades()
+        })
     except Exception as e:
         return jsonify({"status": "erro", "mensagem": str(e)}), 500
 
@@ -4943,38 +10481,186 @@ def salvar_credenciais():
     p_id = dados.get("id", "").strip().lower()
     usuario = dados.get("login_usuario", "").strip()
     senha = dados.get("login_senha", "").strip()
+    apelido = dados.get("apelido", "").strip()
+    c_id = dados.get("conta_id", "").strip()
     
     if not p_id:
         return jsonify({"status": "erro", "mensagem": "ID da plataforma é obrigatório."}), 400
         
-    plataformas = carregar_plataformas()
-    if p_id not in plataformas:
-        return jsonify({"status": "erro", "mensagem": "Plataforma não encontrada."}), 400
+    todas_contas = carregar_contas_plataformas()
+    if p_id not in todas_contas:
+        todas_contas[p_id] = {"conta_ativa": "conta_1", "contas": []}
         
-    # Salva na estrutura de credenciais locais
-    cred_locais = {}
-    if os.path.exists(CONFIG_LOCAL_CREDENTIALS):
-        try:
-            with open(CONFIG_LOCAL_CREDENTIALS, 'r', encoding='utf-8') as f:
-                cred_locais = json.load(f)
-        except Exception:
-            pass
-            
-    if p_id not in cred_locais:
-        cred_locais[p_id] = {}
+    contas_list = todas_contas[p_id].get("contas", [])
+    alvo = None
+    if c_id:
+        for c in contas_list:
+            if c.get("id") == c_id:
+                alvo = c
+                break
+    if not alvo and contas_list:
+        alvo = contas_list[0]
         
-    cred_locais[p_id]["login_usuario"] = usuario
-    cred_locais[p_id]["login_senha"] = senha
-    
+    if alvo:
+        alvo["login_usuario"] = usuario
+        alvo["login_senha"] = senha
+        if apelido:
+            alvo["apelido"] = apelido
+    else:
+        novo_id = f"conta_{int(time.time())}"
+        contas_list.append({
+            "id": novo_id,
+            "apelido": apelido or (usuario or "Conta Principal"),
+            "login_usuario": usuario,
+            "login_senha": senha
+        })
+        todas_contas[p_id]["conta_ativa"] = novo_id
+        
+    todas_contas[p_id]["contas"] = contas_list
+    salvar_contas_plataformas(todas_contas)
+    return jsonify({"status": "sucesso", "mensagem": "Credenciais salvas com sucesso!", "dados": todas_contas})
+
+@app.route('/plataformas/contas', methods=['GET'])
+def rota_obter_contas_plataformas():
     try:
-        with open(CONFIG_LOCAL_CREDENTIALS, 'w', encoding='utf-8') as f:
-            json.dump(cred_locais, f, indent=4, ensure_ascii=False)
-        global _cache_plataformas
-        _cache_plataformas = None
+        contas_dict = carregar_contas_plataformas()
+        return jsonify({
+            "status": "sucesso",
+            "dados": contas_dict,
+            "plataforma_ativa": plataforma_ativa,
+            "conta_ativa": conta_ativa
+        })
     except Exception as e:
-        return jsonify({"status": "erro", "mensagem": f"Falha ao salvar arquivo de credenciais: {str(e)}"}), 500
+        return jsonify({"status": "erro", "mensagem": str(e)}), 500
+
+@app.route('/plataformas/salvar-conta', methods=['POST'])
+def rota_salvar_conta_plataforma():
+    try:
+        dados = request.json or {}
+        p_id = str(dados.get("plataforma") or "").strip().lower()
+        c_id = str(dados.get("id") or "").strip()
+        apelido = str(dados.get("apelido") or "").strip()
+        usuario = str(dados.get("login_usuario") or "").strip()
+        senha = str(dados.get("login_senha") or "").strip()
+        ativar_agora = bool(dados.get("ativar_agora", False))
         
-    return jsonify({"status": "sucesso", "mensagem": "Credenciais salvas localmente com sucesso!"})
+        if not p_id:
+            return jsonify({"status": "erro", "mensagem": "Plataforma não informada."}), 400
+            
+        todas_contas = carregar_contas_plataformas()
+        if p_id not in todas_contas:
+            todas_contas[p_id] = {"conta_ativa": "", "contas": []}
+            
+        contas_list = todas_contas[p_id].get("contas", [])
+        conta_encontrada = None
+        if c_id:
+            for c in contas_list:
+                if c.get("id") == c_id:
+                    conta_encontrada = c
+                    break
+                    
+        if conta_encontrada:
+            conta_encontrada["apelido"] = apelido or (usuario or conta_encontrada.get("apelido") or "Conta")
+            conta_encontrada["login_usuario"] = usuario
+            conta_encontrada["login_senha"] = senha
+            c_id_final = conta_encontrada["id"]
+        else:
+            c_id_final = f"conta_{int(time.time())}"
+            nova_conta = {
+                "id": c_id_final,
+                "apelido": apelido or (usuario or f"Conta {len(contas_list)+1}"),
+                "login_usuario": usuario,
+                "login_senha": senha
+            }
+            contas_list.append(nova_conta)
+            
+        if ativar_agora or not todas_contas[p_id].get("conta_ativa"):
+            todas_contas[p_id]["conta_ativa"] = c_id_final
+            
+        todas_contas[p_id]["contas"] = contas_list
+        salvar_contas_plataformas(todas_contas)
+        
+        if ativar_agora and plataforma_ativa == p_id:
+            try:
+                inicializar_selenium(p_id, c_id_final)
+            except Exception as e_init:
+                print(f"[Aviso] Falha ao alternar navegador para nova conta: {e_init}")
+                
+        return jsonify({
+            "status": "sucesso", 
+            "mensagem": "Conta salva com sucesso!", 
+            "dados": todas_contas,
+            "conta_id": c_id_final
+        })
+    except Exception as e:
+        return jsonify({"status": "erro", "mensagem": str(e)}), 500
+
+@app.route('/plataformas/excluir-conta', methods=['POST'])
+def rota_excluir_conta_plataforma():
+    try:
+        dados = request.json or {}
+        p_id = str(dados.get("plataforma") or "").strip().lower()
+        c_id = str(dados.get("id") or "").strip()
+        
+        if not p_id or not c_id:
+            return jsonify({"status": "erro", "mensagem": "Plataforma e ID da conta são obrigatórios."}), 400
+            
+        todas_contas = carregar_contas_plataformas()
+        if p_id not in todas_contas:
+            return jsonify({"status": "erro", "mensagem": "Plataforma não encontrada."}), 404
+            
+        contas_list = todas_contas[p_id].get("contas", [])
+        if len(contas_list) <= 1:
+            return jsonify({"status": "erro", "mensagem": "Você não pode excluir a única conta cadastrada. Adicione outra antes de excluir esta."}), 400
+            
+        contas_filtradas = [c for c in contas_list if c.get("id") != c_id]
+        todas_contas[p_id]["contas"] = contas_filtradas
+        
+        if todas_contas[p_id].get("conta_ativa") == c_id:
+            todas_contas[p_id]["conta_ativa"] = contas_filtradas[0]["id"]
+            
+        salvar_contas_plataformas(todas_contas)
+        return jsonify({
+            "status": "sucesso", 
+            "mensagem": "Conta excluída com sucesso!", 
+            "dados": todas_contas
+        })
+    except Exception as e:
+        return jsonify({"status": "erro", "mensagem": str(e)}), 500
+
+@app.route('/plataformas/selecionar-conta', methods=['POST'])
+def rota_selecionar_conta_plataforma():
+    try:
+        dados = request.json or {}
+        p_id = str(dados.get("plataforma") or "").strip().lower()
+        c_id = str(dados.get("conta_id") or "").strip()
+        
+        if not p_id or not c_id:
+            return jsonify({"status": "erro", "mensagem": "Plataforma e conta são obrigatórios."}), 400
+
+        lic = validar_licenca()
+        liberadas = [str(p).strip().lower() for p in (lic.get("plataformas_liberadas") or ["anjun", "imile", "loggi", "magalog"])]
+        if p_id not in liberadas:
+            return jsonify({"status": "erro", "mensagem": f"A empresa '{p_id.upper()}' não está liberada na licença contratada para esta máquina."}), 403
+            
+        todas_contas = carregar_contas_plataformas()
+        if p_id in todas_contas:
+            todas_contas[p_id]["conta_ativa"] = c_id
+            salvar_contas_plataformas(todas_contas)
+            
+        inicializar_selenium(p_id, c_id)
+        salvar_sessao_ativa(p_id, motorista_atribuicao_ativa, contagem_atribuicao_ativa, c_id)
+        if p_id == 'anjun':
+            fechar_avisos_todas_abas_anjun(driver)
+            
+        return jsonify({
+            "status": "sucesso", 
+            "mensagem": f"Conta ativada com sucesso para {p_id}!",
+            "plataforma_ativa": p_id,
+            "conta_ativa": c_id
+        })
+    except Exception as e:
+        return jsonify({"status": "erro", "mensagem": str(e)}), 500
 
 @app.route('/deletar-plataforma', methods=['POST'])
 def deletar_plataforma():
@@ -4983,7 +10669,6 @@ def deletar_plataforma():
     
     plataformas = carregar_plataformas()
     if p_id in plataformas:
-        # Se for a plataforma atualmente rodando no Selenium, encerra o browser
         global plataforma_ativa
         if plataforma_ativa == p_id:
             fechar_selenium()
@@ -5004,70 +10689,178 @@ def deletar_plataforma():
 def selecionar_plataforma():
     dados = request.json
     p_id = dados.get("id", "").strip().lower()
+    conta_id = dados.get("conta_id", "").strip() or None
+
+    lic = validar_licenca()
+    liberadas = [str(p).strip().lower() for p in (lic.get("plataformas_liberadas") or ["anjun", "imile", "loggi", "magalog"])]
+    if p_id not in liberadas:
+        return jsonify({"status": "erro", "mensagem": f"A empresa '{p_id.upper()}' não está liberada na licença contratada para esta máquina."}), 403
     
     try:
-        inicializar_selenium(p_id)
+        inicializar_selenium(p_id, conta_id)
+        salvar_sessao_ativa(p_id, motorista_atribuicao_ativa, contagem_atribuicao_ativa, conta_ativa)
         if p_id == 'anjun':
             fechar_avisos_todas_abas_anjun(driver)
-        return jsonify({"status": "sucesso", "mensagem": f"Browser inicializado para a plataforma {p_id}."})
+        return jsonify({
+            "status": "sucesso", 
+            "mensagem": f"Browser inicializado para a plataforma {p_id}.",
+            "plataforma_ativa": p_id,
+            "conta_ativa": conta_ativa
+        })
     except Exception as e:
         return jsonify({"status": "erro", "mensagem": str(e)}), 500
 
 @app.route('/salvar-motoristas', methods=['POST'])
 def salvar_motoristas():
-    dados = request.json
+    dados = request.json or {}
     motoristas = dados.get("motoristas")
-    plat_id = dados.get("plataforma")
-    
-    if not plat_id:
-        plat_id = plataforma_ativa if plataforma_ativa else "anjun"
-        
-    lista_mapeamentos = []
-    if isinstance(motoristas, list):
-        for item in motoristas:
-            if isinstance(item, dict):
-                c = (item.get("cidade") or "").strip()
-                m = (item.get("motorista") or "").strip()
-                if c and m:
-                    lista_mapeamentos.append((c, m))
-    elif isinstance(motoristas, dict):
-        for c, m in motoristas.items():
-            c_clean = str(c).strip()
-            if isinstance(m, list):
-                for sub_m in m:
-                    sub_m_clean = str(sub_m).strip()
-                    if c_clean and sub_m_clean:
-                        lista_mapeamentos.append((c_clean, sub_m_clean))
-            else:
-                m_clean = str(m).strip()
-                if c_clean and m_clean:
-                    lista_mapeamentos.append((c_clean, m_clean))
-    else:
-        return jsonify({"status": "erro", "mensagem": "Formato de motoristas inválido."}), 400
-        
+    plat_id = (dados.get("plataforma") or plataforma_ativa or "anjun").strip().lower()
+    acao = (dados.get("acao") or "").strip().lower()
+
+    def _eh_cidade_valida(c_str):
+        return bool(c_str and str(c_str).strip().lower() not in ('sem cidade', 'geral', 'imile', 'anjun', ''))
+
     try:
         conn = conectar_banco()
         cursor = conn.cursor()
-        
-        # 1. Atualiza na tabela multiplataforma
-        cursor.execute("DELETE FROM motoristas_plataforma WHERE plataforma = ?", (plat_id,))
-        for cid, mot in lista_mapeamentos:
-            cursor.execute("INSERT OR IGNORE INTO motoristas_plataforma (cidade, plataforma, motorista) VALUES (?, ?, ?)", (cid, plat_id, mot))
-            
-        # 2. Se for a Anjun (ou se não houver plataforma ativa), mantém a tabela antiga sincronizada
-        if plat_id == 'anjun':
-            cursor.execute("DELETE FROM motoristas")
-            for cid, mot in lista_mapeamentos:
-                cursor.execute("INSERT OR IGNORE INTO motoristas (cidade, motorista) VALUES (?, ?)", (cid, mot))
-                
+
+        # Limpa eventuais registros inválidos de "Sem Cidade" ou "Geral" no banco
+        cursor.execute("DELETE FROM motoristas_plataforma WHERE LOWER(cidade) IN ('sem cidade', 'geral', 'imile', 'anjun', '')")
+        cursor.execute("DELETE FROM motoristas WHERE LOWER(cidade) IN ('sem cidade', 'geral', 'imile', 'anjun', '')")
+
+        cid_ativa, _ = obter_conta_ativa_plataforma(plat_id, dados.get("conta_id"))
+        _, nomes_base_oficiais, nomes_outras_bases = obter_nomes_oficiais_base_ativa(plat_id, cid_ativa, forcar=False)
+
+        if acao in ('adicionar', 'editar', 'deletar'):
+            cid_alvo = (dados.get("cidade") or "").strip()
+            mot_alvo = (dados.get("motorista") or "").strip()
+            faixa_cep_alvo = (dados.get("faixa_cep") or "").strip()
+            cid_antiga = (dados.get("cidade_antiga") or "").strip()
+            mot_antigo = (dados.get("motorista_antigo") or "").strip()
+
+            if acao == 'deletar':
+                if cid_alvo and mot_alvo:
+                    cursor.execute(
+                        "DELETE FROM motoristas_plataforma WHERE LOWER(plataforma) = LOWER(?) AND LOWER(cidade) = LOWER(?) AND LOWER(motorista) = LOWER(?)",
+                        (plat_id, cid_alvo, mot_alvo)
+                    )
+                    if plat_id == 'anjun':
+                        cursor.execute(
+                            "DELETE FROM motoristas WHERE LOWER(cidade) = LOWER(?) AND LOWER(motorista) = LOWER(?)",
+                            (cid_alvo, mot_alvo)
+                        )
+            else:
+                if acao == 'editar' and cid_antiga and mot_antigo:
+                    cursor.execute(
+                        "DELETE FROM motoristas_plataforma WHERE LOWER(plataforma) = LOWER(?) AND LOWER(cidade) = LOWER(?) AND LOWER(motorista) = LOWER(?)",
+                        (plat_id, cid_antiga, mot_antigo)
+                    )
+                    if plat_id == 'anjun':
+                        cursor.execute(
+                            "DELETE FROM motoristas WHERE LOWER(cidade) = LOWER(?) AND LOWER(motorista) = LOWER(?)",
+                            (cid_antiga, mot_antigo)
+                        )
+                if _eh_cidade_valida(cid_alvo) and mot_alvo:
+                    cursor.execute("INSERT OR IGNORE INTO cidades (cidade) VALUES (?)", (cid_alvo,))
+                    cursor.execute(
+                        "INSERT OR REPLACE INTO motoristas_plataforma (cidade, plataforma, motorista, faixa_cep) VALUES (?, ?, ?, ?)",
+                        (cid_alvo, plat_id, mot_alvo, faixa_cep_alvo)
+                    )
+                    if plat_id == 'anjun':
+                        cursor.execute(
+                            "INSERT OR IGNORE INTO motoristas (cidade, motorista) VALUES (?, ?)",
+                            (cid_alvo, mot_alvo)
+                        )
+                    # Garante que o motorista pertença à base ativa
+                    if plat_id in ('anjun', 'imile') and cid_ativa:
+                        atuais_base = list(nomes_base_oficiais or [])
+                        set_norm = {_normalizar_nome_base_comp(x) for x in atuais_base if x}
+                        mn = _normalizar_nome_base_comp(mot_alvo)
+                        if mn and mn not in set_norm:
+                            atuais_base.append(mot_alvo)
+                        if atuais_base:
+                            salvar_motoristas_da_base(plat_id, cid_ativa, atuais_base)
+        else:
+            lista_mapeamentos = []
+            if isinstance(motoristas, list):
+                for item in motoristas:
+                    if isinstance(item, dict):
+                        c = (item.get("cidade") or "").strip()
+                        m = (item.get("motorista") or "").strip()
+                        f_cep = (item.get("faixa_cep") or "").strip()
+                        if _eh_cidade_valida(c) and m:
+                            lista_mapeamentos.append((c, m, f_cep))
+            elif isinstance(motoristas, dict):
+                for c, m in motoristas.items():
+                    c_clean = str(c).strip()
+                    if not _eh_cidade_valida(c_clean):
+                        continue
+                    if isinstance(m, list):
+                        for sub_m in m:
+                            sub_m_clean = str(sub_m).strip()
+                            if sub_m_clean:
+                                lista_mapeamentos.append((c_clean, sub_m_clean, ""))
+                    else:
+                        m_clean = str(m).strip()
+                        if m_clean:
+                            lista_mapeamentos.append((c_clean, m_clean, ""))
+            else:
+                conn.close()
+                return jsonify({"status": "erro", "mensagem": "Formato de motoristas inválido."}), 400
+
+            # Preserva mapeamentos que pertencem a outras bases (e preserva faixa_cep existente se não veio no payload)
+            cursor.execute("SELECT cidade, motorista, COALESCE(faixa_cep, '') FROM motoristas_plataforma WHERE LOWER(plataforma) = LOWER(?)", (plat_id,))
+            existentes = cursor.fetchall()
+            preservados_outras_bases = []
+            cep_existente_map = {(c_ex.strip().lower(), m_ex.strip().lower()): (f_ex or "").strip() for c_ex, m_ex, f_ex in existentes if c_ex and m_ex}
+            if plat_id in ('anjun', 'imile') and (nomes_base_oficiais or nomes_outras_bases):
+                for c_ex, m_ex, f_ex in existentes:
+                    if _eh_cidade_valida(c_ex) and m_ex and not motorista_pertence_a_base_ativa(m_ex, nomes_base_oficiais, nomes_outras_bases, plat_id):
+                        preservados_outras_bases.append((c_ex, m_ex, (f_ex or "").strip()))
+
+            lista_mapeamentos_final = []
+            for cid_i, mot_i, f_cep_i in lista_mapeamentos:
+                if not f_cep_i:
+                    f_cep_i = cep_existente_map.get((cid_i.strip().lower(), mot_i.strip().lower()), "")
+                lista_mapeamentos_final.append((cid_i, mot_i, f_cep_i))
+
+            todos_para_salvar = lista_mapeamentos_final + preservados_outras_bases
+
+            cursor.execute("DELETE FROM motoristas_plataforma WHERE LOWER(plataforma) = LOWER(?)", (plat_id,))
+            for cid, mot, f_cep in todos_para_salvar:
+                if _eh_cidade_valida(cid):
+                    cursor.execute("INSERT OR IGNORE INTO cidades (cidade) VALUES (?)", (cid,))
+                cursor.execute("INSERT OR REPLACE INTO motoristas_plataforma (cidade, plataforma, motorista, faixa_cep) VALUES (?, ?, ?, ?)", (cid, plat_id, mot, f_cep))
+
+            if plat_id == 'anjun':
+                cursor.execute("DELETE FROM motoristas")
+                for cid, mot, _ in todos_para_salvar:
+                    cursor.execute("INSERT OR IGNORE INTO motoristas (cidade, motorista) VALUES (?, ?)", (cid, mot))
+
+            if plat_id in ('anjun', 'imile') and cid_ativa and lista_mapeamentos_final:
+                atuais_base = list(nomes_base_oficiais or [])
+                set_norm = {_normalizar_nome_base_comp(x) for x in atuais_base if x}
+                for _, mot_item, _ in lista_mapeamentos_final:
+                    mn = _normalizar_nome_base_comp(mot_item)
+                    if mn and mn not in set_norm:
+                        set_norm.add(mn)
+                        atuais_base.append(mot_item)
+                if atuais_base:
+                    salvar_motoristas_da_base(plat_id, cid_ativa, atuais_base)
+
         conn.commit()
         conn.close()
         
-        # Sincroniza com o arquivo JSON no novo formato multi-plataforma com suporte a múltiplos motoristas
+        # Sincroniza com o arquivo JSON no novo formato multi-plataforma com suporte a múltiplos motoristas e faixa_cep
         try:
             conn_json = conectar_banco()
             cursor_json = conn_json.cursor()
-            cursor_json.execute("SELECT cidade, plataforma, motorista FROM motoristas_plataforma ORDER BY plataforma, cidade, motorista")
+            cursor_json.execute("""
+                SELECT cidade, plataforma, motorista, COALESCE(faixa_cep, '')
+                FROM motoristas_plataforma
+                WHERE LOWER(cidade) NOT IN ('sem cidade', 'geral', 'imile', 'anjun', '')
+                ORDER BY plataforma, cidade, motorista
+            """)
             rows_json = cursor_json.fetchall()
             conn_json.close()
             
@@ -5076,24 +10869,45 @@ def salvar_motoristas():
                 cid = r_json[0]
                 plat = r_json[1]
                 mot = r_json[2]
+                f_cep = (r_json[3] or "").strip() if len(r_json) > 3 else ""
                 if plat not in mapeamento_completo:
                     mapeamento_completo[plat] = []
-                mapeamento_completo[plat].append({"cidade": cid, "motorista": mot})
+                item_json = {"cidade": cid, "motorista": mot}
+                if f_cep:
+                    item_json["faixa_cep"] = f_cep
+                mapeamento_completo[plat].append(item_json)
                 
             with open(CONFIG_MOTORISTAS, 'w', encoding='utf-8') as f:
                 json.dump(mapeamento_completo, f, indent=4, ensure_ascii=False)
             print("[Banco] config_motoristas.json sincronizado com sucesso!")
         except Exception as e_json:
             print(f"[Aviso] Falha ao gravar no config_motoristas.json: {str(e_json)}")
+
+        # Atualiza a planilha Excel e o .excel_sync_meta para não sobrescrever alterações feitas na interface
+        try:
+            excel_path = obter_caminho_excel()
+            gerar_planilha_motoristas_excel(excel_path)
+            if os.path.exists(excel_path):
+                meta_mtime_file = os.path.join(BASE_DIR, '.excel_sync_meta')
+                with open(meta_mtime_file, 'w') as f_meta:
+                    f_meta.write(str(os.path.getmtime(excel_path)))
+        except Exception as e_xl:
+            print(f"[Aviso] Falha ao atualizar planilha após salvar motorista: {e_xl}")
             
-        return jsonify({"status": "sucesso", "mensagem": f"Mapeamento de motoristas para a plataforma '{plat_id}' salvo com sucesso!"})
+        invalidar_cache_ram_cidades_motoristas()
+        return jsonify({
+            "status": "sucesso",
+            "mensagem": f"Mapeamento de motoristas para a plataforma '{plat_id}' salvo com sucesso!",
+            "motoristas": carregar_motoristas(plat_id, conta_id=cid_ativa),
+            "cidades": carregar_cidades()
+        })
     except Exception as e:
         return jsonify({"status": "erro", "mensagem": str(e)}), 500
 
 @app.route('/motoristas/status-excel', methods=['GET'])
 def rota_status_motoristas_excel():
     try:
-        excel_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), EXCEL_MOTORISTAS)
+        excel_path = obter_caminho_excel()
         existe = os.path.exists(excel_path)
         info = {
             "existe": existe,
@@ -5116,15 +10930,99 @@ def rota_exportar_motoristas_excel():
     except Exception as e:
         return jsonify({"status": "erro", "mensagem": str(e)}), 500
 
+@app.route('/motoristas/lista-sistema', methods=['GET'])
+def rota_motoristas_lista_sistema():
+    try:
+        conn = conectar_banco()
+        cursor = conn.cursor()
+        cursor.execute("SELECT cidade, motorista, plataforma FROM motoristas_plataforma WHERE cidade NOT IN ('iMile', 'Anjun')")
+        rows = cursor.fetchall()
+        conn.close()
+        
+        map_cidades = {}
+        for cid, mot, plat in rows:
+            chave = ((plat or '').lower(), mot.strip().lower())
+            if chave not in map_cidades:
+                map_cidades[chave] = []
+            map_cidades[chave].append(cid)
+
+        # iMile
+        todos_imile = []
+        try:
+            fn_im = globals().get('carregar_motoristas_imile_api')
+            if fn_im:
+                lista_im, _ = fn_im()
+                todos_imile = [m.get("daName", "").strip() for m in lista_im if m.get("daName")]
+        except Exception:
+            pass
+
+        # Anjun
+        todos_anjun = []
+        try:
+            fn_an = globals().get('carregar_motoristas_anjun_api')
+            if fn_an:
+                lista_an, _ = fn_an()
+                todos_anjun = [m.get("username", "").strip() for m in lista_an if m.get("username")]
+        except Exception:
+            pass
+
+        # Complementa com Motoristas.xlsx
+        path_xlsx = os.path.join(BASE_DIR, "Motoristas.xlsx")
+        if os.path.exists(path_xlsx):
+            try:
+                import openpyxl
+                wb_ref = openpyxl.load_workbook(path_xlsx, data_only=True)
+                ws_ref = wb_ref.active
+                for r in list(ws_ref.iter_rows(values_only=True))[1:]:
+                    if r and len(r) > 0 and r[0] and str(r[0]).strip() and str(r[0]).strip() not in todos_imile:
+                        todos_imile.append(str(r[0]).strip())
+                    if r and len(r) > 2 and r[2] and str(r[2]).strip() and str(r[2]).strip() not in todos_anjun:
+                        todos_anjun.append(str(r[2]).strip())
+                wb_ref.close()
+            except Exception:
+                pass
+
+        todos_imile = sorted(list(set(todos_imile)), key=lambda s: s.lower())
+        todos_anjun = sorted(list(set(todos_anjun)), key=lambda s: s.lower())
+
+        resp_imile = []
+        for mot in todos_imile:
+            cidades = map_cidades.get(('imile', mot.lower()), [])
+            resp_imile.append({
+                "motorista": mot,
+                "cidades": cidades,
+                "tem_cidade": len(cidades) > 0
+            })
+
+        resp_anjun = []
+        for mot in todos_anjun:
+            cidades = map_cidades.get(('anjun', mot.lower()), [])
+            resp_anjun.append({
+                "motorista": mot,
+                "cidades": cidades,
+                "tem_cidade": len(cidades) > 0
+            })
+
+        return jsonify({
+            "status": "sucesso",
+            "imile": resp_imile,
+            "anjun": resp_anjun,
+            "total_imile": len(resp_imile),
+            "total_anjun": len(resp_anjun)
+        })
+    except Exception as e:
+        return jsonify({"status": "erro", "mensagem": str(e)}), 500
+
+
 @app.route('/motoristas/sincronizar-excel', methods=['POST'])
 def rota_sincronizar_motoristas_excel():
     try:
-        excel_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), EXCEL_MOTORISTAS)
+        excel_path = obter_caminho_excel()
         ok, c_qtd, m_qtd, msg = sincronizar_motoristas_excel(excel_path)
         if ok:
             try:
                 mtime = os.path.getmtime(excel_path)
-                meta_mtime_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.excel_sync_meta')
+                meta_mtime_file = os.path.join(BASE_DIR, '.excel_sync_meta')
                 with open(meta_mtime_file, 'w') as f_meta:
                     f_meta.write(str(mtime))
             except Exception:
@@ -5153,14 +11051,14 @@ def rota_importar_motoristas_excel():
         if not (file.filename.lower().endswith('.xlsx') or file.filename.lower().endswith('.xls')):
             return jsonify({"status": "erro", "mensagem": "O arquivo deve estar no formato Excel (.xlsx)."}), 400
             
-        excel_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), EXCEL_MOTORISTAS)
+        excel_path = obter_caminho_excel()
         file.save(excel_path)
         
         ok, c_qtd, m_qtd, msg = sincronizar_motoristas_excel(excel_path)
         if ok:
             try:
                 mtime = os.path.getmtime(excel_path)
-                meta_mtime_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.excel_sync_meta')
+                meta_mtime_file = os.path.join(BASE_DIR, '.excel_sync_meta')
                 with open(meta_mtime_file, 'w') as f_meta:
                     f_meta.write(str(mtime))
             except Exception:
@@ -5176,40 +11074,252 @@ def rota_importar_motoristas_excel():
     except Exception as e:
         return jsonify({"status": "erro", "mensagem": str(e)}), 500
 
+@app.route('/motoristas/abrir-excel', methods=['POST'])
+def rota_abrir_motoristas_excel():
+    try:
+        excel_path = obter_caminho_excel()
+        if not os.path.exists(excel_path):
+            gerar_planilha_motoristas_excel(excel_path)
+            
+        os.startfile(excel_path)
+        return jsonify({"status": "sucesso", "mensagem": "Planilha Excel aberta no computador."})
+    except Exception as e:
+        return jsonify({"status": "erro", "mensagem": f"Erro ao abrir planilha: {str(e)}"}), 500
+
+@app.route('/motoristas/abrir-pasta-excel', methods=['POST'])
+def rota_abrir_pasta_motoristas_excel():
+    try:
+        excel_path = obter_caminho_excel()
+        if not os.path.exists(excel_path):
+            gerar_planilha_motoristas_excel(excel_path)
+        pasta = os.path.dirname(os.path.abspath(excel_path))
+        if os.name == 'nt' and os.path.exists(excel_path):
+            import subprocess
+            subprocess.Popen(f'explorer /select,"{os.path.abspath(excel_path)}"', env=obter_env_limpo_pyinstaller())
+        else:
+            os.startfile(pasta)
+        return jsonify({"status": "sucesso", "mensagem": "Pasta da planilha aberta no Windows Explorer."})
+    except Exception as e:
+        return jsonify({"status": "erro", "mensagem": f"Erro ao abrir pasta: {str(e)}"}), 500
+
+@app.route('/imile/motoristas/sincronizar', methods=['GET', 'POST'])
+def sincronizar_motoristas_imile_route():
+    try:
+        lista, _ = carregar_motoristas_imile_api(forcar=True)
+        return jsonify({
+            "status": "sucesso",
+            "total": len(lista),
+            "motoristas": lista,
+            "mensagem": f"{len(lista)} entregadores sincronizados com sucesso direto da iMile!"
+        }), 200
+    except Exception as e:
+        return jsonify({"status": "erro", "mensagem": str(e)}), 500
+
+@app.route('/anjun/motoristas/sincronizar', methods=['GET', 'POST'])
+def sincronizar_motoristas_anjun_route():
+    try:
+        lista, _ = carregar_motoristas_anjun_api(forcar=True)
+        return jsonify({
+            "status": "sucesso",
+            "total": len(lista),
+            "motoristas": lista,
+            "mensagem": f"{len(lista)} entregadores sincronizados com sucesso direto da Anjun!"
+        }), 200
+    except Exception as e:
+        return jsonify({"status": "erro", "mensagem": str(e)}), 500
+
+@app.route('/loggi/grupos', methods=['GET'])
+def loggi_grupos_route():
+    try:
+        grupos = loggi_listar_grupos_api()
+        return jsonify({
+            "status": "sucesso",
+            "grupos": grupos,
+            "grupo_ativo": grupo_loggi_ativo
+        }), 200
+    except Exception as e:
+        return jsonify({"status": "erro", "mensagem": str(e)}), 500
+
+@app.route('/loggi/grupo-ativo', methods=['GET'])
+def loggi_grupo_ativo_route():
+    return jsonify({
+        "status": "sucesso",
+        "grupo_ativo": grupo_loggi_ativo
+    }), 200
+
+@app.route('/loggi/definir-grupo', methods=['POST'])
+def loggi_definir_grupo_route():
+    global grupo_loggi_ativo
+    dados = request.get_json(silent=True) or {}
+    modo = dados.get("modo", "novo")
+    grupo_loggi_ativo["modo"] = modo
+    if modo == "existente":
+        if dados.get("licensePlate"):
+            grupo_loggi_ativo["licensePlate"] = dados.get("licensePlate")
+        if dados.get("tags") is not None:
+            grupo_loggi_ativo["tags"] = dados.get("tags", [])
+        if dados.get("cidade"):
+            grupo_loggi_ativo["cidade"] = dados.get("cidade")
+        if dados.get("cidades"):
+            grupo_loggi_ativo["cidades_autorizadas"] = dados.get("cidades")
+    else:
+        forcar_reset = dados.get("reset", False)
+        nova_cidade = dados.get("cidade_principal") or dados.get("cidade")
+        cid_atual = grupo_loggi_ativo.get("cidade")
+        mudou_cidade = bool(nova_cidade and cid_atual and not cidades_sao_iguais(nova_cidade, cid_atual))
+        if forcar_reset or mudou_cidade or not nova_cidade:
+            grupo_loggi_ativo["licensePlate"] = None
+            grupo_loggi_ativo["tags"] = []
+            grupo_loggi_ativo["cidade"] = nova_cidade
+            grupo_loggi_ativo["quantity"] = 0
+            if nova_cidade:
+                from datetime import datetime
+                dia_mes = datetime.now().strftime("%d-%m")
+                try:
+                    grupos_abertos = loggi_listar_grupos_api()
+                    for g in grupos_abertos:
+                        tags_list = g.get("tags", [])
+                        tags_str = " ".join(tags_list)
+                        if (any(cidades_sao_iguais(nova_cidade, t) for t in tags_list) or cidades_sao_iguais(nova_cidade, tags_str)) and dia_mes in tags_str:
+                            grupo_loggi_ativo["licensePlate"] = g["licensePlate"]
+                            grupo_loggi_ativo["tags"] = tags_list
+                            grupo_loggi_ativo["cidade"] = nova_cidade
+                            grupo_loggi_ativo["quantity"] = g.get("quantity", 0)
+                            print(f"[+] [Loggi API] Cidade '{nova_cidade}' vinculada ao grupo existente de HOJE: {g['licensePlate']} ({tags_str}) com {g.get('quantity', 0)} pacotes")
+                            break
+                except Exception as e_lk:
+                    print(f"[Aviso] Falha ao consultar grupo de hoje para {nova_cidade}: {e_lk}")
+        else:
+            if not grupo_loggi_ativo.get("licensePlate"):
+                grupo_loggi_ativo["cidade"] = nova_cidade
+                if nova_cidade:
+                    from datetime import datetime
+                    dia_mes = datetime.now().strftime("%d-%m")
+                    try:
+                        grupos_abertos = loggi_listar_grupos_api()
+                        for g in grupos_abertos:
+                            tags_list = g.get("tags", [])
+                            tags_str = " ".join(tags_list)
+                            if (any(cidades_sao_iguais(nova_cidade, t) for t in tags_list) or cidades_sao_iguais(nova_cidade, tags_str)) and dia_mes in tags_str:
+                                grupo_loggi_ativo["licensePlate"] = g["licensePlate"]
+                                grupo_loggi_ativo["tags"] = tags_list
+                                grupo_loggi_ativo["cidade"] = nova_cidade
+                                grupo_loggi_ativo["quantity"] = g.get("quantity", 0)
+                                print(f"[+] [Loggi API] Cidade '{nova_cidade}' vinculada ao grupo existente de HOJE: {g['licensePlate']} ({tags_str}) com {g.get('quantity', 0)} pacotes")
+                                break
+                    except Exception:
+                        pass
+    print(f"[+] [Loggi API] Grupo ativo atualizado: Modo '{modo}' | Placa: {grupo_loggi_ativo.get('licensePlate')} | Tags: {grupo_loggi_ativo.get('tags')} | Cidade Base: {grupo_loggi_ativo.get('cidade')}")
+    return jsonify({"status": "sucesso", "grupo_ativo": grupo_loggi_ativo}), 200
+
+@app.route('/loggi/criar-grupo', methods=['POST'])
+def loggi_criar_grupo_route():
+    dados = request.get_json(silent=True) or {}
+    cidade = dados.get("cidade", "Geral")
+    forcar = dados.get("forcar", True)
+    try:
+        nova_placa, tag_nome = loggi_criar_novo_grupo_api(cidade, forcar_novo=forcar)
+        return jsonify({
+            "status": "sucesso",
+            "licensePlate": nova_placa,
+            "tag": tag_nome,
+            "grupo_ativo": grupo_loggi_ativo
+        }), 200
+    except Exception as e:
+        return jsonify({"status": "erro", "mensagem": str(e)}), 500
+
+
 @app.route('/reiniciar-sistema', methods=['POST'])
 def rota_reiniciar_sistema():
     print("\n" + "=" * 60)
-    print(" [*] COMANDO DE REINICIALIZAÇÃO DO SISTEMA RECEBIDO DO PAINEL!")
+    print(" [*] COMANDO DE REINICIALIZAÇÃO DO SERVIDOR (CMD) RECEBIDO DO PAINEL!")
     print("=" * 60)
+
+    # 1. Salva a sessão ativa antes de reiniciar (plataforma, motorista, contagem e conta_id)
+    dados = request.get_json(silent=True) or {}
+    plat_req = dados.get("plataforma") or plataforma_ativa
+    mot_req = dados.get("motorista") or motorista_atribuicao_ativa
+    cont_req = dados.get("contagem", contagem_atribuicao_ativa)
+    conta_req = dados.get("conta_id") or conta_ativa
+    salvar_sessao_ativa(plat_req, mot_req, cont_req, conta_req)
 
     def executar_reinicio():
         time.sleep(0.6)  # Aguarda envio da resposta HTTP ao navegador
         
-        # 1. Encerra o Selenium e o Chrome com segurança
-        try:
-            print("[*] Encerrando navegador Chrome e limpando tarefas...")
-            fechar_selenium()
-        except Exception as e_sel:
-            print(f"[Aviso] Erro ao fechar Selenium: {str(e_sel)}")
+        # 2. Desconecta o Selenium em memória SEM FECHAR O CHROME!
+        # O Chrome permanece aberto no Windows, intacto com todas as abas e logins!
+        print("[*] Desconectando sessão local do Selenium (Chrome permanece aberto)...")
+        desconectar_selenium()
 
-        # 2. Mata processos residuais de chromedriver
+        # 3. Mata apenas processos residuais de chromedriver (a ponte), NÃO o chrome.exe
         try:
             import subprocess
             subprocess.run("taskkill /f /im chromedriver.exe", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
             pass
 
-        # 3. Se o script estiver rodando dentro do loop do start_server.bat, sai com código 42
+        # 4. Se o script estiver rodando dentro do loop do start_server.bat, sai com código 42
         if os.environ.get("GS_LOOP_ACTIVE") == "1":
             print("[*] Reiniciando via loop do CMD (código 42)...")
             os._exit(42)
         else:
-            print("[*] Loop do CMD não detectado. Finalizando processo Python para reinicialização limpa pelo Electron...")
+            print("[*] Loop do CMD não detectado. Re-spawnando processo Python com ambiente limpo...")
+            try:
+                import subprocess, sys
+                env_limpo = obter_env_limpo_pyinstaller()
+                flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000) if os.name == 'nt' else 0
+                if getattr(sys, 'frozen', False):
+                    cmd_str = f'cmd /c "ping 127.0.0.1 -n 3 > nul && \"{sys.executable}\""'
+                    subprocess.Popen(cmd_str, cwd=BASE_DIR, env=env_limpo, shell=True, creationflags=flags, close_fds=True)
+                else:
+                    script_path = os.path.abspath(__file__)
+                    py_exe = sys.executable
+                    if not py_exe or not os.path.isfile(py_exe):
+                        py_exe = os.path.join(os.path.dirname(script_path), "venv", "Scripts", "python.exe")
+                    cmd_str = f'cmd /c "ping 127.0.0.1 -n 3 > nul && \"{py_exe}\" \"{script_path}\""'
+                    subprocess.Popen(cmd_str, cwd=BASE_DIR, env=env_limpo, shell=True, creationflags=flags, close_fds=True)
+            except Exception as e_respawn:
+                print(f"[Aviso] Erro ao re-spawnar Python: {e_respawn}")
             os._exit(0)
 
     import threading
     threading.Thread(target=executar_reinicio, daemon=True).start()
-    return jsonify({"status": "sucesso", "mensagem": "Sistema reiniciando..."})
+    return jsonify({"status": "sucesso", "mensagem": "Servidor reiniciando (o Chrome permanecerá aberto)..."})
+
+@app.route('/focar-chrome', methods=['POST', 'GET'])
+def rota_focar_chrome():
+    try:
+        dados = request.get_json(silent=True) or {}
+        plat = (dados.get("plataforma") or plataforma_ativa or "").strip().lower()
+        cid = (dados.get("conta_id") or conta_ativa or "").strip() or None
+
+        if plat:
+            _, porta, cid_resolvido, _ = obter_perfil_e_porta_conta(plat, cid)
+            if not is_chrome_debug_active(porta) or not chrome_tem_janela_visivel_na_tela(porta):
+                inicializar_selenium(plat, cid_resolvido)
+                salvar_sessao_ativa(plat, motorista_atribuicao_ativa, contagem_atribuicao_ativa, cid_resolvido)
+                return jsonify({"status": "sucesso", "mensagem": "Chrome iniciado e focado com sucesso!"})
+            else:
+                if not driver or plataforma_ativa != plat or (cid_resolvido and conta_ativa != cid_resolvido):
+                    conectar_chrome_existente(plat, cid_resolvido)
+                try:
+                    driver.maximize_window()
+                    driver.execute_cdp_cmd("Page.bringToFront", {})
+                except Exception:
+                    pass
+                forcar_janela_chrome_visivel(porta)
+                return jsonify({"status": "sucesso", "mensagem": "Chrome focado com sucesso!"})
+
+        if driver:
+            try:
+                driver.maximize_window()
+                driver.execute_cdp_cmd("Page.bringToFront", {})
+            except Exception:
+                pass
+        forcar_janela_chrome_visivel()
+        return jsonify({"status": "sucesso", "mensagem": "Chrome focado com sucesso!"})
+    except Exception as e:
+        return jsonify({"status": "erro", "mensagem": str(e)}), 500
 
 @app.route('/bip', methods=['POST'])
 @requer_licenca_ativa
@@ -5278,11 +11388,27 @@ def processar_bip():
         cursor_dup = conn_dup.cursor()
         cursor_dup.execute('''
             SELECT timestamp, motorista, cidade FROM historico
-            WHERE codigo = ? AND status = 'OK' AND timestamp >= ?
+            WHERE UPPER(codigo) = UPPER(?) AND status = 'OK' AND timestamp >= ?
             ORDER BY timestamp DESC LIMIT 1
         ''', (codigo_qr, limite_data))
         res_dup = cursor_dup.fetchone()
+
+        if not res_dup and ('anjun' in p_id or 'anjun' in str(plataforma_ativa or '').lower()):
+            try:
+                cursor_dup.execute('''
+                    SELECT motorista FROM lote_pendente_anjun
+                    WHERE UPPER(waybill) = UPPER(?) LIMIT 1
+                ''', (codigo_qr,))
+                row_lote = cursor_dup.fetchone()
+                if row_lote:
+                    res_dup = (datetime.datetime.now().isoformat(), row_lote[0], "Anjun")
+            except Exception:
+                pass
+
         conn_dup.close()
+
+        if not res_dup and codigo_qr.upper() in bipes_ok_sessao:
+            res_dup = bipes_ok_sessao[codigo_qr.upper()]
         
         if res_dup:
             timestamp_raw, mot_dup, cid_dup = res_dup
@@ -5292,7 +11418,7 @@ def processar_bip():
             except Exception:
                 dt_str = timestamp_raw
                 
-            print(f"[!] PACOTE DUPLICADO DETECTADO: {codigo_qr} (Bipado em {dt_str} para {mot_dup}). Prosseguindo para reatribuição...")
+            print(f"[!] PACOTE DUPLICADO DETECTADO: {codigo_qr} (Bipado em {dt_str} para {mot_dup}).")
             salvar_entrada_historico(codigo_qr, p_id, cid_dup, mot_dup, "DUPLICADO")
             
             # Envia alerta em tempo real para a gerência
@@ -5312,9 +11438,15 @@ def processar_bip():
             timestamp_anterior = dt_str
     except Exception as e_dup:
         print(f"[Erro] Falha ao verificar duplicados no banco: {str(e_dup)}")
+        if codigo_qr.upper() in bipes_ok_sessao:
+            ts_m, mot_m, cid_m = bipes_ok_sessao[codigo_qr.upper()]
+            pacote_duplicado = True
+            motorista_anterior = mot_m
+            cidade_duplicada = cid_m
+            timestamp_anterior = ts_m
         
     if pacote_duplicado:
-        print(f"[!] PACOTE DUPLICADO: {codigo_qr} (Bipado anteriormente para {motorista_anterior} em {timestamp_anterior}). Executando fluxo completo novamente no site (Entrada + Atribuição)...")
+        print(f"[!] PACOTE DUPLICADO ({p_id}): {codigo_qr} (Bipado anteriormente para {motorista_anterior} em {timestamp_anterior}). Executando fluxo completo no site (Entrada + Atribuição)...")
             
     driver_lock.acquire()
     try:
@@ -5322,7 +11454,10 @@ def processar_bip():
         confirmado_reabertura = dados.get("confirmado_reabertura", False)
         tem_motorista = bool(motorista_lote and str(motorista_lote).strip() not in ["", "---", "Apenas Entrada (Sem Atribuição)"])
         if not is_driver_ativo() or plataforma_ativa != p_id:
-            if (p_id in ['anjun', 'imile', 'loggi']) and tem_motorista and not confirmado_reabertura:
+            porta_p = PORTAS_DEBUG.get(p_id, 9222)
+            chrome_ja_aberto = is_chrome_debug_active(porta_p)
+
+            if not chrome_ja_aberto and (p_id in ['anjun', 'imile', 'loggi']) and tem_motorista and not confirmado_reabertura:
                 print(f"[!] Chrome fechado detectado com motorista/destino ({motorista_lote}) para {p_id}. Solicitando confirmação do operador...")
                 return jsonify({
                     "status": "chrome_fechado",
@@ -5347,123 +11482,260 @@ def processar_bip():
         print("="*50)
         
         if p_id == 'loggi':
-            aba_recebimento_valida = bool(aba_recebimento and aba_recebimento in driver.window_handles)
-            if not aba_recebimento_valida:
-                print("[*] Aba 1 Loggi inválida ou ausente. Escaneando handles...")
-                garantir_abas_loggi(driver)
-                if aba_recebimento and aba_recebimento in driver.window_handles:
-                    aba_recebimento_valida = True
+            # --- MOTOR DE BIPAGEM DIRETA VIA API LOGGI (SUB-150MS) ---
+            print("[*] [Loggi] Disparando bipagem direta via API Ultra-Rápida...")
+            sucesso_api, msg_api, mot_final, cid_api, cep_api, rec_api, end_api = bipar_pacote_loggi_api(
+                codigo_qr, cidades_selecionadas, motorista_lote
+            )
             
-            if not aba_recebimento_valida:
-                aba_recebimento = None
-                for handle in driver.window_handles:
-                    try:
-                        driver.switch_to.window(handle)
-                        url_atual = driver.current_url.lower()
-                        if "colecoes" in url_atual:
-                            tem_rec = False
-                            for xp in ["//input[@placeholder='Bipe para receber pacotes e sacas']", "//input[contains(@placeholder, 'Bipe para receber')]"]:
-                                try:
-                                    if driver.find_element(By.XPATH, xp).is_displayed():
-                                        tem_rec = True
-                                        break
-                                except Exception:
-                                    pass
-                            if tem_rec:
-                                aba_recebimento = handle
-                                aba_recebimento_valida = True
-                                print(f"[+] Aba 1 Loggi (Recebimento) identificada dinamicamente: {handle}")
-                                break
-                    except Exception:
-                        continue
-                        
-            # Se não achou nenhuma aba 1 válida com o campo aberto, mas achou uma aba com 'colecoes' ou 'acompanhamento':
-            if not aba_recebimento_valida:
-                print("[*] Não encontramos nenhuma aba de Recebimento ativa. Tentando recuperar...")
-                for handle in driver.window_handles:
-                    try:
-                        driver.switch_to.window(handle)
-                        url_atual = driver.current_url.lower()
-                        if "colecoes" in url_atual or "acompanhamento" in url_atual:
-                            print(f"[*] Recuperando aba 1 no handle {handle} navegando para a URL de recebimento...")
-                            driver.get(config['recebimento_url'])
-                            time.sleep(1.0)
-                            aba_recebimento = handle
-                            aba_recebimento_valida = True
-                            break
-                    except Exception:
-                        continue
-                        
-            print("[*] Mudando para a aba 1 (Recebimento Loggi)...")
-            mudar_aba_acelerado(driver, aba_recebimento)
-            
-            print("[*] Localizando campo de input de entrada no galpão Loggi via HTML...")
-            campo_rec = obter_input_loggi_html(driver, modo='recebimento')
-            if not campo_rec:
-                raise Exception("Não foi possível encontrar o campo de bipe da Loggi. Verifique se a aba de recebimento (colecoes) está aberta.")
+            if sucesso_api is True or (sucesso_api and sucesso_api != "divergente"):
+                cidade_detectada = cid_api if cid_api else "Loggi"
+                motorista = mot_final if mot_final else (motorista_lote or grupo_loggi_ativo.get("cidade") or "Loggi")
+                recebedor = rec_api if rec_api else "---"
+                cep = cep_api if cep_api else ""
+                endereco = end_api if end_api else ""
                 
-            print(f"[*] Enviando bipe do pacote Loggi na Aba 1: {codigo_qr}...")
-            enviar_bipe_loggi_html(driver, campo_rec, codigo_qr, modo='recebimento')
-            
-            # --- VERIFICAÇÃO DE CONFIRMAÇÃO DA LOGGI ---
-            confirmado = False
-            inicio_wait_toast = time.time()
-            js_toast_loggi = """
-                // 1. Botão de confirmação modal (ex: 'Beleza')
-                const btns = Array.from(document.querySelectorAll("button")).filter(b => b.offsetParent !== null && (b.innerText || '').includes("Beleza"));
-                if (btns.length > 0) {
-                    try { btns[0].click(); } catch(e){}
-                    return { status: 'confirmado', motivo: 'beleza' };
-                }
+                # Incrementa contagem local sempre no grupo ativo principal
+                chave_cont = motorista if motorista else (motorista_lote or grupo_loggi_ativo.get("cidade") or cidade_detectada)
+                contagem_motoristas[chave_cont] = contagem_motoristas.get(chave_cont, 0) + 1
                 
-                // 2. Alertas e toasts do Material UI / Loggi
-                const toasts = document.querySelectorAll(".MuiAlert-message, .MuiSnackbar-root, [role='alert'], .toast, div[class*='alert'], div[class*='toast'], div[class*='notification']");
-                for (var t = 0; t < toasts.length; t++) {
-                    var elT = toasts[t];
-                    if (elT && (elT.offsetWidth > 0 || elT.offsetHeight > 0 || elT.offsetParent !== null)) {
-                        var tTxt = (elT.innerText || elT.textContent || '').trim().toLowerCase();
-                        if (tTxt.includes("sucesso") || tTxt.includes("recebid") || tTxt.includes("bipad") || tTxt.includes("pronto") || tTxt.includes("adicionad")) {
-                            return { status: 'confirmado', motivo: 'toast_sucesso' };
-                        }
-                    }
-                }
-
-                // 3. Texto geral da tela
-                const bodyTxt = document.body.innerText || "";
-                if (bodyTxt.includes("Pronto!") || bodyTxt.includes("bipada") || bodyTxt.includes("bipado") || bodyTxt.includes("recebido com sucesso")) {
-                    return { status: 'confirmado', motivo: 'texto' };
-                }
-                
-                return { status: 'esperando' };
-            """
-            while time.time() - inicio_wait_toast < 4.0:
-                try:
-                    res_toast = driver.execute_script(js_toast_loggi)
-                    if res_toast and res_toast.get("status") == "confirmado":
-                        confirmado = True
-                        print(f"[+] Confirmação da Loggi detectada ({res_toast.get('motivo')})!")
-                        break
-                except Exception:
-                    pass
-                time.sleep(0.1)
-                
-            if not confirmado:
-                # Verifica se o campo foi limpo pelo site da Loggi (sinal claro de envio processado)
-                try:
-                    val_pos = campo_rec.get_attribute('value')
-                    if not val_pos or val_pos == '':
-                        confirmado = True
-                        print("[+] Loggi: Campo de bipe foi limpo pelo site, indicando recebimento processado!")
-                except Exception:
-                    pass
-                    
-            if not confirmado:
                 if pacote_duplicado:
-                    print(f"[*] Loggi: Pacote duplicado {codigo_qr} pode já ter recebimento prévio. Prosseguindo para atribuição...")
+                    if motorista_anterior:
+                        for k_m in list(contagem_motoristas.keys()):
+                            if k_m.strip().lower() == str(motorista_anterior).strip().lower():
+                                contagem_motoristas[k_m] = max(0, contagem_motoristas[k_m] - 1)
+                                break
+                    try:
+                        conn_up = conectar_banco()
+                        cursor_up = conn_up.cursor()
+                        cursor_up.execute('''
+                            UPDATE historico 
+                            SET status = 'REATRIBUIDO' 
+                            WHERE UPPER(codigo) = UPPER(?) AND status = 'OK' AND timestamp >= ?
+                        ''', (codigo_qr, limite_data))
+                        conn_up.commit()
+                        conn_up.close()
+                    except Exception:
+                        pass
+                
+                contagem_atribuicao_ativa = contagem_motoristas.get(chave_cont, 0)
+                salvar_entrada_historico(codigo_qr, p_id, cidade_detectada, motorista, "OK", recebedor=recebedor, cep=cep, endereco=endereco)
+                
+                total_bipes_processados += 1
+                if total_bipes_processados % 100 == 0:
+                    otimizar_memoria()
+                    
+                tempo_total = time.time() - tempo_inicio
+                print(f"[+] [Loggi API] PACOTE PROCESSADO COM SUCESSO EM {tempo_total:.2f}s ({motorista} | {cidade_detectada} | CEP: {cep})!")
+                
+                return jsonify({
+                    "status": "sucesso",
+                    "cidade": cidade_detectada,
+                    "motorista": motorista,
+                    "recebedor": recebedor,
+                    "cep": cep,
+                    "endereco": endereco,
+                    "contagem": contagem_atribuicao_ativa,
+                    "contagem_site": None,
+                    "duplicado": pacote_duplicado,
+                    "motorista_anterior": motorista_anterior,
+                    "timestamp_anterior": timestamp_anterior,
+                    "mesmo_motorista": bool(motorista_lote and motorista_anterior and motorista_lote.strip().lower() == motorista_anterior.strip().lower())
+                })
+            elif sucesso_api == "divergente":
+                cidade_detectada = cid_api if cid_api else "Loggi"
+                motorista_esperado_display = mot_final
+                recebedor = rec_api if rec_api else "---"
+                cep = cep_api if cep_api else ""
+                endereco = end_api if end_api else ""
+                
+                try:
+                    conn_div = conectar_banco()
+                    cursor_div = conn_div.cursor()
+                    cursor_div.execute("""
+                        INSERT OR REPLACE INTO divergencias_pendentes (codigo, motorista_lote, motorista_esperado, status)
+                        VALUES (?, ?, ?, 'pendente')
+                    """, (codigo_qr, motorista_lote or grupo_loggi_ativo.get("cidade"), motorista_esperado_display))
+                    conn_div.commit()
+                    conn_div.close()
+                except Exception:
+                    pass
+                
+                salvar_entrada_historico(codigo_qr, p_id, cidade_detectada, motorista_esperado_display, "DIVERGENTE", recebedor=recebedor, cep=cep, endereco=endereco)
+                
+                return jsonify({
+                    "status": "divergente",
+                    "mensagem": msg_api,
+                    "cidade": cidade_detectada,
+                    "recebedor": recebedor,
+                    "motorista_esperado": motorista_esperado_display
+                }), 400
+            else:
+                msg_low = (msg_api or "").lower()
+                eh_falha_rede = any(k in msg_low for k in ["internet lenta", "oscilação", "oscilacao", "timeout", "timed out", "urlopen error", "connection reset", "falha na comunicação", "network error"])
+                eh_falha_sessao = any(k in msg_low for k in ["sessão", "token", "desconectada", "401"])
+
+                if eh_falha_rede:
+                    print(f"[!] [Loggi API] Queda de internet detectada: '{msg_api}'. Travando processo para evitar bipes no escuro.")
+                    return jsonify({
+                        "status": "erro_rede",
+                        "plataforma": "loggi",
+                        "mensagem": "Falha na conexão de internet com a Loggi. Verifique a internet e bipe novamente."
+                    }), 400
+
+                if eh_falha_sessao:
+                    return jsonify({
+                        "status": "aguardando_login",
+                        "plataforma": "loggi",
+                        "mensagem": "Sessão da Loggi desconectada ou expirada. Verifique o login no Chrome."
+                    }), 400
                 else:
-                    raise Exception("Código inválido para recebimento no site da Loggi (a mensagem de confirmação não apareceu). Tente ler outro código da etiqueta!")
+                    salvar_entrada_historico(codigo_qr, p_id, "---", "---", f"FALHA: {msg_api}")
+                    return jsonify({
+                        "status": "erro",
+                        "mensagem": f"Alerta Loggi: {msg_api}"
+                    }), 400
             
         elif (p_id == 'imile' or 'imile' in config['recebimento_url'].lower()):
+            # --- MOTOR DE BIPAGEM DIRETA VIA API IMILE (SUB-100MS) ---
+            print("[*] [iMile] Disparando bipagem direta via API Ultra-Rápida...")
+            sucesso_api, msg_api, mot_final, cid_api, cep_api, rec_api, end_api = bipar_pacote_imile_api(codigo_qr, motorista_lote, pacote_solto)
+            
+            if sucesso_api is True:
+                cidade_detectada = cid_api if cid_api else "iMile"
+                motorista = mot_final if mot_final else motorista_lote
+                recebedor = rec_api if rec_api else "---"
+                cep = cep_api if cep_api else ""
+                endereco = end_api if end_api else ""
+                
+                # Incrementa contagem local
+                if motorista_lote:
+                    contagem_motoristas[motorista_lote] = contagem_motoristas.get(motorista_lote, 0) + 1
+                
+                # Se for duplicado, anula a atribuição anterior para corrigir a contagem
+                if pacote_duplicado:
+                    if motorista_anterior:
+                        for k_m in list(contagem_motoristas.keys()):
+                            if k_m.strip().lower() == str(motorista_anterior).strip().lower():
+                                contagem_motoristas[k_m] = max(0, contagem_motoristas[k_m] - 1)
+                                break
+                    try:
+                        conn_up = conectar_banco()
+                        cursor_up = conn_up.cursor()
+                        cursor_up.execute('''
+                            UPDATE historico 
+                            SET status = 'REATRIBUIDO' 
+                            WHERE UPPER(codigo) = UPPER(?) AND status = 'OK' AND timestamp >= ?
+                        ''', (codigo_qr, limite_data))
+                        conn_up.commit()
+                        conn_up.close()
+                    except Exception:
+                        pass
+                
+                contagem_atribuicao_ativa = contagem_motoristas.get(motorista_lote, 0) if motorista_lote else 0
+                salvar_entrada_historico(codigo_qr, p_id, cidade_detectada, motorista, "OK", recebedor=recebedor, cep=cep, endereco=endereco)
+                
+                total_bipes_processados += 1
+                if total_bipes_processados % 100 == 0:
+                    otimizar_memoria()
+                    
+                tempo_total = time.time() - tempo_inicio
+                print(f"[+] [iMile API] PACOTE PROCESSADO COM SUCESSO EM {tempo_total:.2f}s ({motorista} | {cidade_detectada} | CEP: {cep})!")
+                
+                return jsonify({
+                    "status": "sucesso",
+                    "cidade": cidade_detectada,
+                    "motorista": motorista_lote,
+                    "recebedor": recebedor,
+                    "cep": cep,
+                    "endereco": endereco,
+                    "contagem": contagem_atribuicao_ativa,
+                    "contagem_site": None,
+                    "duplicado": pacote_duplicado,
+                    "motorista_anterior": motorista_anterior,
+                    "timestamp_anterior": timestamp_anterior,
+                    "mesmo_motorista": bool(motorista_lote and motorista_anterior and motorista_lote.strip().lower() == motorista_anterior.strip().lower())
+                })
+            elif sucesso_api == "aguardando_login":
+                return jsonify({
+                    "status": "aguardando_login",
+                    "plataforma": "imile",
+                    "mensagem": msg_api or "Sessão da iMile desconectada. Faça o login no Chrome para continuar."
+                })
+            elif sucesso_api == "divergente":
+                cidade_detectada = cid_api if cid_api else "iMile"
+                motorista_esperado_display = mot_final
+                recebedor = rec_api if rec_api else "---"
+                cep = cep_api if cep_api else ""
+                endereco = end_api if end_api else ""
+                
+                try:
+                    conn_div = conectar_banco()
+                    cursor_div = conn_div.cursor()
+                    cursor_div.execute("""
+                        INSERT OR REPLACE INTO divergencias_pendentes (codigo, motorista_lote, motorista_esperado, status)
+                        VALUES (?, ?, ?, 'pendente')
+                    """, (codigo_qr, motorista_lote, motorista_esperado_display))
+                    conn_div.commit()
+                    conn_div.close()
+                except Exception:
+                    pass
+                
+                salvar_entrada_historico(codigo_qr, p_id, cidade_detectada, motorista_esperado_display, "DIVERGENTE", recebedor=recebedor, cep=cep, endereco=endereco)
+                
+                return jsonify({
+                    "status": "divergente",
+                    "mensagem": msg_api,
+                    "cidade": cidade_detectada,
+                    "recebedor": recebedor,
+                    "motorista_esperado": motorista_esperado_display
+                }), 400
+            else:
+                # Verifica se foi um erro impeditivo / regra de negócio retornado pela iMile
+                msg_low = (msg_api or "").lower()
+                eh_falha_rede = any(k in msg_low for k in ["internet lenta", "oscilação", "oscilacao", "timeout", "timed out", "urlopen error", "connection reset", "falha na comunicação", "network error"])
+                eh_falha_sessao = any(k in msg_low for k in ["sessão", "sessao", "token", "ausente no navegador", "conexão com a imile", "http 50", "401", "unauthorized"])
+
+                if eh_falha_rede:
+                    print(f"[!] [iMile API] Queda de internet detectada: '{msg_api}'. Travando processo para evitar bipes no escuro.")
+                    return jsonify({
+                        "status": "erro_rede",
+                        "plataforma": "imile",
+                        "mensagem": "Falha na conexão de internet com a iMile. Verifique a internet e bipe novamente."
+                    }), 400
+
+                if eh_falha_sessao:
+                    cache_sessao_imile["token"] = None
+                    try:
+                        if driver and "login" in (driver.current_url or "").lower():
+                            return jsonify({
+                                "status": "aguardando_login",
+                                "plataforma": "imile",
+                                "mensagem": "Sessão da iMile desconectada. Faça o login no Chrome para continuar."
+                            })
+                        sess_im = atualizar_sessao_imile(forcar=True)
+                        if not sess_im.get("token"):
+                            return jsonify({
+                                "status": "aguardando_login",
+                                "plataforma": "imile",
+                                "mensagem": "Sessão da iMile desconectada. Faça o login no Chrome para continuar."
+                            })
+                    except Exception:
+                        pass
+                    return jsonify({
+                        "status": "aguardando_login",
+                        "plataforma": "imile",
+                        "mensagem": "Sessão da iMile expirada ou desconectada. Faça login no Chrome."
+                    })
+
+                # Erro de negócio real retornado pela iMile (ex: pacote não existe, retenção, estação errada, etc.)
+                print(f"[!] [iMile API] Alerta impeditivo retornado pela iMile: '{msg_api}'")
+                salvar_entrada_historico(codigo_qr, p_id, "---", "---", f"FALHA: {msg_api}")
+                return jsonify({
+                    "status": "erro",
+                    "mensagem": f"Alerta iMile: {msg_api}"
+                }), 400
+
             garantir_abas_imile(driver)
 
             def bipar_descarregamento_imile():
@@ -5473,11 +11745,29 @@ def processar_bip():
                     print("[Aviso] Aba de Descarregamento (dsOffloadingScan) iMile não encontrada.")
                     return
                 print("[*] Mudando para a Aba 2 (Descarregamento - dsOffloadingScan) iMile...")
-                mudar_aba_acelerado(driver, aba_descarregamento, delay=0.12)
+                mudar_aba_acelerado(driver, aba_descarregamento, delay=0.15)
                 fechar_modais_imile(driver)
                 
-                # Localiza o input diretamente com tolerância a renderização e auto-start
+                # Localiza o input diretamente com tolerância a renderização
                 campo_desc = obter_input_imile_html(driver, timeout=2.0)
+                if not campo_desc:
+                    # Se o input ainda não estiver ativo, procura e clica em 'Começar Leitura'
+                    try:
+                        driver.execute_script("""
+                            var btns = document.querySelectorAll("button, .ImileButton, .MuiButton-root, [role='button'], .ant-btn");
+                            for (var i = 0; i < btns.length; i++) {
+                                var t = (btns[i].innerText || btns[i].textContent || '').trim().toLowerCase();
+                                if (t.includes('começar leitura') || t.includes('comecar leitura') || t.includes('start scan') || t.includes('iniciar leitura')) {
+                                    btns[i].click();
+                                    break;
+                                }
+                            }
+                        """)
+                        time.sleep(0.2)
+                        campo_desc = obter_input_imile_html(driver, timeout=1.5)
+                    except Exception:
+                        pass
+
                 if campo_desc:
                     print(f"[*] Enviando bipe do pacote na aba Descarregamento iMile: {codigo_qr}...")
                     sucesso_desc = enviar_bipe_imile_html(driver, campo_desc, codigo_qr)
@@ -5495,7 +11785,7 @@ def processar_bip():
                     print("[Aviso] Aba de Entrada (ArrivalScan) iMile não encontrada.")
                     return
                 print("[*] Mudando para a Aba 1 (Entrada no Galpão - ArrivalScan) iMile...")
-                mudar_aba_acelerado(driver, aba_recebimento, delay=0.12)
+                mudar_aba_acelerado(driver, aba_recebimento, delay=0.15)
                 fechar_modais_imile(driver)
                 
                 print("[*] Localizando campo de input de entrada no galpão iMile por HTML...")
@@ -5517,7 +11807,220 @@ def processar_bip():
             else:
                 print("[*] [iMile] Modo PADRÃO (Saca) ativo! Executando apenas: Aba 1 (Entrada)...")
                 bipar_entrada_imile()
+        elif (p_id == 'anjun' or 'anjun' in config.get('recebimento_url', '').lower() or 'anjun' in str(plataforma_ativa or '').lower()):
+            # --- MOTOR DE BIPAGEM DIRETA VIA API ANJUN EXPRESS (SUB-100MS) ---
+            print("[*] [Anjun] Disparando bipagem direta via API Ultra-Rápida...")
+            sucesso_api, msg_api, mot_final, cid_api, cep_api, rec_api, end_api = bipar_pacote_anjun_api(codigo_qr, motorista_lote)
+            
+            if sucesso_api is True:
+                cidade_detectada = cid_api if cid_api else "Anjun"
+                motorista = mot_final if mot_final else motorista_lote
+                recebedor = rec_api if rec_api else "---"
+                cep = cep_api if cep_api else ""
+                endereco = end_api if end_api else ""
+                
+                # Incrementa contagem local do motorista que realmente recebeu o pacote
+                if motorista:
+                    contagem_motoristas[motorista] = contagem_motoristas.get(motorista, 0) + 1
+                    
+                eh_auto_atribuido = bool(motorista_lote and motorista and remover_acentos(motorista.strip().lower()) != remover_acentos(motorista_lote.strip().lower()))
+                
+                # Se for duplicado, anula a atribuição anterior para corrigir a contagem
+                if pacote_duplicado:
+                    if motorista_anterior:
+                        for k_m in list(contagem_motoristas.keys()):
+                            if k_m.strip().lower() == str(motorista_anterior).strip().lower():
+                                contagem_motoristas[k_m] = max(0, contagem_motoristas[k_m] - 1)
+                                break
+                    try:
+                        conn_up = conectar_banco()
+                        cursor_up = conn_up.cursor()
+                        cursor_up.execute('''
+                            UPDATE historico 
+                            SET status = 'REATRIBUIDO' 
+                            WHERE UPPER(codigo) = UPPER(?) AND status = 'OK' AND timestamp >= ?
+                        ''', (codigo_qr, limite_data))
+                        conn_up.commit()
+                        conn_up.close()
+                    except Exception:
+                        pass
+                
+                if motorista_lote:
+                    if not eh_auto_atribuido and motorista:
+                        contagem_atribuicao_ativa = contagem_motoristas.get(motorista, contagem_motoristas.get(motorista_lote, 0))
+                    else:
+                        contagem_atribuicao_ativa = contagem_motoristas.get(motorista_lote, 0)
+                else:
+                    contagem_atribuicao_ativa = 0
+                
+                salvar_entrada_historico(codigo_qr, p_id, cidade_detectada, motorista, "OK", recebedor=recebedor, cep=cep, endereco=endereco)
+                
+                total_bipes_processados += 1
+                if total_bipes_processados % 100 == 0:
+                    otimizar_memoria()
+                    
+                tempo_total = time.time() - tempo_inicio
+                if eh_auto_atribuido:
+                    print(f"[+] [Anjun API] AUTO-ATRIBUÍDO: {cidade_detectada} ➔ Grupo aberto de {motorista} em {tempo_total:.2f}s (Tela estava em: {motorista_lote})!")
+                else:
+                    print(f"[+] [Anjun API] PACOTE PROCESSADO COM SUCESSO EM {tempo_total:.2f}s ({motorista} | {cidade_detectada} | CEP: {cep})!")
+                
+                # Se o motorista atingir 200 pacotes, finaliza automaticamente o lote APENAS se a API confirmar
+                lote_atingiu_200 = False
+                if motorista and contagem_motoristas.get(motorista, 0) >= 200:
+                    print(f"[!] Limite de 200 pacotes atingido para {motorista}. Finalizando lote Anjun automaticamente...")
+                    try:
+                        ok_fin_200, qtd_fin_200 = finalizar_lote_anjun_api(motorista)
+                        if ok_fin_200:
+                            registrar_lote_finalizado(motorista, qtd_fin_200 or 200, plataforma="anjun")
+                            contagem_motoristas[motorista] = 0
+                            if motorista == motorista_lote:
+                                contagem_atribuicao_ativa = 0
+                            lote_atingiu_200 = True
+                        else:
+                            print(f"[!] Aviso: Servidor da Anjun não confirmou o auto-fechamento de 200 pacotes para {motorista}. Mantendo lote aberto para nova tentativa.")
+                    except Exception as e_200:
+                        print(f"[!] Erro ao auto-finalizar lote Anjun de 200: {e_200}")
+                
+                if lote_atingiu_200:
+                    return jsonify({
+                        "status": "finalizado_limite",
+                        "cidade": cidade_detectada,
+                        "motorista": motorista,
+                        "motorista_tela": motorista_lote,
+                        "auto_atribuido": eh_auto_atribuido,
+                        "recebedor": recebedor,
+                        "cep": cep,
+                        "endereco": endereco,
+                        "contagem": contagem_atribuicao_ativa,
+                        "contagem_motorista": 0,
+                        "contagem_site": 0,
+                        "duplicado": pacote_duplicado,
+                        "motorista_anterior": motorista_anterior,
+                        "timestamp_anterior": timestamp_anterior,
+                        "mesmo_motorista": bool(motorista and motorista_anterior and motorista.strip().lower() == motorista_anterior.strip().lower())
+                    })
+                
+                qtd_lote_site = len(obter_pacotes_lote_anjun(motorista)) if motorista else None
+                return jsonify({
+                    "status": "sucesso",
+                    "cidade": cidade_detectada,
+                    "motorista": motorista,
+                    "motorista_tela": motorista_lote,
+                    "auto_atribuido": eh_auto_atribuido,
+                    "recebedor": recebedor,
+                    "cep": cep,
+                    "endereco": endereco,
+                    "contagem": contagem_atribuicao_ativa,
+                    "contagem_motorista": contagem_motoristas.get(motorista, 0) if motorista else 0,
+                    "contagem_site": qtd_lote_site,
+                    "duplicado": pacote_duplicado,
+                    "motorista_anterior": motorista_anterior,
+                    "timestamp_anterior": timestamp_anterior,
+                    "mesmo_motorista": bool(motorista and motorista_anterior and motorista.strip().lower() == motorista_anterior.strip().lower())
+                })
+            elif sucesso_api == "aguardando_login":
+                return jsonify({
+                    "status": "aguardando_login",
+                    "plataforma": "anjun",
+                    "mensagem": msg_api or "Sessão da Anjun desconectada ou 'Não sou robô' solicitado."
+                })
+            elif sucesso_api == "duplicado":
+                cidade_detectada = cid_api if cid_api else (cidade_duplicada or "Anjun")
+                mot_dup_exibir = motorista_anterior or mot_final or motorista_lote or "Anjun"
+                ts_dup_exibir = timestamp_anterior or datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                salvar_entrada_historico(codigo_qr, p_id, cidade_detectada, mot_dup_exibir, "DUPLICADO")
+                return jsonify({
+                    "status": "duplicado",
+                    "mensagem": msg_api or f"Pacote já bipado para {mot_dup_exibir}",
+                    "motorista": mot_dup_exibir,
+                    "cidade": cidade_detectada,
+                    "timestamp": ts_dup_exibir
+                }), 400
+            elif sucesso_api == "divergente":
+                cidade_detectada = cid_api if cid_api else "Anjun"
+                motorista_esperado_display = mot_final
+                recebedor = rec_api if rec_api else "---"
+                cep = cep_api if cep_api else ""
+                endereco = end_api if end_api else ""
+                
+                try:
+                    conn_div = conectar_banco()
+                    cursor_div = conn_div.cursor()
+                    cursor_div.execute("""
+                        INSERT OR REPLACE INTO divergencias_pendentes (codigo, motorista_lote, motorista_esperado, status)
+                        VALUES (?, ?, ?, 'pendente')
+                    """, (codigo_qr, motorista_lote, motorista_esperado_display))
+                    conn_div.commit()
+                    conn_div.close()
+                except Exception:
+                    pass
+                
+                salvar_entrada_historico(codigo_qr, p_id, cidade_detectada, motorista_esperado_display, "DIVERGENTE", recebedor=recebedor, cep=cep, endereco=endereco)
+                
+                return jsonify({
+                    "status": "divergente",
+                    "mensagem": msg_api,
+                    "cidade": cidade_detectada,
+                    "recebedor": recebedor,
+                    "motorista_esperado": motorista_esperado_display
+                }), 400
+            else:
+                msg_low = (msg_api or "").lower()
+                eh_falha_rede = any(k in msg_low for k in ["internet lenta", "oscilação", "oscilacao", "timeout", "timed out", "urlopen error", "connection reset", "falha na comunicação", "network error"])
+                eh_falha_sessao = any(k in msg_low for k in ["sessão", "sessao", "token", "ausente no navegador", "conexão com a anjun", "conexão com anjun", "http 50", "401", "unauthorized"])
+
+                if eh_falha_rede:
+                    print(f"[!] [Anjun API] Queda de internet detectada: '{msg_api}'. Travando processo para evitar bipes no escuro.")
+                    return jsonify({
+                        "status": "erro_rede",
+                        "plataforma": "anjun",
+                        "mensagem": "Falha na conexão de internet com a Anjun. Verifique a internet e bipe novamente."
+                    }), 400
+
+                if eh_falha_sessao:
+                    cache_sessao_anjun["token"] = None
+                    try:
+                        if driver and "login" in (driver.current_url or "").lower():
+                            return jsonify({
+                                "status": "aguardando_login",
+                                "plataforma": "anjun",
+                                "mensagem": "Sessão desconectada. Faça o login ou 'Não sou robô' no Chrome."
+                            })
+                        sess_aj = atualizar_sessao_anjun(forcar=True)
+                        if not sess_aj.get("token"):
+                            return jsonify({
+                                "status": "aguardando_login",
+                                "plataforma": "anjun",
+                                "mensagem": "Sessão desconectada. Faça o login ou 'Não sou robô' no Chrome."
+                            })
+                    except Exception:
+                        pass
+                    return jsonify({
+                        "status": "aguardando_login",
+                        "plataforma": "anjun",
+                        "mensagem": "Sessão da Anjun expirada ou desconectada. Faça login no Chrome."
+                    })
+
+                # Erro de negócio real retornado pela Anjun (ex: pacote não existe, bloqueio, etc.)
+                print(f"[!] [Anjun API] Alerta impeditivo retornado pela Anjun: '{msg_api}'")
+                salvar_entrada_historico(codigo_qr, p_id, "---", "---", f"FALHA: {msg_api}")
+                return jsonify({
+                    "status": "erro",
+                    "mensagem": f"Alerta Anjun: {msg_api}"
+                }), 400
         else:
+            is_anjun = ("anjun" in p_id or "anjun" in config.get('recebimento_url', '').lower())
+            if is_anjun and driver:
+                try:
+                    if "login" in driver.current_url.lower():
+                        return jsonify({
+                            "status": "aguardando_login",
+                            "plataforma": "anjun",
+                            "mensagem": "Sessão desconectada. Faça o login ou 'Não sou robô' no Chrome."
+                        })
+                except Exception:
+                    pass
             print("[*] Mudando para a aba 1 (Entrada no Galpão/Recebimento)...")
             mudar_aba_acelerado(driver, aba_recebimento)
             is_anjun = ("anjun" in p_id or "anjun" in config.get('recebimento_url', '').lower())
@@ -5543,6 +12046,62 @@ def processar_bip():
                 inicio_wait = time.time()
                 re_disparado = False
                 
+                def clicar_botao_enviar_anjun(drv):
+                    sucesso_click = False
+                    try:
+                        res_js = drv.execute_script("""
+                            var btns = document.querySelectorAll("button, .el-button, [role='button']");
+                            for (var i = 0; i < btns.length; i++) {
+                                var b = btns[i];
+                                if (b && (b.offsetWidth > 0 || b.offsetHeight > 0 || b.offsetParent !== null)) {
+                                    var t = (b.innerText || b.textContent || '').trim().toLowerCase();
+                                    if (t === 'enviar' || t.includes('enviar') || b.classList.contains('el-button--primary')) {
+                                        try { b.focus(); } catch(e){}
+                                        try { b.click(); } catch(e){}
+                                        b.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+                                        b.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+                                        b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                                        return true;
+                                    }
+                                }
+                            }
+                            return false;
+                        """)
+                        if res_js:
+                            sucesso_click = True
+                    except Exception:
+                        pass
+                    
+                    try:
+                        xpath_cands = [
+                            "//button[contains(., 'Enviar') or contains(span, 'Enviar')]",
+                            "//button[contains(@class, 'el-button--primary') and not(contains(., 'Consulta'))]",
+                            "//div[contains(@class, 'netEntryScanning') or contains(@class, 'operatingCenter')]//button[contains(@class, 'el-button--primary')]"
+                        ]
+                        for xp in xpath_cands:
+                            try:
+                                elems = drv.find_elements(By.XPATH, xp)
+                                for el in elems:
+                                    if el.is_displayed():
+                                        drv.execute_script("arguments[0].click();", el)
+                                        try:
+                                            el.click()
+                                        except Exception:
+                                            pass
+                                        try:
+                                            webdriver.ActionChains(drv).move_to_element(el).click().perform()
+                                        except Exception:
+                                            pass
+                                        sucesso_click = True
+                                        break
+                                if sucesso_click:
+                                    break
+                            except Exception:
+                                continue
+                    except Exception:
+                        pass
+                    return sucesso_click
+
                 script_anjun_aba1 = """
                     var cleanQr = (arguments[0] || '').trim().toLowerCase();
                     
@@ -5554,10 +12113,9 @@ def processar_bip():
                                 var msg = (el.innerText || el.textContent || '').trim();
                                 if (msg && !msg.toLowerCase().includes("sucesso") && !msg.toLowerCase().includes("enviado")) {
                                     var msgLow = msg.toLowerCase();
-                                    if (msgLow.includes("já escaneado") || msgLow.includes("já bipado") || msgLow.includes("já recepcionado") || msgLow.includes("duplicad")) {
+                                    if (msgLow.includes("já escaneado") || msgLow.includes("já bipado") || msgLow.includes("já recepcionado") || msgLow.includes("duplicad") || msgLow.includes("sendo processado") || msgLow.includes("processado") || msgLow.includes("já existe") || msgLow.includes("já recebido") || msgLow.includes("já conferido")) {
                                         return { tipo: "duplicado", texto: msg };
                                     }
-                                    // AVISOS DE TIMEOUT DE GATEWAY DA ANJUN SÃO IGNORADOS AQUI (NÃO SÃO ERROS FATAIS)
                                     if (msgLow.includes("网关超时") || msgLow.includes("gateway") || msgLow.includes("timeout") || msgLow.includes("504") || msgLow.includes("conexão")) {
                                         return { tipo: "timeout_gateway", texto: msg };
                                     }
@@ -5570,61 +12128,72 @@ def processar_bip():
                     
                     var err = getFatalError();
                     if (err) {
-                        if (err.tipo === "duplicado") {
-                            return { status: "alerta_duplicado", texto: err.texto };
-                        }
-                        if (err.tipo === "erro_fatal") {
-                            return { status: "alerta_erro", texto: err.texto };
-                        }
+                        if (err.tipo === "duplicado") return { status: "alerta_duplicado", texto: err.texto };
+                        if (err.tipo === "erro_fatal") return { status: "alerta_erro", texto: err.texto };
                     }
                     
-                    // 2. Verifica se o pacote apareceu na tabela inferior (.firstOrder ou tr.el-table__row)
+                    // 2. DETECÇÃO ROBUSTA SE HÁ PACOTE NA TABELA:
                     var pacoteNaTabela = false;
-                    var firstOrders = document.querySelectorAll(".firstOrder");
-                    for (var k = 0; k < firstOrders.length; k++) {
-                        var foTxt = (firstOrders[k].innerText || firstOrders[k].textContent || '').trim().toLowerCase();
-                        if (foTxt.includes(cleanQr) || cleanQr.includes(foTxt)) {
+                    
+                    // A) Contador 'Já bipado:' maior que zero (ex: 'Já bipado: 1')
+                    var bodyTxt = document.body.innerText || document.body.textContent || '';
+                    var matchBip = bodyTxt.match(/J[áa]\\s*bipado:\\s*([1-9]\\d*)/i);
+                    if (matchBip && parseInt(matchBip[1], 10) > 0) {
+                        pacoteNaTabela = true;
+                    }
+                    
+                    // B) Paginação 'Total 1' ou mais
+                    if (!pacoteNaTabela) {
+                        var matchTotal = bodyTxt.match(/Total\\s+([1-9]\\d*)/i);
+                        if (matchTotal && parseInt(matchTotal[1], 10) > 0) {
                             pacoteNaTabela = true;
-                            break;
                         }
                     }
                     
+                    // C) Linhas da tabela com conteúdo visível
                     if (!pacoteNaTabela) {
-                        var rows = document.querySelectorAll(".el-table__body tr.el-table__row, .el-table__body tr");
+                        var rows = document.querySelectorAll(".el-table__body tr, table tbody tr, .el-table__row");
                         for (var r = 0; r < rows.length; r++) {
-                            var rTxt = (rows[r].innerText || rows[r].textContent || '').trim().toLowerCase();
-                            if (rTxt.includes(cleanQr)) {
+                            var row = rows[r];
+                            if (row && (row.offsetWidth > 0 || row.offsetHeight > 0 || row.offsetParent !== null)) {
+                                var rTxt = (row.innerText || row.textContent || '').trim().toLowerCase();
+                                if (rTxt && !rTxt.includes("sem dados") && !rTxt.includes("nenhum") && !rTxt.includes("no data") && rTxt.length > 5) {
+                                    pacoteNaTabela = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // D) Busca pelo código direto ou classe firstOrder
+                    if (!pacoteNaTabela && cleanQr) {
+                        var cleanNums = cleanQr.replace(/[^a-z0-9]/g, '');
+                        var allCells = document.querySelectorAll(".el-table__body td, table tbody td, .firstOrder");
+                        for (var c = 0; c < allCells.length; c++) {
+                            var cellTxt = (allCells[c].innerText || allCells[c].textContent || '').trim().toLowerCase();
+                            if (cellTxt && (cellTxt.includes(cleanQr) || cleanQr.includes(cellTxt) || (cleanNums.length >= 6 && cellTxt.includes(cleanNums)))) {
                                 pacoteNaTabela = true;
                                 break;
                             }
                         }
                     }
                     
-                    // 3. O pacote apareceu na tabela! Clica no botão 'Enviar'
                     if (pacoteNaTabela) {
-                        var btns = document.querySelectorAll("button, .el-button");
-                        for (var i = 0; i < btns.length; i++) {
-                            var t = (btns[i].innerText || btns[i].textContent || '').trim();
-                            if (t === 'Enviar' || t.includes('Enviar')) {
-                                btns[i].click();
-                                btns[i].dispatchEvent(new MouseEvent('click', { bubbles: true }));
-                                return { status: "enviado_sucesso" };
-                            }
-                        }
-                        return { status: "na_tabela_sem_botao" };
+                        return { status: "pacote_na_tabela" };
                     }
                     
                     return { status: "aguardando_tabela" };
                 """
                 
-                while time.time() - inicio_wait < 12.0:
+                while time.time() - inicio_wait < 10.0:
                     try:
                         res = driver.execute_script(script_anjun_aba1, codigo_qr)
                         if res:
                             st = res.get("status")
-                            if st == "enviado_sucesso":
+                            if st == "pacote_na_tabela":
                                 enviado_com_sucesso = True
-                                print(f"[+] [Anjun] Pacote {codigo_qr} confirmado na tabela inferior! Botão 'Enviar' clicado com sucesso!")
+                                print(f"[+] [Anjun] Pacote {codigo_qr} confirmado na tabela inferior! Clicando no botão 'Enviar'...")
+                                clicar_botao_enviar_anjun(driver)
                                 break
                             elif st == "alerta_erro":
                                 alerta_texto = res.get("texto")
@@ -5634,22 +12203,13 @@ def processar_bip():
                                 enviado_com_sucesso = True
                                 pacote_ja_recepcionado_aba1 = True
                                 break
-                            elif st == "na_tabela_sem_botao":
-                                try:
-                                    btn_s = driver.find_element(By.XPATH, "//button[contains(., 'Enviar') or contains(span, 'Enviar')]")
-                                    driver.execute_script("arguments[0].click();", btn_s)
-                                    enviado_com_sucesso = True
-                                    print(f"[+] [Anjun] Botão 'Enviar' clicado via fallback após confirmação na tabela!")
-                                    break
-                                except Exception:
-                                    pass
                     except Exception:
                         pass
                         
-                    # Se passou 2.0s e ainda não apareceu na tabela, re-dispara Enter no campo de bipe
-                    if not re_disparado and (time.time() - inicio_wait > 2.0):
+                    # Se passou 1.5s e ainda não apareceu na tabela, re-dispara Enter no campo de bipe
+                    if not re_disparado and (time.time() - inicio_wait > 1.5):
                         re_disparado = True
-                        print(f"[*] [Anjun] Pacote ainda não apareceu na tabela após 2s. Re-disparando Enter no input...")
+                        print(f"[*] [Anjun] Pacote ainda não apareceu na tabela após 1.5s. Re-disparando Enter no input...")
                         try:
                             if campo_rec:
                                 campo_rec.send_keys(Keys.ENTER)
@@ -5658,35 +12218,29 @@ def processar_bip():
                             
                     time.sleep(0.08)
                 
-                # Se o timeout estourou mas o botão Enviar está visível, tenta clique final
+                # Se o timeout estourou mas não houve alerta, tenta clique final no Enviar por garantia
                 if not enviado_com_sucesso and not alerta_texto:
-                    print("[*] [Anjun] Tempo de espera da tabela esgotado. Verificando botão 'Enviar'...")
-                    try:
-                        driver.execute_script("""
-                            var btns = document.querySelectorAll("button, .el-button");
-                            for (var i = 0; i < btns.length; i++) {
-                                var t = (btns[i].innerText || btns[i].textContent || '').trim();
-                                if (t === 'Enviar' || t.includes('Enviar')) {
-                                    btns[i].click();
-                                    break;
-                                }
-                            }
-                        """)
-                    except Exception:
-                        pass
+                    print("[*] [Anjun] Forçando clique no botão 'Enviar' por garantia...")
+                    clicar_botao_enviar_anjun(driver)
                 
                 if alerta_texto and not pacote_duplicado:
-                    print(f"[!] [Anjun] Alerta impeditivo na Aba 1: '{alerta_texto}'. Cancelando processo.")
-                    salvar_entrada_historico(codigo_qr, p_id, "---", "---", f"FALHA: {alerta_texto}")
-                    return jsonify({
-                        "status": "erro",
-                        "mensagem": f"Alerta da Anjun: {alerta_texto}"
-                    }), 400
+                    alerta_low = alerta_texto.lower()
+                    if any(k in alerta_low for k in ["sendo processado", "processado", "já escaneado", "já bipado", "já recepcionado", "duplicad", "já existe", "já recebido"]):
+                        print(f"[*] [Anjun] Aviso de pacote já em processamento/recepcionado na Aba 1: '{alerta_texto}'. Prosseguindo para Aba 3...")
+                        enviado_com_sucesso = True
+                        pacote_ja_recepcionado_aba1 = True
+                    else:
+                        print(f"[!] [Anjun] Alerta impeditivo na Aba 1: '{alerta_texto}'. Cancelando processo.")
+                        salvar_entrada_historico(codigo_qr, p_id, "---", "---", f"FALHA: {alerta_texto}")
+                        return jsonify({
+                            "status": "erro",
+                            "mensagem": f"Alerta da Anjun: {alerta_texto}"
+                        }), 400
                     
                 # SINCRONIZAÇÃO ROBUSTA PÓS-ENVIO NA ABA 1:
                 # O site da Anjun pode ser lento. Enquanto o loading estiver ativo, o robô FICA ESPERANDO
                 # e NÃO passa para atribuir em hipótese alguma.
-                # Só passa quando o código sumir da tabela inferior e o site exibir 'Sem dados' ou 'Já bipado: 0'.
+                # Só passa quando o pacote sumir da tabela inferior e o site exibir 'Sem dados' ou 'Já bipado: 0'.
                 if not pacote_ja_recepcionado_aba1:
                     print(f"[*] [Anjun] Aguardando envio: enquanto houver 'Loading', o robô aguarda antes de atribuir...")
                     inicio_pos_envio = time.time()
@@ -5740,10 +12294,9 @@ def processar_bip():
                                     var msg = (el.innerText || el.textContent || '').trim();
                                     if (msg && !msg.toLowerCase().includes("sucesso") && !msg.toLowerCase().includes("enviado")) {
                                         var msgLow = msg.toLowerCase();
-                                        if (msgLow.includes("já escaneado") || msgLow.includes("já bipado") || msgLow.includes("já recepcionado") || msgLow.includes("duplicad")) {
+                                        if (msgLow.includes("já escaneado") || msgLow.includes("já bipado") || msgLow.includes("já recepcionado") || msgLow.includes("duplicad") || msgLow.includes("sendo processado") || msgLow.includes("processado") || msgLow.includes("já existe") || msgLow.includes("já recebido") || msgLow.includes("já conferido")) {
                                             return { tipo: "duplicado", texto: msg };
                                         }
-                                        // Avisos de timeout de gateway / lentidão não são fatais
                                         if (msgLow.includes("网关超时") || msgLow.includes("gateway") || msgLow.includes("timeout") || msgLow.includes("504") || msgLow.includes("conexão")) {
                                             return { tipo: "timeout_gateway", texto: msg };
                                         }
@@ -5762,78 +12315,50 @@ def processar_bip():
                             return { status: "erro", texto: alerta.texto };
                         }
 
-                        // 3. Verifica se o código do pacote ainda está presente na tabela inferior
-                        var codigoNaTabela = false;
-                        var totalLinhasTabela = 0;
-
-                        var firstOrders = document.querySelectorAll(".firstOrder");
-                        for (var k = 0; k < firstOrders.length; k++) {
-                            var fo = firstOrders[k];
-                            if (fo && (fo.offsetWidth > 0 || fo.offsetHeight > 0 || fo.offsetParent !== null)) {
-                                var foTxt = (fo.innerText || fo.textContent || '').trim().toLowerCase();
-                                if (foTxt.includes(cleanQr) || cleanQr.includes(foTxt)) {
-                                    codigoNaTabela = true;
-                                    totalLinhasTabela++;
-                                }
-                            }
-                        }
-
-                        var rows = document.querySelectorAll(".el-table__body tr.el-table__row, .el-table__body tr");
-                        for (var r = 0; r < rows.length; r++) {
-                            var row = rows[r];
-                            if (row && (row.offsetWidth > 0 || row.offsetHeight > 0 || row.offsetParent !== null)) {
-                                totalLinhasTabela++;
-                                var rTxt = (row.innerText || row.textContent || '').trim().toLowerCase();
-                                if (rTxt.includes(cleanQr)) {
-                                    codigoNaTabela = true;
-                                }
-                            }
-                        }
-
-                        // 4. Indicadores de tabela vazia / sem dados
-                        var temSemDados = false;
-                        var emptyBlocks = document.querySelectorAll(".el-table__empty-block, .el-table__empty-text");
-                        for (var e = 0; e < emptyBlocks.length; e++) {
-                            var eb = emptyBlocks[e];
-                            if (eb && (eb.offsetWidth > 0 || eb.offsetHeight > 0 || eb.offsetParent !== null)) {
-                                var ebTxt = (eb.innerText || eb.textContent || '').trim().toLowerCase();
-                                if (ebTxt.includes("sem dados") || ebTxt.includes("nenhum") || ebTxt.includes("no data")) {
-                                    temSemDados = true;
-                                    break;
-                                }
-                            }
-                        }
-
-                        // 5. Contador 'Já bipado:'
-                        var contadorZerado = false;
-                        var bodyText = document.body.innerText || '';
+                        // 3. Verifica se AINDA há pacote na tabela inferior
+                        var temPacote = false;
+                        var bodyText = document.body.innerText || document.body.textContent || '';
+                        
                         var matchBip = bodyText.match(/J[áa]\\s*bipado:\\s*(\\d+)/i);
-                        if (matchBip && parseInt(matchBip[1], 10) === 0) {
-                            contadorZerado = true;
+                        if (matchBip) {
+                            if (parseInt(matchBip[1], 10) === 0) {
+                                temPacote = false;
+                            } else {
+                                temPacote = true;
+                            }
+                        } else {
+                            var matchTot = bodyText.match(/Total\\s+(\\d+)/i);
+                            if (matchTot && parseInt(matchTot[1], 10) === 0) {
+                                temPacote = false;
+                            } else if (matchTot && parseInt(matchTot[1], 10) > 0) {
+                                temPacote = true;
+                            } else {
+                                var rows = document.querySelectorAll(".el-table__body tr, table tbody tr, .el-table__row");
+                                for (var r = 0; r < rows.length; r++) {
+                                    var row = rows[r];
+                                    if (row && (row.offsetWidth > 0 || row.offsetHeight > 0 || row.offsetParent !== null)) {
+                                        var rTxt = (row.innerText || row.textContent || '').trim().toLowerCase();
+                                        if (rTxt && !rTxt.includes("sem dados") && !rTxt.includes("nenhum") && rTxt.length > 5) {
+                                            temPacote = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
                         }
 
-                        // PRIORIDADE MÁXIMA DA USUÁRIA:
-                        // Se o loading estiver ativo, FICA ESPERANDO! NÃO passa para atribuir!
+                        // Se estiver em loading, aguarda!
                         if (loadingAtivo) {
-                            return { status: "carregando", codigoNaTabela: codigoNaTabela };
+                            return { status: "carregando", temPacote: temPacote };
                         }
 
-                        // Se o loading NÃO está ativo:
-                        // Verifica se o pacote sumiu da tabela
-                        if (!codigoNaTabela && (temSemDados || contadorZerado || totalLinhasTabela === 0)) {
+                        // Se não há mais pacote na tabela e loading acabou: SUCESSO!
+                        if (!temPacote) {
                             return { status: "confirmado_limpo" };
                         }
 
-                        if (!codigoNaTabela && totalLinhasTabela === 0) {
-                            return { status: "confirmado_limpo" };
-                        }
-
-                        // Se o código ainda está na tabela e não está em loading:
-                        if (codigoNaTabela) {
-                            return { status: "na_tabela_aguardando", alertaGateway: (alerta && alerta.tipo === "timeout_gateway") };
-                        }
-
-                        return { status: "aguardando" };
+                        // Se ainda há pacote na tabela e não está em loading: precisa re-clicar Enviar!
+                        return { status: "na_tabela_aguardando", alertaGateway: (alerta && alerta.tipo === "timeout_gateway") };
                     """
                     
                     while time.time() - inicio_pos_envio < 120.0:
@@ -5855,36 +12380,31 @@ def processar_bip():
                                     print(f"[!] [Anjun] Erro fatal detectado pós-envio na Aba 1: '{alerta_pos_envio}'")
                                     break
                                 elif st_env == "carregando":
-                                    # Robô permanece aguardando enquanto o loading estiver rodando na tela
                                     pass
                                 elif st_env == "na_tabela_aguardando":
-                                    # Se parou o loading mas o pacote ainda está na tabela (ex: 网关超时), re-tenta clicar em Enviar!
-                                    if time.time() - ultimo_re_clique >= 3.0:
+                                    # Se parou o loading mas o pacote ainda está na tabela, re-clica em Enviar a cada 1.8s!
+                                    if time.time() - ultimo_re_clique >= 1.8:
                                         ultimo_re_clique = time.time()
                                         motivo = "após 网关超时" if res_env.get("alertaGateway") else "sem loading ativo"
                                         print(f"[*] [Anjun] Pacote {codigo_qr} ainda na tabela ({motivo}). Re-clicando no botão 'Enviar'...")
-                                        driver.execute_script("""
-                                            var btns = document.querySelectorAll("button, .el-button");
-                                            for (var i = 0; i < btns.length; i++) {
-                                                var t = (btns[i].innerText || btns[i].textContent || '').trim();
-                                                if (t === 'Enviar' || t.includes('Enviar')) {
-                                                    btns[i].click();
-                                                    btns[i].dispatchEvent(new MouseEvent('click', { bubbles: true }));
-                                                    break;
-                                                }
-                                            }
-                                        """)
+                                        clicar_botao_enviar_anjun(driver)
                         except Exception:
                             pass
                         time.sleep(0.08)
+
                         
                     if alerta_pos_envio and not pacote_duplicado:
-                        print(f"[!] [Anjun] Alerta impeditivo pós-envio na Aba 1: '{alerta_pos_envio}'. Cancelando processo.")
-                        salvar_entrada_historico(codigo_qr, p_id, "---", "---", f"FALHA: {alerta_pos_envio}")
-                        return jsonify({
-                            "status": "erro",
-                            "mensagem": f"Erro Anjun no envio: {alerta_pos_envio}"
-                        }), 400
+                        alerta_low = alerta_pos_envio.lower()
+                        if any(k in alerta_low for k in ["sendo processado", "processado", "já escaneado", "já bipado", "já recepcionado", "duplicad", "já existe", "já recebido"]):
+                            print(f"[*] [Anjun] Aviso pós-envio de pacote em processamento/recepcionado: '{alerta_pos_envio}'. Prosseguindo para Aba 3...")
+                            confirmado_limpo = True
+                        else:
+                            print(f"[!] [Anjun] Alerta impeditivo pós-envio na Aba 1: '{alerta_pos_envio}'. Cancelando processo.")
+                            salvar_entrada_historico(codigo_qr, p_id, "---", "---", f"FALHA: {alerta_pos_envio}")
+                            return jsonify({
+                                "status": "erro",
+                                "mensagem": f"Erro Anjun no envio: {alerta_pos_envio}"
+                            }), 400
                         
                     if not confirmado_limpo and not pacote_duplicado:
                         print(f"[Aviso] [Anjun] Limite de 120s atingido aguardando tabela limpar na Aba 1. Prosseguindo...")
@@ -5956,6 +12476,13 @@ def processar_bip():
                     print("[*] Localizando campo de input de pesquisa Loggi via HTML...")
                     campo_pesq = obter_input_loggi_html(driver, modo='consulta')
                     if not campo_pesq:
+                        if verificar_tela_login_loggi(driver):
+                            tentar_clicar_login_google_loggi(driver)
+                            return jsonify({
+                                "status": "aguardando_login",
+                                "plataforma": "loggi",
+                                "mensagem": "Sessão da Loggi desconectada. Clique em 'Entrar com o Google' no Chrome."
+                            })
                         raise Exception("Campo de pesquisa da Loggi não encontrado na Aba 2.")
                         
                     print(f"[*] Enviando busca do pacote Loggi na Aba 2: {codigo_qr}...")
@@ -6143,7 +12670,7 @@ def processar_bip():
         if p_id in ['imile', 'anjun', 'loggi'] or 'imile' in config['recebimento_url'].lower() or 'anjun' in config['recebimento_url'].lower() or 'loggi' in config['recebimento_url'].lower():
             motorista = motorista_lote
         else:
-            mots_cidade = carregar_motoristas_cidade(cidade_detectada, p_id)
+            mots_cidade = carregar_motoristas_cidade(cidade_detectada, p_id, cep=cep)
             motorista = mots_cidade[0] if mots_cidade else ""
         
         # --- ETAPA 2: ATRIBUIR (INTEGRADA E SEQUENCIAL) ---
@@ -6207,7 +12734,7 @@ def processar_bip():
                 houve_divergencia = False
             else:
                 if cidade_detectada and cidade_detectada not in ["Não Consultada", "---", "Desconhecida", "Não Encontrada"]:
-                    motoristas_esperados = carregar_motoristas_cidade(cidade_detectada, p_id)
+                    motoristas_esperados = carregar_motoristas_cidade(cidade_detectada, p_id, cep=cep)
                     if motoristas_esperados:
                         # Se o motorista_lote estiver entre os motoristas mapeados para essa cidade, é VÁLIDO!
                         motoristas_lower = [m.lower() for m in motoristas_esperados]
@@ -6264,6 +12791,13 @@ def processar_bip():
                 
                 if aba_atribuicao_anjun:
                     mudar_aba_acelerado(driver, aba_atribuicao_anjun)
+                    if verificar_tela_login_loggi(driver):
+                        tentar_clicar_login_google_loggi(driver)
+                        return jsonify({
+                            "status": "aguardando_login",
+                            "plataforma": "loggi",
+                            "mensagem": "Sessão da Loggi desconectada. Clique em 'Entrar com o Google' no Chrome."
+                        })
                     
                     candidatos_drawer = [
                         "//input[@placeholder='Bipe ou digite o código']",
@@ -6321,7 +12855,7 @@ def processar_bip():
                                 
                                 matched = False
                                 for cid in cidades_motorista:
-                                    if cid.strip().lower() in texto_chk or texto_chk in cid.strip().lower():
+                                    if cidades_sao_iguais(cid, texto_chk):
                                         matched = True
                                         break
                                         
@@ -6541,13 +13075,13 @@ def processar_bip():
                                             return t && !t.includes("entregar") && !t.includes("set") && !t.includes("out") && !t.includes("nov") && !t.includes("dez") && !t.includes("jan") && !t.includes("fev") && !t.includes("mar") && !t.includes("abr") && !t.includes("mai") && !t.includes("jun") && !t.includes("jul") && !t.includes("ago");
                                         });
 
-                                        // 1. PRIORIDADE MÁXIMA: se qualquer parágrafo do card for uma das cidades permitidas, retorna imediatamente!
+                                        // 1. PRIORIDADE MÁXIMA: se qualquer parágrafo do card for exatamente uma das cidades permitidas, retorna imediatamente!
                                         for (let p of ps) {
                                             if (p === pParent) continue;
                                             const txt = (p.innerText || p.textContent || "").trim();
                                             const txtL = txt.toLowerCase();
                                             for (let c of permitidas) {
-                                                if (c && (txtL === c || txtL.includes(c) || c.includes(txtL))) {
+                                                if (c && txtL === c) {
                                                     return txt;
                                                 }
                                             }
@@ -6567,13 +13101,13 @@ def processar_bip():
                                 }
                             }
 
-                            // Fallback: se não achou pelo código exato no em, procura se alguma cidade permitida aparece em parágrafo da gaveta
+                            // Fallback: se não achou pelo código exato no em, procura se alguma cidade permitida aparece exatamente em parágrafo da gaveta
                             for (let c of permitidas) {
                                 if (!c) continue;
                                 const allPs = drawer.querySelectorAll("p");
                                 for (let p of allPs) {
                                     const txt = (p.innerText || p.textContent || "").trim();
-                                    if (txt.toLowerCase() === c || txt.toLowerCase().includes(c)) return txt;
+                                    if (txt.toLowerCase() === c) return txt;
                                 }
                             }
                             return null;
@@ -6684,7 +13218,7 @@ def processar_bip():
                                                 const txt = (p.innerText || p.textContent || "").trim();
                                                 const txtL = txt.toLowerCase();
                                                 for (let c of permitidas) {
-                                                    if (c && (txtL === c || txtL.includes(c) || c.includes(txtL))) {
+                                                    if (c && txtL === c) {
                                                         return txt;
                                                     }
                                                 }
@@ -6703,7 +13237,7 @@ def processar_bip():
                                     const allPs = drawer.querySelectorAll("p");
                                     for (let p of allPs) {
                                         const txt = (p.innerText || p.textContent || "").trim();
-                                        if (txt.toLowerCase() === c || txt.toLowerCase().includes(c)) return txt;
+                                        if (txt.toLowerCase() === c) return txt;
                                     }
                                 }
                                 return null;
@@ -6714,12 +13248,10 @@ def processar_bip():
                     # Validação de Divergência de Cidade na Aba 3 da Loggi
                     if cidade_gaveta_extraida:
                         print(f"[+] [Loggi Aba 3] Cidade detectada no card da gaveta: '{cidade_gaveta_extraida}'")
-                        cidades_permitidas_norm = [normalizar_texto(c) for c in cidades_selecionadas] if cidades_selecionadas else ([normalizar_texto(motorista_lote)] if motorista_lote else [])
-                        cid_gaveta_norm = normalizar_texto(cidade_gaveta_extraida)
+                        cidades_permitidas_lista = cidades_selecionadas if cidades_selecionadas else ([motorista_lote] if motorista_lote else [])
+                        cidade_bateu = any(cidades_sao_iguais(cidade_gaveta_extraida, c_perm) for c_perm in cidades_permitidas_lista)
 
-                        cidade_bateu = any((cid_gaveta_norm == c_norm or c_norm in cid_gaveta_norm or cid_gaveta_norm in c_norm) for c_norm in cidades_permitidas_norm)
-
-                        if cidades_permitidas_norm and not cidade_bateu:
+                        if cidades_permitidas_lista and not cidade_bateu:
                             cidades_esperadas_display = ", ".join(cidades_selecionadas) if cidades_selecionadas else (motorista_lote or "Grupo Ativo")
                             print(f"[!] DIVERGÊNCIA LOGGI DETECTADA NA ABA 3! Pacote é de '{cidade_gaveta_extraida}', mas o grupo de cidades é: '{cidades_esperadas_display}'.")
 
@@ -6793,22 +13325,19 @@ def processar_bip():
                 })
                 
             elif "anjun" in p_id or "anjun" in config['recebimento_url'].lower():
-                # Garante que a aba_atribuicao_anjun esteja mapeada nas abas abertas caso tenha sido perdida
-                if not aba_atribuicao_anjun:
-                    print("[*] Referência da aba 3 ausente. Escaneando abas abertas...")
-                    for handle in driver.window_handles:
-                        try:
-                            driver.switch_to.window(handle)
-                            if "TaskAssignment" in driver.current_url:
-                                aba_atribuicao_anjun = handle
-                                print(f"[+] Aba 3 encontrada dinamicamente: {handle}")
-                                break
-                        except Exception:
-                            continue
+                # 1. Garante que as 3 abas da Anjun estejam ativas e mapeadas
+                garantir_abas_anjun(driver)
                 
-                if aba_atribuicao_anjun:
+                if not motorista_lote or motorista_lote in ["---", "Apenas Entrada (Sem Atribuição)"]:
+                    print("[*] [Anjun] Modo apenas entrada (sem atribuição a motorista). Concluindo bip.")
+                    contagem_atribuicao_ativa = 0
+                else:
+                    if not aba_atribuicao_anjun:
+                        raise Exception("Aba 3 de Atribuição da Anjun (TaskAssignment) não pôde ser aberta ou mapeada.")
+                    
                     print(f"[*] Acessando aba 3 para atribuir o pacote {codigo_qr} ao motorista {motorista_lote}...")
-                    mudar_aba_acelerado(driver, aba_atribuicao_anjun)
+                    mudar_aba_acelerado(driver, aba_atribuicao_anjun, delay=0.1)
+                    fechar_possiveis_lembretes(driver)
                     
                     # 0. Finaliza lote se já atingiu o limite de 200 pacotes
                     if contagem_motoristas.get(motorista_lote, 0) >= 200:
@@ -6832,10 +13361,30 @@ def processar_bip():
                             except Exception as e_fin:
                                 print(f"[Aviso] Falha ao tentar finalizar lote cheio pré-bipe: {str(e_fin)}")
                         
-                    # VERIFICAÇÃO AUTOMÁTICA DE DRIVER EM ABA 3 (Apenas na troca de motorista)
+                    # VERIFICAÇÃO AUTOMÁTICA DE DRIVER EM ABA 3 (Só altera quando o motorista mudar)
                     global motorista_atribuicao_ativa
-                    if motorista_atribuicao_ativa != motorista_lote:
-                        print(f"[*] Troca de motorista detectada na Aba 3! De {motorista_atribuicao_ativa} para {motorista_lote}.")
+                    mot_atual = str(motorista_atribuicao_ativa or '').strip().lower()
+                    mot_desejado = str(motorista_lote or '').strip().lower()
+                    
+                    # Checa se o motorista mudou no sistema
+                    precisa_selecionar = (mot_atual != mot_desejado)
+                    
+                    # Se localmente já é o mesmo motorista, apenas confere se o site não foi resetado
+                    if not precisa_selecionar:
+                        try:
+                            site_sem_motorista = driver.execute_script("""
+                                var sel = document.querySelector('.el-select__wrapper, .el-select');
+                                if (!sel) return true;
+                                var txt = (sel.innerText || sel.textContent || '').trim().toLowerCase();
+                                return (!txt || txt.includes('selecion') || txt.includes('favor'));
+                            """)
+                            if site_sem_motorista:
+                                precisa_selecionar = True
+                        except Exception:
+                            pass
+                            
+                    if precisa_selecionar:
+                        print(f"[*] Selecionando motorista na Aba 3! De '{motorista_atribuicao_ativa}' para '{motorista_lote}'...")
                         try:
                             selecionar_motorista_anjun(driver, motorista_lote)
                             motorista_atribuicao_ativa = motorista_lote
@@ -6843,56 +13392,26 @@ def processar_bip():
                         except Exception as e_sel:
                             print(f"[Erro] Falha ao selecionar motorista na Aba 3: {str(e_sel)}")
                             raise Exception(f"Falha ao alterar o motorista no site para '{motorista_lote}': {str(e_sel)}")
+                    else:
+                        print(f"[*] [Anjun] Motorista '{motorista_lote}' já ativo na Aba 3. Bipando pacote direto!")
                     
-                    campo_pacote = obter_input_anjun_html(driver)
-                    if not campo_pacote:
-                        candidatos_pacote = [
-                            "//input[@placeholder='Favor digitalizar ou digitar']",
-                            "//label[contains(., 'Bipar o')]/following::input[1]",
-                            "//*[contains(text(), 'Bipar o')]/following::input[1]"
-                        ]
-                        for xpath in candidatos_pacote:
-                            try:
-                                el = driver.find_element(By.XPATH, xpath)
-                                if el.is_displayed():
-                                    campo_pacote = el
-                                    break
-                            except Exception:
-                                continue
+                    # Bipa o pacote na Aba 3 de forma ultra-robusta e captura contagem real do site
+                    sucesso_bip_aba3, contagem_site_lida, erro_bip_aba3 = bipar_pacote_atribuicao_anjun(driver, codigo_qr)
+                    if not sucesso_bip_aba3:
+                        raise Exception(erro_bip_aba3 or "Falha ao enviar bipe na Aba 3 da Anjun.")
                     
-                    if not campo_pacote:
-                        raise Exception("Não foi possível localizar o campo de input de bipe de pacote na aba de atribuição.")
-                    
-                    # Envia o bipe do pacote de forma instantânea (sem conferências prévias no DOM)
-                    enviar_bipe_anjun_html(driver, campo_pacote, codigo_qr)
-                    
-                    # Se for pacote duplicado, confirma o modal de reatribuição se houver
-                    if pacote_duplicado:
-                        try:
-                            driver.execute_script("""
-                                var dialogs = document.querySelectorAll("div[role='dialog'], .el-dialog, .el-message-box, .el-overlay-dialog");
-                                for (var d = 0; d < dialogs.length; d++) {
-                                    var dlg = dialogs[d];
-                                    if (dlg && (dlg.offsetWidth > 0 || dlg.offsetHeight > 0 || dlg.offsetParent !== null)) {
-                                        var btn = dlg.querySelector(".el-button--primary, button.el-button--primary");
-                                        if (btn) { btn.click(); return; }
-                                        var allBtns = dlg.querySelectorAll("button");
-                                        for (var b = 0; b < allBtns.length; b++) {
-                                            var txt = (allBtns[b].innerText || allBtns[b].textContent || '').toLowerCase().trim();
-                                            if (txt === 'confirmar' || txt === 'sim' || txt === 'ok') {
-                                                allBtns[b].click();
-                                                return;
-                                            }
-                                        }
-                                    }
-                                }
-                            """)
-                        except Exception:
-                            pass
-                    
-                    contagem_atribuicao_ativa = contagem_motoristas.get(motorista_lote, 0) + 1
-                    contagem_motoristas[motorista_lote] = contagem_atribuicao_ativa
-                    print(f"[+] Lote atribuído: {contagem_atribuicao_ativa}/200")
+                    adicionar_pacote_lote_anjun(motorista_lote, codigo_qr)
+
+                    if contagem_site_lida is not None:
+                        contagem_atribuicao_ativa = contagem_site_lida
+                        contagem_motoristas[motorista_lote] = contagem_site_lida
+                        contagem_site = contagem_site_lida
+                        print(f"[+] Lote Anjun atribuído (confirmado pelo site): {contagem_atribuicao_ativa}/200")
+                    else:
+                        contagem_atribuicao_ativa = contagem_motoristas.get(motorista_lote, 0) + 1
+                        contagem_motoristas[motorista_lote] = contagem_atribuicao_ativa
+                        print(f"[+] Lote Anjun atribuído (contagem local): {contagem_atribuicao_ativa}/200")
+                    time.sleep(0.4)
                     
                     if contagem_atribuicao_ativa >= 200:
                         print("[!] Limite de 200 pacotes atingido. Finalizando lote automaticamente no site...")
@@ -6960,7 +13479,7 @@ def processar_bip():
                 print("[*] Acessando aba de atribuição para atribuir o pacote iMile ao motorista...")
                 garantir_abas_imile(driver)
                 if aba_atribuicao_anjun:
-                    mudar_aba_acelerado(driver, aba_atribuicao_anjun, delay=0.12)
+                    mudar_aba_acelerado(driver, aba_atribuicao_anjun, delay=0.15)
                     fechar_modais_imile(driver)
                     
                     # TROCA DE MOTORISTA IMILE (Apenas se o motorista tiver mudado)
@@ -6973,7 +13492,11 @@ def processar_bip():
                                 
                             motorista_atribuicao_ativa = motorista_lote
                             print(f"[+] Motorista iMile alterado com sucesso para: {nome_sel_imile or motorista_lote}")
-                            time.sleep(0.2)
+                            try:
+                                webdriver.ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+                            except Exception:
+                                pass
+                            time.sleep(0.3)
                         except Exception as e_da:
                             print(f"[Erro] Falha ao selecionar motorista iMile: {str(e_da)}")
                             raise Exception(f"Falha ao alterar o motorista no site para '{motorista_lote}': {str(e_da)}")
@@ -6982,6 +13505,12 @@ def processar_bip():
                     try:
                         fechar_modais_imile(driver)
                         campo_pacote = obter_input_imile_html(driver, timeout=2.0)
+                        if not campo_pacote:
+                            try:
+                                campo_pacote = driver.find_element(By.XPATH, config.get('atribuicao_bip_xpath', "//*[@id='scanNumber']//input"))
+                            except Exception:
+                                pass
+
                         if campo_pacote:
                             sucesso_bip = enviar_bipe_imile_html(driver, campo_pacote, codigo_qr)
                             if sucesso_bip:
@@ -6991,6 +13520,7 @@ def processar_bip():
                             
                             # Confirma modal de reatribuição se for pacote duplicado
                             if pacote_duplicado:
+                                time.sleep(0.3)
                                 try:
                                     driver.execute_script("""
                                         var dialogs = document.querySelectorAll("div[role='dialog'], .MuiDialog-root, .MuiModal-root, .ImileDialog-root");
@@ -7077,12 +13607,22 @@ def processar_bip():
         salvar_entrada_historico(codigo_qr, p_id, "---", "---", "FALHA: Elemento não encontrado", recebedor, telefone, email, tempo_criacao, status_pacote)
         return jsonify({"status": "erro", "mensagem": "Não foi possível localizar o campo ou os dados do pacote. Verifique se o Chrome está na tela correta e logado."}), 400
     except WebDriverException as wde:
+        porta_p = PORTAS_DEBUG.get(p_id, 9222)
+        if is_chrome_debug_active(porta_p):
+            print(f"\n[!] Desconexão momentânea do WebDriver detectada (suspensão/hibernação do PC). Reconectando ao Chrome na porta {porta_p}...")
+            try:
+                conectar_chrome_existente(p_id)
+                salvar_entrada_historico(codigo_qr, p_id, "---", "---", "AVISO: Reconexão pós-suspensão realizada", recebedor, telefone, email, tempo_criacao, status_pacote)
+                return jsonify({"status": "erro", "mensagem": "Navegador Chrome reconectado após suspensão do computador. Por favor, bipe o pacote novamente."}), 400
+            except Exception as e_recon:
+                print(f"[Aviso] Falha ao reconectar ao Chrome existente ({e_recon}). Prosseguindo com tratamento padrão...")
+
         if is_driver_ativo():
             print(f"\n[Aviso WebDriver] Erro na interação com a página (Chrome permanece aberto): {str(wde)}")
             salvar_entrada_historico(codigo_qr, p_id, "---", "---", f"AVISO: {str(wde)[:100]}", recebedor, telefone, email, tempo_criacao, status_pacote)
             return jsonify({"status": "erro", "mensagem": f"Aviso na página: {str(wde)}"}), 400
             
-        print(f"\n[Erro] Conexão com o Chrome perdida ou fechada: {str(wde)}")
+        print(f"\n[Erro] Conexão com o Chrome realmente perdida ou fechada: {str(wde)}")
         fechar_selenium()
         salvar_entrada_historico(codigo_qr, p_id, "---", "---", f"FALHA: Conexão perdida com Chrome", recebedor, telefone, email, tempo_criacao, status_pacote)
         tem_motorista = bool(motorista_lote and str(motorista_lote).strip() not in ["", "---", "Apenas Entrada (Sem Atribuição)"])
@@ -7132,6 +13672,64 @@ def processar_bip():
                 pass
         driver_lock.release()
 
+def restaurar_sessao_inicial():
+    global plataforma_ativa, motorista_atribuicao_ativa, contagem_atribuicao_ativa, conta_ativa
+    try:
+        sessao = carregar_sessao_ativa()
+        p_id = sessao.get("plataforma")
+        mot = sessao.get("motorista")
+        cont = sessao.get("contagem", 0)
+        c_id = sessao.get("conta_id")
+        
+        if p_id:
+            if not c_id:
+                try:
+                    creds = carregar_credenciais_locais()
+                    c_id = creds.get(p_id, {}).get("conta_ativa")
+                except Exception:
+                    c_id = None
+            _, porta, cid_final, _ = obter_perfil_e_porta_conta(p_id, c_id)
+            conta_ativa = cid_final
+            if is_chrome_debug_active(porta):
+                print(f"[*] Sessão anterior detectada ({p_id} / {cid_final}). Reconectando ao Chrome na porta {porta}...")
+                conectar_chrome_existente(p_id, cid_final)
+                plataforma_ativa = p_id
+                motorista_atribuicao_ativa = mot
+                contagem_atribuicao_ativa = cont
+                if mot and cont:
+                    contagem_motoristas[mot] = cont
+                print(f"[+] Sessão restaurada com sucesso: Plataforma={p_id}, Conta={cid_final}, Motorista={mot}, Contagem={cont}")
+            else:
+                print(f"[*] Sessão anterior encontrada ({p_id} / {cid_final}), aguardando ativação do Chrome na porta {porta}.")
+                plataforma_ativa = p_id
+                motorista_atribuicao_ativa = mot
+                contagem_atribuicao_ativa = cont
+                if mot and cont:
+                    contagem_motoristas[mot] = cont
+    except Exception as e:
+        print(f"[Aviso] Falha ao restaurar sessão inicial: {e}")
+
+def _loop_heartbeat_periodico():
+    while True:
+        try:
+            validar_licenca(forcar_rede=True)
+        except Exception:
+            pass
+        time.sleep(60)
+
+def _tarefas_boot_background():
+    try:
+        obter_hwid()
+    except Exception:
+        pass
+    try:
+        sincronizar_excel_na_inicializacao()
+    except Exception:
+        pass
+    restaurar_sessao_inicial()
+    threading.Thread(target=_loop_heartbeat_periodico, daemon=True).start()
+    threading.Thread(target=monitor_auto_finalizacao_anjun, daemon=True).start()
+
 if __name__ == '__main__':
     # Inicializa o banco de dados SQLite e realiza migração dos JSONs legados
     inicializar_db()
@@ -7139,8 +13737,12 @@ if __name__ == '__main__':
     # Mantém a inicialização das configurações de plataformas
     carregar_plataformas()
     
+    # Executa sincronização do Excel, aquecimento de HWID e restauração de sessão em background para liberar a porta 5055 imediatamente
+    threading.Thread(target=_tarefas_boot_background, daemon=True).start()
+    
     print("=" * 60)
     print(" SERVIDOR MULTI-PLATAFORMA DA TRIAGEM LOGÍSTICA INICIADO")
     print(" Porta: 5055 | CORS Habilitado")
     print("=" * 60)
     app.run(host='127.0.0.1', port=5055, threaded=True)
+

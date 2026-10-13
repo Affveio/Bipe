@@ -3,15 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Painel de Triagem Logística - Multissite</title>
-    <link rel="stylesheet" href="style.css">
+    <title>TurboScan - Triagem Logística Inteligente</title>
+    <link rel="stylesheet" href="style.css?v=20261006b">
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800;900&display=swap" rel="stylesheet">
 </head>
 <body>
     <div class="dashboard">
         <!-- Linha do Topo -->
         <header class="top-bar">
-            <div class="logo">GALPÃO MONITORED</div>
+            <div class="logo">⚡ TURBOSCAN</div>
             
             <div class="top-controls">
                 <!-- Seletor de Plataforma Ativa -->
@@ -19,6 +19,14 @@
                     <label for="platform-selector">PLATAFORMA:</label>
                     <select id="platform-selector">
                         <option value="">Carregando...</option>
+                    </select>
+                </div>
+
+                <!-- Seletor de Conta / Usuário (Anjun e iMile) -->
+                <div class="control-group" id="container-account-selector" style="display: none;">
+                    <label for="account-selector">USUÁRIO:</label>
+                    <select id="account-selector" title="Trocar de Conta / Perfil do Usuário" style="font-weight: 700; color: #38bdf8;">
+                        <option value="">Principal</option>
                     </select>
                 </div>
 
@@ -31,34 +39,31 @@
                     </button>
                 </div>
 
-                <!-- Seletor de Voz -->
-                <div class="control-group">
-                    <label for="voice-selector">VOZ:</label>
-                    <select id="voice-selector">
-                        <option value="">Carregando vozes...</option>
-                    </select>
+                <!-- Botão Rápido Liga/Desliga Falar Cidade no Topo -->
+                <div id="container-falar-cidade" style="display: flex; align-items: center;">
+                    <button type="button" id="btn-falar-cidade" class="btn-pacote-solto" title="Clique para ligar ou desligar a fala do nome da cidade a cada bipe">
+                        <span class="btn-solto-icon">🗣️</span>
+                        <span class="btn-solto-label">FALAR CIDADE:</span>
+                        <span id="status-falar-cidade" class="btn-solto-badge badge-off">NÃO</span>
+                    </button>
                 </div>
-                
-                <!-- Modo Consulta Toggle (Ocultado a pedido do usuário) -->
-                <div class="control-group" id="container-consult-toggle" style="display: none;">
-                    <label for="consult-toggle">CONSULTA:</label>
-                    <select id="consult-toggle" style="color: #f87171; font-weight: bold;">
-                        <option value="ativado" style="color: #4ade80;">ATIVADO</option>
-                        <option value="desativado" style="color: #f87171;" selected>DESATIVADO</option>
-                    </select>
+
+                <!-- Indicador Visual em Tempo Real da Conexão com a Internet -->
+                <div id="container-status-conexao" style="display: flex; align-items: center;">
+                    <div id="badge-status-conexao" class="status-conexao-pill online" title="Status da Internet: Conexão ativa com o galpão">
+                        <span class="conexao-dot"></span>
+                        <span id="texto-status-conexao" class="conexao-label">ONLINE</span>
+                    </div>
                 </div>
             </div>
 
-            <!-- Ações e Indicadores à Direita (Contador, Configurações e Reiniciar) -->
+            <!-- Ações e Indicadores à Direita (Configurações e Reiniciar) -->
             <div class="top-right-group">
-                <button type="button" id="btn-status-licenca" class="btn-licenca-pill" style="display: none;" title="Status da Licença Comercial (Clique para detalhes ou renovação)">
-                    <span id="icone-status-licenca">🔒</span>
-                    <span id="texto-status-licenca">LICENÇA</span>
+                <button type="button" id="btn-status-licenca" class="btn-licenca-pill" style="display: inline-flex;" title="Status da Licença Comercial (Clique para ver QR Code PIX ou detalhes)">
+                    <span id="icone-status-licenca">💳</span>
+                    <span id="texto-status-licenca">PIX / LICENÇA</span>
                 </button>
-                <div class="counter-box">
-                    <span class="counter-label">PACOTES HOJE</span>
-                    <span id="total-contador" class="counter-value">0</span>
-                </div>
+                <button type="button" id="btn-abrir-ajuda" class="btn-config-icon" title="Guia Rápido de Operação (Como Usar)" style="font-size: 1.05rem;">❓</button>
                 <button type="button" id="btn-abrir-configuracoes" class="btn-config-icon" title="Painel de Configurações (Cidades, Motoristas e Credenciais)">⚙️</button>
                 <button type="button" id="btn-reiniciar-sistema" class="btn-reiniciar-sistema" title="Reiniciar Sistema (Fecha o Chrome travado e reinicia o CMD/Servidor)">
                     🔄 REINICIAR
@@ -66,82 +71,173 @@
             </div>
         </header>
 
-        <!-- Painel Central Dividido: Status da Triagem e Configuração do Lote de Atribuição -->
-        <!-- Layout Principal: Coluna Esquerda (Operação & Histórico) + Coluna Direita (Bipados por Motorista - Altura Total) -->
+        <!-- Layout Principal em 3 Colunas: Esquerda (Lista Aberta Motoristas/Cidades) | Centro (KPIs, Bipagem e Tabelas) | Direita (Motorista Atual + Bipados por Motorista) -->
         <div class="workspace-layout">
-            <!-- COLUNA ESQUERDA -->
+            <!-- COLUNA 1 (ESQUERDA): LISTA SEMPRE ABERTA DE MOTORISTAS / CIDADES LOGGI -->
+            <aside class="sidebar-left">
+                <div class="sidebar-left-header">
+                    <span id="sidebar-left-title">MOTORISTA ATIVO:</span>
+                    <button type="button" id="btn-atualizar-grupos-loggi" style="display: none; background: none; border: none; color: #38bdf8; font-size: 0.68rem; font-weight: 800; cursor: pointer; padding: 0; align-items: center; gap: 3px;" title="Recarregar grupos abertos da Loggi">
+                        🔄 Atualizar
+                    </button>
+                </div>
+
+                <!-- Abas Novo Grupo vs Grupo Existente (Visível apenas na Loggi) -->
+                <div id="sidebar-loggi-tabs" style="display: none; gap: 4px; background: #080b11; padding: 3px; border-radius: 7px; border: 1px solid #1e293b; margin-bottom: 8px; flex-shrink: 0;">
+                    <button type="button" id="tab-loggi-novo" style="flex: 1; padding: 6px 6px; font-size: 0.72rem; font-weight: 800; border-radius: 5px; border: none; cursor: pointer; background: #0284c7; color: #fff; transition: all 0.2s;">
+                        ✨ Novo Grupo
+                    </button>
+                    <button type="button" id="tab-loggi-existente" style="flex: 1; padding: 6px 6px; font-size: 0.72rem; font-weight: 800; border-radius: 5px; border: none; cursor: pointer; background: transparent; color: #94a3b8; transition: all 0.2s;">
+                        📂 Existente
+                    </button>
+                </div>
+
+                <!-- Busca Rápida na Lista Aberta -->
+                <div class="sidebar-search-box">
+                    <input type="text" id="sidebar-search-input" placeholder="🔍 Filtrar lista..." autocomplete="off">
+                </div>
+
+                <!-- Lista Vertical Sempre Aberta (Substitui visualmente o dropdown fechado) -->
+                <div id="sidebar-open-list" class="sidebar-open-list">
+                    <!-- Populado dinamicamente via JS -->
+                </div>
+
+                <!-- Selects nativos ocultos mantidos para 100% de compatibilidade com a lógica existente -->
+                <div id="container-driver-standard" style="display: none;">
+                    <select id="driver-select">
+                        <option value="">Apenas Entrada (Sem Atribuição)</option>
+                    </select>
+                </div>
+                <div style="display: none;">
+                    <input type="text" id="filtro-busca-grupo-loggi">
+                    <select id="loggi-grupo-existente-select"><option value="">Carregando grupos...</option></select>
+                </div>
+            </aside>
+
+            <!-- COLUNA 2 (CENTRO): KPIS DE EMPRESAS, PAINEL DE BIPAGEM E TABELAS DE MOVIMENTAÇÃO/DIVERGÊNCIA -->
             <div class="workspace-left">
-                <!-- Linha Superior: Status e Atribuição de Lote -->
+                <!-- Linha 1: Cards KPI Topo (BIPADOS + Empresas Cadastradas: Anjun, iMile, Loggi, etc.) -->
+                <div class="kpi-cards-row" id="kpi-cards-row">
+                    <!-- Card Fixo: Total Bipados Hoje -->
+                    <div class="kpi-card kpi-card-total">
+                        <div class="kpi-card-top">
+                            <div class="kpi-icon-box kpi-icon-blue">📦</div>
+                            <div class="kpi-info">
+                                <span class="kpi-label">BIPADOS</span>
+                                <span id="total-contador" class="kpi-value">0</span>
+                                <span class="kpi-sub">total hoje</span>
+                            </div>
+                        </div>
+                        <div class="kpi-bar kpi-bar-blue"></div>
+                    </div>
+
+                    <!-- Cards Dinâmicos por Empresa (Anjun, iMile, Loggi e outras cadastradas) -->
+                    <div id="kpi-platforms-container" class="kpi-platforms-container">
+                        <!-- Gerado dinamicamente via JS -->
+                    </div>
+                </div>
+
+                <!-- Linha 2: Área de Bipagem + Card Pacote Processado -->
                 <div class="top-row-grids">
-                    <!-- Painel de Destaque Gigante (Triagem) -->
-                    <main id="status-panel" class="status-container awaiting" style="padding: 16px 20px;">
+                    <!-- Card Esquerdo: BIPAR PACOTE + Status -->
+                    <main id="status-panel" class="status-container awaiting">
                         <div class="scanner-laser"></div>
-                        <h2 id="status-label" class="status-title" style="font-size: 2.3rem; letter-spacing: 1px; margin-bottom: 2px;">AGUARDANDO BIP</h2>
-                        <p id="sub-status-label" class="status-subtitle" style="font-size: 0.9rem; margin-top: 2px;">Aponte o leitor para o QR Code do produto</p>
+                        <div class="scan-card-header">
+                            <span class="scan-card-title"><span>📷</span> BIPAR PACOTE</span>
+                            <span id="status-pill-indicator" class="status-pill-live">● Aguardando bip...</span>
+                        </div>
+
+                        <div class="scan-status-center">
+                            <h2 id="status-label" class="status-title">AGUARDANDO BIP</h2>
+                            <p id="sub-status-label" class="status-subtitle">Aponte o leitor ou digite o código do pacote abaixo</p>
+                        </div>
                         
-                        <!-- Entrada Manual de Código Integrada -->
-                        <div id="manual-input-container" style="margin-top: 14px; display: flex; flex-direction: row; gap: 8px; justify-content: center; align-items: center; width: 90%; max-width: 380px; z-index: 10;">
-                            <input type="text" id="manual-code-input" placeholder="DIGITAR CÓDIGO MANUAL..." style="flex: 1; padding: 7px 12px; font-size: 0.82rem; background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(148, 163, 184, 0.3); border-radius: 6px; color: #fff; text-transform: uppercase; font-weight: 700; outline: none; transition: all 0.2s;" onfocus="this.style.borderColor='#38bdf8'; this.style.boxShadow='0 0 10px rgba(56,189,248,0.2)'" onblur="this.style.borderColor='rgba(148, 163, 184, 0.3)'; this.style.boxShadow='none'">
-                            <button id="btn-manual-enviar" style="background: linear-gradient(135deg, #0284c7, #0369a1); border: none; color: #fff; padding: 7px 16px; font-size: 0.82rem; font-weight: 800; border-radius: 6px; cursor: pointer; transition: all 0.2s; letter-spacing: 0.5px; box-shadow: 0 4px 10px rgba(2, 132, 199, 0.25);" onmouseover="this.style.filter='brightness(1.15)'" onmouseout="this.style.filter='none'">
-                                PROCESSAR
+                        <!-- Entrada de Código + Botão Processar Estilo Imagem 1 -->
+                        <div id="manual-input-container" class="scan-input-wrapper">
+                            <div class="scan-input-box">
+                                <span class="scan-barcode-icon">|||||</span>
+                                <input type="text" id="manual-code-input" placeholder="Aponte o leitor ou digite o código do pacote..." autocomplete="off">
+                            </div>
+                            <button id="btn-manual-enviar" class="btn-processar-wide">
+                                <span>|||||</span> PROCESSAR <span>➔</span>
                             </button>
                         </div>
                     </main>
 
-                    <!-- Painel de Atribuição de Lote -->
-                    <section class="history-section" style="display: flex; flex-direction: column; justify-content: flex-start; padding: 12px 16px;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid #1e293b; padding-bottom: 6px;">
-                            <h3 style="margin: 0; color: #f1f5f9; font-size: 0.8rem; letter-spacing: 0.5px; display: flex; align-items: center; gap: 6px;">
-                                <span>🚚</span> ATRIBUIÇÃO DE MOTORISTA
+                    <!-- Card Direito: MOTORISTA / GRUPO ATUAL -->
+                    <section class="history-section card-motorista-atual">
+                        <div class="motorista-card-header">
+                            <h3 id="titulo-card-motorista-atual" style="margin: 0; color: #f1f5f9; font-size: 0.8rem; font-weight: 900; letter-spacing: 0.6px; display: flex; align-items: center; gap: 6px;">
+                                <span>🚚</span> MOTORISTA ATUAL
                             </h3>
-                            <div id="atribuicao-counter" style="font-size: 0.8rem; font-weight: 800; color: #38bdf8; background: rgba(56, 189, 248, 0.1); border: 1px solid rgba(56, 189, 248, 0.25); padding: 2px 8px; border-radius: 4px;">
-                                0 pacotes
+                            <div style="display: flex; align-items: center; gap: 6px;">
+                                <div id="atribuicao-counter" style="font-size: 0.72rem; font-weight: 800; color: #38bdf8; background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.3); padding: 2px 9px; border-radius: 12px;">
+                                    0 pacotes bipados
+                                </div>
                             </div>
                         </div>
-                        
-                        <div style="display: flex; flex-direction: row; width: 100%; flex: 1; gap: 14px; align-items: stretch;">
-                            <!-- Coluna Esquerda: Controles -->
-                            <div style="flex: 1.1; display: flex; flex-direction: column; justify-content: space-between; gap: 8px; padding-right: 12px; border-right: 1px solid #1e293b;">
-                                <div id="container-driver-standard" style="display: flex; flex-direction: column; gap: 4px;">
-                                    <label for="driver-select" style="font-size: 0.68rem; font-weight: 800; color: #94a3b8; letter-spacing: 0.5px;">MOTORISTA ATIVO:</label>
-                                    <select id="driver-select" style="width: 100%; padding: 6px 10px; border-radius: 6px; background: #0f172a; color: #fff; border: 1px solid #334155; font-size: 0.85rem; font-weight: 700; outline: none; cursor: pointer;">
-                                        <option value="">Apenas Entrada (Sem Atribuição)</option>
-                                    </select>
-                                </div>
 
-                                <!-- Container Multi-Cidades exclusivo Loggi -->
-                                <div id="container-loggi-cities" style="display: none; flex-direction: column; gap: 4px;">
-                                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                                        <label for="loggi-city-add-select" style="font-size: 0.68rem; font-weight: 800; color: #38bdf8; letter-spacing: 0.5px;">CIDADES DO GRUPO (LOGGI):</label>
-                                        <button type="button" id="btn-limpar-cidades-loggi" style="background: none; border: none; color: #f87171; font-size: 0.62rem; font-weight: 700; cursor: pointer; padding: 0;" title="Limpar todas as cidades selecionadas">✕ Limpar</button>
-                                    </div>
-                                    <select id="loggi-city-add-select" style="width: 100%; padding: 6px 10px; border-radius: 6px; background: #0f172a; color: #fff; border: 1px solid #0284c7; font-size: 0.82rem; font-weight: 700; outline: none; cursor: pointer;">
-                                        <option value="">+ Adicionar Cidade ao Grupo...</option>
-                                    </select>
-                                    <div id="loggi-selected-cities-tags" style="display: flex; flex-wrap: wrap; gap: 4px; max-height: 48px; overflow-y: auto; margin-top: 2px;">
-                                        <!-- Badges gerados dinamicamente via JS -->
-                                    </div>
+                        <!-- Nome do Motorista / Grupo Ativo em Destaque Único -->
+                        <div class="motorista-ativo-box">
+                            <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                                <div style="display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1;">
+                                    <span class="dot-online"></span>
+                                    <strong id="active-driver-name-display" style="font-size: 0.95rem; color: #ffffff; font-weight: 900; letter-spacing: 0.3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Apenas Entrada (Sem Atribuição)</strong>
                                 </div>
-                                
-                                <div id="atribuicao-status-area" style="text-align: center; padding: 2px 0;">
-                                    <p id="atribuicao-feedback" style="font-size: 0.72rem; color: #94a3b8; margin: 0; font-weight: 600;">Aguardando início...</p>
-                                </div>
-                                
-                                <button id="btn-finalizar-lote" style="width: 100%; background: linear-gradient(135deg, #ef4444, #dc2626); border: none; color: #fff; padding: 8px 12px; font-size: 0.8rem; font-weight: 900; border-radius: 6px; cursor: pointer; transition: all 0.2s; text-transform: uppercase; letter-spacing: 0.8px; box-shadow: 0 4px 12px rgba(239, 68, 68, 0.25);" onmouseover="this.style.filter='brightness(1.15)'" onmouseout="this.style.filter='none'">
-                                    ✓ FINALIZAR LOTE
-                                </button>
-                            </div>
-                            
-                            <!-- Coluna Direita: Cidades do Motorista -->
-                            <div style="flex: 1; display: flex; flex-direction: column; gap: 4px; overflow: hidden;">
-                                <span id="driver-cities-label" style="font-size: 0.68rem; font-weight: 800; color: #94a3b8; letter-spacing: 0.5px; text-transform: uppercase;">
-                                    CIDADES VINCULADAS:
-                                </span>
-                                <div id="driver-cities-list-box" style="flex: 1; background: #0a0d14; border: 1px solid #1e293b; border-radius: 6px; padding: 6px 10px; font-size: 0.76rem; color: #38bdf8; overflow-y: auto; line-height: 1.4; font-weight: 600;">
-                                    <span style="color: #64748b; font-style: italic;">Nenhum motorista selecionado</span>
-                                </div>
+                                <span id="atribuicao-feedback" style="font-size: 0.72rem; color: #34d399; font-weight: 800; white-space: nowrap; flex-shrink: 0; max-width: 140px; overflow: hidden; text-overflow: ellipsis; padding: 2px 8px; background: rgba(16, 185, 129, 0.12); border-radius: 5px; border: 1px solid rgba(16, 185, 129, 0.3);">Pronto para bipar</span>
                             </div>
                         </div>
+
+                        <!-- Área de Cidades da Loggi (Visível apenas para Loggi) -->
+                        <div id="container-loggi-cities" style="display: none; flex-direction: column; gap: 6px; flex: 1; min-height: 0;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;">
+                                <span style="font-size: 0.68rem; font-weight: 800; color: #94a3b8; letter-spacing: 0.4px; text-transform: uppercase; display: flex; align-items: center; gap: 4px;">
+                                    <span>🏷️</span> CIDADES DO GRUPO (LOGGI):
+                                </span>
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <button type="button" id="btn-limpar-cidades-loggi" style="background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.3); color: #f87171; font-size: 0.68rem; font-weight: 800; cursor: pointer; padding: 2px 7px; border-radius: 4px; transition: all 0.2s;" title="Limpar cidades selecionadas">✕ Limpar</button>
+                                    <button type="button" id="btn-criar-grupo-agora" style="padding: 2px 10px; font-size: 0.68rem; font-weight: 800; background: linear-gradient(135deg, #10b981, #059669); color: #fff; border: none; border-radius: 5px; cursor: pointer; white-space: nowrap; box-shadow: 0 2px 6px rgba(16, 185, 129, 0.3);" title="Criar grupo agora no sistema Loggi">
+                                        + Criar Agora
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="loggi-selected-cities-tags" style="flex: 1; min-height: 46px; background: #070a10; border: 1px solid #1e293b; border-radius: 8px; padding: 7px 9px; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 6px; overflow-y: auto;">
+                                <!-- Badges gerados dinamicamente via JS -->
+                            </div>
+                            <!-- Seletor Rápido para Adicionar Outras Cidades ao Grupo Ativo (Novo ou Existente) -->
+                            <div style="display: flex; gap: 6px; align-items: center; flex-shrink: 0;">
+                                <select id="loggi-city-add-select" style="flex: 1; height: 30px; background: #0b1120; border: 1px solid #334155; border-radius: 6px; color: #38bdf8; font-size: 0.74rem; font-weight: 800; padding: 0 8px; cursor: pointer; outline: none; transition: border-color 0.2s;" title="Selecione mais cidades para incluir neste mesmo grupo da Loggi">
+                                    <option value="">+ Adicionar Outra Cidade a este Grupo...</option>
+                                </select>
+                            </div>
+                            <div id="panel-loggi-existente" style="display: none;"></div>
+                            <div id="badge-grupo-loggi-ativo" style="display: none !important;">
+                                <span id="badge-grupo-loggi-texto"></span>
+                            </div>
+                        </div>
+
+                        <!-- Lista de Cidades do Motorista (Visível para Anjun / iMile) -->
+                        <div id="driver-cities-section" style="display: flex; flex-direction: column; gap: 6px; flex: 1; min-height: 0;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;">
+                                <span id="driver-cities-label" style="font-size: 0.68rem; font-weight: 800; color: #94a3b8; letter-spacing: 0.4px; text-transform: uppercase; display: flex; align-items: center; gap: 4px;">
+                                    <span>📍</span> CIDADES VINCULADAS AO MOTORISTA:
+                                </span>
+                                <span id="driver-cities-count-badge" style="font-size: 0.68rem; font-weight: 800; color: #38bdf8; background: rgba(56, 189, 248, 0.12); padding: 1px 7px; border-radius: 4px; border: 1px solid rgba(56, 189, 248, 0.25);">0 cidades</span>
+                            </div>
+                            <div id="driver-cities-list-box" style="flex: 1; min-height: 58px; background: #070a10; border: 1px solid #1e293b; border-radius: 8px; padding: 7px 9px; font-size: 0.8rem; color: #cbd5e1; overflow-y: auto; line-height: 1.4; font-weight: 700; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 6px;">
+                                <span style="color: #64748b; font-style: italic; font-size: 0.76rem; padding: 4px;">Nenhum motorista selecionado</span>
+                            </div>
+                        </div>
+
+                        <button id="btn-finalizar-lote" style="width: 100%; height: 34px; background: linear-gradient(90deg, #ef4444, #dc2626); border: none; color: #fff; padding: 0 12px; font-size: 0.82rem; font-weight: 900; border-radius: 7px; cursor: pointer; transition: all 0.2s; text-transform: uppercase; letter-spacing: 0.8px; box-shadow: 0 4px 12px rgba(239, 68, 68, 0.25); flex-shrink: 0; display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: auto;">
+                            ✓ FINALIZAR LOTE
+                        </button>
+                    </section>
+
+                    <!-- Oculto: Bipes Duplicados (Já exibido em Últimas Movimentações) -->
+                    <section id="duplicates-panel" style="display: none !important;">
+                        <span id="badge-duplicados-count">0</span>
+                        <table><tbody id="duplicados-log"></tbody></table>
                     </section>
                 </div>
 
@@ -150,49 +246,76 @@
                     <input type="text" id="qr-input" autocomplete="off" placeholder="Clique em qualquer lugar e bipe...">
                 </div>
 
-                <!-- Barra de Controle de Histórico e Fechamento -->
-                <div class="fechamento-bar-container" style="background: #11141c; border: 1px solid #1e2638; border-radius: 8px; padding: 4px 12px; display: flex; flex-direction: row; justify-content: space-between; align-items: center; gap: 10px; margin: 0; font-family: 'Outfit', sans-serif; box-shadow: 0 2px 10px rgba(0,0,0,0.15); flex-shrink: 0;">
+                <!-- Barra Compacta de Filtro de Período e Exportação Excel -->
+                <div class="fechamento-bar-container" style="background: #0e131d; border: 1px solid #1e2638; border-radius: 8px; padding: 4px 12px; display: flex; flex-direction: row; justify-content: space-between; align-items: center; gap: 10px; margin: 0; flex-shrink: 0;">
                     <div style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
-                        <span style="font-size: 0.78rem; font-weight: 700; color: #f1f5f9; letter-spacing: 0.4px; display: flex; align-items: center; gap: 6px; white-space: nowrap;">
+                        <span style="font-size: 0.75rem; font-weight: 800; color: #cbd5e1; letter-spacing: 0.4px; display: flex; align-items: center; gap: 6px;">
                             <span>📊</span> FECHAMENTO DIÁRIO / PERÍODO
                         </span>
-                        <span style="font-size: 0.68rem; color: #64748b; font-weight: 500; white-space: nowrap;">(Consulte motoristas, bipes e exporte relatórios)</span>
                     </div>
                     
                     <div style="display: flex; flex-direction: row; align-items: center; gap: 10px;">
                         <div style="display: flex; align-items: center; gap: 4px;">
-                            <label for="filter-date-start" style="font-size: 0.66rem; font-weight: 800; color: #94a3b8; letter-spacing: 0.5px;">DE:</label>
-                            <input type="date" id="filter-date-start" style="padding: 2px 6px; border-radius: 5px; background: #0f131a; color: #fff; border: 1px solid #334155; font-size: 0.74rem; font-weight: 600; outline: none; cursor: pointer; height: 26px;">
+                            <label for="filter-date-start" style="font-size: 0.65rem; font-weight: 800; color: #94a3b8;">DE:</label>
+                            <input type="date" id="filter-date-start" style="padding: 2px 6px; border-radius: 5px; background: #090d14; color: #fff; border: 1px solid #334155; font-size: 0.72rem; font-weight: 600; outline: none; cursor: pointer; height: 24px;">
                         </div>
                         
                         <div style="display: flex; align-items: center; gap: 4px;">
-                            <label for="filter-date-end" style="font-size: 0.66rem; font-weight: 800; color: #94a3b8; letter-spacing: 0.5px;">ATÉ:</label>
-                            <input type="date" id="filter-date-end" style="padding: 2px 6px; border-radius: 5px; background: #0f131a; color: #fff; border: 1px solid #334155; font-size: 0.74rem; font-weight: 600; outline: none; cursor: pointer; height: 26px;">
+                            <label for="filter-date-end" style="font-size: 0.65rem; font-weight: 800; color: #94a3b8;">ATÉ:</label>
+                            <input type="date" id="filter-date-end" style="padding: 2px 6px; border-radius: 5px; background: #090d14; color: #fff; border: 1px solid #334155; font-size: 0.72rem; font-weight: 600; outline: none; cursor: pointer; height: 24px;">
                         </div>
                         
-                        <button id="btn-exportar-csv" style="display: flex; align-items: center; gap: 5px; background: linear-gradient(135deg, #10b981, #059669); border: none; color: #fff; padding: 4px 10px; font-size: 0.72rem; font-weight: 800; border-radius: 5px; cursor: pointer; transition: all 0.2s; box-shadow: 0 2px 8px rgba(16,185,129,0.25); height: 26px; white-space: nowrap;" onmouseover="this.style.filter='brightness(1.15)'" onmouseout="this.style.filter='none'">
+                        <button id="btn-exportar-csv" style="display: flex; align-items: center; gap: 5px; background: linear-gradient(135deg, #10b981, #059669); border: none; color: #fff; padding: 3px 10px; font-size: 0.7rem; font-weight: 800; border-radius: 5px; cursor: pointer; height: 24px; white-space: nowrap;">
                             <span>📥 EXPORTAR EXCEL</span>
                         </button>
                     </div>
                 </div>
 
+                <!-- Linha 4: Últimas Movimentações em Largura Total -->
                 <div class="bottom-grids">
-                    <!-- Seção do Histórico (Ocupa largura total da coluna esquerda) -->
+                    <!-- Tabela 1: Últimas Movimentações -->
                     <section class="history-section">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; border-bottom: 1px solid #1e2638; padding-bottom: 6px;">
-                            <h3 style="margin: 0; color: #f1f5f9; font-size: 0.82rem; letter-spacing: 0.5px; display: flex; align-items: center; gap: 6px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; border-bottom: 1px solid #1e2638; padding-bottom: 6px; gap: 8px;">
+                            <h3 style="margin: 0; color: #f1f5f9; font-size: 0.78rem; letter-spacing: 0.5px; display: flex; align-items: center; gap: 6px; white-space: nowrap; flex-shrink: 0;">
                                 <span>🕒</span> ÚLTIMAS MOVIMENTAÇÕES
                             </h3>
-                            <span style="font-size: 0.72rem; color: #64748b; font-weight: 600;">(Clique em um código para copiar)</span>
+
+                            <div style="display: flex; align-items: center; gap: 7px; flex: 1; justify-content: flex-end;">
+                                <div style="position: relative; display: flex; align-items: center; max-width: 280px; width: 100%;">
+                                    <span style="position: absolute; left: 8px; color: #64748b; font-size: 0.72rem; pointer-events: none;">🔍</span>
+                                    <input 
+                                        type="text" 
+                                        id="filtro-historico-input" 
+                                        placeholder="Filtrar pacote, cidade ou horário..." 
+                                        autocomplete="off"
+                                        style="background: #090d16; border: 1px solid #1e293b; color: #f1f5f9; border-radius: 6px; padding: 3px 24px 3px 26px; font-size: 0.73rem; width: 100%; outline: none; transition: border-color 0.2s; font-family: inherit;"
+                                    />
+                                    <button 
+                                        type="button" 
+                                        id="btn-limpar-filtro-historico" 
+                                        style="position: absolute; right: 4px; background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 0.72rem; padding: 2px 5px; display: none;" 
+                                        title="Limpar filtro (Esc)">✕</button>
+                                </div>
+                                
+                                <button 
+                                    type="button" 
+                                    id="btn-filtro-apenas-duplicados" 
+                                    style="background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.35); color: #f87171; font-size: 0.68rem; font-weight: 800; cursor: pointer; padding: 3px 8px; border-radius: 5px; white-space: nowrap; transition: all 0.2s; display: flex; align-items: center; gap: 4px;"
+                                    title="Filtrar apenas pacotes duplicados de hoje">
+                                    <span>⚠️</span> Duplicados
+                                </button>
+
+                                <span id="filtro-historico-count" style="display: none; font-size: 0.68rem; font-weight: 800; color: #38bdf8; background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.3); padding: 1px 7px; border-radius: 10px; white-space: nowrap;">0 encontrados</span>
+                            </div>
                         </div>
                         <div class="table-container">
                             <table>
                                 <thead>
                                     <tr>
-                                        <th style="width: 70px;">Horário</th>
-                                        <th style="width: 44%;">Código do Pacote</th>
-                                        <th style="width: 32%;">Cidade Destino</th>
-                                        <th style="width: 95px; text-align: center;">Status</th>
+                                        <th style="width: 90px;">Horário</th>
+                                        <th style="width: 34%;">Código do Pacote</th>
+                                        <th style="width: 28%;">Cidade Destino</th>
+                                        <th style="width: 26%; text-align: center;">Status</th>
                                     </tr>
                                 </thead>
                                 <tbody id="history-log">
@@ -202,19 +325,20 @@
                         </div>
                     </section>
 
-                    <!-- Seção de Divergências Pendentes (Oculta por padrão quando vazia) -->
-                    <section id="section-divergencias" class="history-section" style="display: none; border-color: #ef4444;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; border-bottom: 1px solid rgba(239, 68, 68, 0.3); padding-bottom: 6px;">
-                            <h3 style="margin: 0; color: #f87171; font-size: 0.82rem; letter-spacing: 0.5px; display: flex; align-items: center; gap: 6px;">
+                    <!-- Tabela 2: Pendências de Divergência (Oculta) -->
+                    <section id="section-divergencias" class="history-section" style="display: none !important; border-color: rgba(239, 68, 68, 0.35);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; border-bottom: 1px solid rgba(239, 68, 68, 0.25); padding-bottom: 6px;">
+                            <h3 style="margin: 0; color: #f87171; font-size: 0.78rem; letter-spacing: 0.5px; display: flex; align-items: center; gap: 6px;">
                                 <span>⚠️</span> PENDÊNCIAS DE DIVERGÊNCIA
                             </h3>
+                            <span id="badge-divergencias-count" style="background: rgba(239, 68, 68, 0.18); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; font-size: 0.68rem; font-weight: 800; padding: 1px 8px; border-radius: 10px;">0 pendências</span>
                         </div>
                         <div class="table-container">
                             <table>
                                 <thead>
                                     <tr>
-                                        <th style="width: 38%;">Código</th>
-                                        <th style="width: 30%;">Estava em</th>
+                                        <th style="width: 36%;">Código</th>
+                                        <th style="width: 32%;">Estava em</th>
                                         <th style="width: 32%;">Deveria ir para</th>
                                     </tr>
                                 </thead>
@@ -227,13 +351,24 @@
                 </div>
             </div>
 
-            <!-- COLUNA DIREITA: BIPADOS POR MOTORISTA (HOJE) - PUXADO ATÉ EMBAIXO -->
+            <!-- COLUNA 3 (DIREITA): MOTORISTAS (HOJE) EM ALTURA TOTAL -->
             <aside class="workspace-right">
-                <section class="history-section section-bipados-totais" style="display: flex; flex-direction: column; height: 100%; padding: 14px 16px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid #1e293b; padding-bottom: 8px;">
-                        <h3 style="margin: 0; color: #38bdf8; font-size: 0.95rem; font-weight: 800; letter-spacing: 0.5px; display: flex; align-items: center; gap: 8px;">
-                            <span>📋</span> BIPADOS POR MOTORISTA (HOJE)
+                <section class="history-section section-bipados-totais" style="display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 10px 14px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; border-bottom: 1px solid #1e293b; padding-bottom: 6px; gap: 6px; flex-wrap: wrap;">
+                        <h3 style="margin: 0; color: #38bdf8; font-size: 0.82rem; font-weight: 800; letter-spacing: 0.5px; display: flex; align-items: center; gap: 6px;">
+                            <span>👥</span> MOTORISTAS (HOJE)
                         </h3>
+                        <div style="display: flex; align-items: center; gap: 5px; margin-left: auto;">
+                            <div id="anjun-lotes-actions" style="display: none; align-items: center; gap: 4px;">
+                                <button type="button" id="btn-finalizar-todos-anjun" onclick="finalizarTodosLotesAnjun()" style="background: linear-gradient(135deg, #22c55e, #16a34a); color: #fff; border: none; border-radius: 4px; padding: 3px 7px; font-size: 0.64rem; font-weight: 800; cursor: pointer; text-transform: uppercase; white-space: nowrap; box-shadow: 0 2px 6px rgba(34, 197, 94, 0.25);" title="Finalizar todos os lotes abertos na Anjun de uma só vez">
+                                    ✓ Finalizar Todos
+                                </button>
+                                <button type="button" id="btn-cancelar-todos-anjun" onclick="cancelarTodosLotesAnjun()" style="background: rgba(239, 68, 68, 0.18); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.45); border-radius: 4px; padding: 2px 6px; font-size: 0.64rem; font-weight: 800; cursor: pointer; text-transform: uppercase; white-space: nowrap;" title="Cancelar/limpar todos os lotes abertos sem emitir folha no site">
+                                    ✕ Cancelar
+                                </button>
+                            </div>
+                            <input type="text" id="filtro-motoristas-bipados" placeholder="🔍 Buscar motorista..." style="width: 120px; padding: 3px 8px; font-size: 0.72rem; border-radius: 5px; border: 1px solid #1e293b; background: #090d14; color: #fff; outline: none;">
+                        </div>
                     </div>
                     <div class="table-container table-bipados-container" style="text-align: left; flex: 1; overflow-y: auto;">
                         <table style="width: 100%;">
@@ -241,8 +376,8 @@
                                 <tr>
                                     <th id="th-motorista" style="cursor: pointer; user-select: none;" onclick="ordenarTabela('motorista')">Motorista <span id="sort-icon-motorista">⇅</span></th>
                                     <th id="th-cidades" style="cursor: pointer; user-select: none;" onclick="ordenarTabela('cidades')">Cidades <span id="sort-icon-cidades">⇅</span></th>
-                                    <th id="th-plataforma" style="cursor: pointer; user-select: none; width: 65px;" onclick="ordenarTabela('plataforma')">Plat <span id="sort-icon-plataforma">⇅</span></th>
-                                    <th id="th-quantidade" style="cursor: pointer; user-select: none; text-align: right; width: 75px;" onclick="ordenarTabela('quantidade')">Qtd <span id="sort-icon-quantidade">⇅</span></th>
+                                    <th id="th-plataforma" style="cursor: pointer; user-select: none; width: 100px;" onclick="ordenarTabela('plataforma')">Lote <span id="sort-icon-plataforma">⇅</span></th>
+                                    <th id="th-quantidade" style="cursor: pointer; user-select: none; text-align: right; width: 68px;" onclick="ordenarTabela('quantidade')">Total <span id="sort-icon-quantidade">⇅</span></th>
                                 </tr>
                             </thead>
                             <tbody id="lotes-finalizados-log">
@@ -285,6 +420,7 @@
                 <button class="tab-link active" data-tab="tab-cidades">🏙️ Cidades</button>
                 <button class="tab-link" data-tab="tab-motoristas">🚚 Motoristas</button>
                 <button class="tab-link" data-tab="tab-credenciais">🔑 Credenciais</button>
+                <button class="tab-link" data-tab="tab-audio">🔊 Voz & Áudio</button>
                 <button class="tab-link" data-tab="tab-sistema">☁️ Sistema & Nuvem</button>
             </nav>
 
@@ -334,20 +470,28 @@
                     <div class="settings-grid">
                         <!-- Lista de Mapeamentos Existentes -->
                         <div class="settings-column">
-                            <h3>Mapeamentos Cadastrados</h3>
-                            <div class="form-group" style="margin-bottom: 15px;">
-                                <label for="motorista-plataforma-select" style="font-weight: 500; font-size: 0.95rem; margin-bottom: 6px; display: block; color: #cbd5e1;">Plataforma:</label>
-                                <select id="motorista-plataforma-select" style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #475569; background: #1e293b; color: #f8fafc; font-size: 0.9rem; outline: none; margin-bottom: 10px;">
+                            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+                                <h3 style="margin: 0;">Mapeamentos Cadastrados</h3>
+                                <span id="contador-mapeamentos-modal" style="font-size: 0.75rem; color: #94a3b8; background: #1e293b; padding: 3px 8px; border-radius: 12px; border: 1px solid #334155;">0 registros</span>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 10px;">
+                                <label for="motorista-plataforma-select" style="font-weight: 500; font-size: 0.9rem; margin-bottom: 5px; display: block; color: #cbd5e1;">Plataforma:</label>
+                                <select id="motorista-plataforma-select" style="width: 100%; padding: 9px 10px; border-radius: 6px; border: 1px solid #475569; background: #1e293b; color: #f8fafc; font-size: 0.9rem; outline: none; margin-bottom: 8px;">
                                     <!-- Carregado via JS -->
                                 </select>
+                                <div style="position: relative; display: flex; align-items: center;">
+                                    <input type="text" id="filtro-mapeamentos-modal" placeholder="🔍 Filtrar por cidade ou nome do motorista..." autocomplete="off" style="width: 100%; padding: 8px 30px 8px 10px; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: #f8fafc; font-size: 0.85rem; outline: none;">
+                                    <button type="button" id="btn-limpar-filtro-mapeamentos" title="Limpar filtro" style="display: none; position: absolute; right: 8px; background: transparent; border: none; color: #94a3b8; cursor: pointer; font-size: 0.9rem; padding: 2px 4px;">✕</button>
+                                </div>
                             </div>
                             <div class="list-container">
                                 <table class="settings-table">
                                     <thead>
                                         <tr>
-                                            <th>Cidade</th>
-                                            <th>Motorista</th>
-                                            <th style="width: 130px; text-align: right;">Ação</th>
+                                            <th style="width: 25%;">Cidade</th>
+                                            <th style="width: 34%;">Motorista</th>
+                                            <th style="width: 23%;">CEP</th>
+                                            <th style="width: 128px; text-align: right;">Ação</th>
                                         </tr>
                                     </thead>
                                     <tbody id="motoristas-list-body">
@@ -359,8 +503,24 @@
                         
                         <!-- Formulário de Cadastro/Edição de Mapeamento -->
                         <div class="settings-column form-panel">
-                            <h3>Adicionar Novo Mapeamento</h3>
+                            <h3 id="form-motorista-titulo">Adicionar Novo Mapeamento</h3>
                             <form id="form-motorista">
+                                <div class="form-group">
+                                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+                                        <label for="mot-nome-select" style="margin-bottom: 0;">Motorista do Site:</label>
+                                        <button type="button" id="btn-atualizar-motoristas-site" title="Buscar lista atualizada de motoristas do site" style="background: #1e293b; color: #38bdf8; border: 1px solid #334155; border-radius: 5px; padding: 3px 8px; font-size: 0.72rem; font-weight: 600; cursor: pointer;">
+                                            🔄 Atualizar do Site
+                                        </button>
+                                    </div>
+                                    <input type="text" id="mot-busca-site-input" placeholder="🔍 Pesquisar motorista na lista do site..." autocomplete="off" style="width: 100%; padding: 7px 10px; margin-bottom: 6px; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: #f8fafc; font-size: 0.82rem; outline: none;">
+                                    <select id="mot-nome-select" style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #334155; background: #161920; color: #f8fafc; font-size: 0.9rem;">
+                                        <option value="">Selecione um motorista da lista...</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" id="mot-nome-manual-group" style="display: none;">
+                                    <label for="mot-nome">Ou digite o nome do motorista manualmente:</label>
+                                    <input type="text" id="mot-nome" placeholder="Ex: Motorista 2" autocomplete="off">
+                                </div>
                                 <div class="form-group">
                                     <label for="mot-cidade-select">Cidade:</label>
                                     <select id="mot-cidade-select" required style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #334155; background: #161920; color: #f8fafc; font-size: 0.9rem;">
@@ -368,50 +528,278 @@
                                     </select>
                                 </div>
                                 <div class="form-group">
-                                    <label for="mot-nome">Nome do Motorista para Atribuição:</label>
-                                    <input type="text" id="mot-nome" placeholder="Ex: Motorista 2" required autocomplete="off">
+                                    <label for="mot-cep-input" style="display: flex; align-items: center; justify-content: space-between;">
+                                        <span>Faixa de CEP / CEPs <span style="color: #64748b; font-weight: 400; font-size: 0.75rem;">(Opcional)</span>:</span>
+                                    </label>
+                                    <input type="text" id="mot-cep-input" placeholder="Ex: 18700-000 a 18705-999 ou 070, 071 (Vazio = Cidade inteira)" autocomplete="off" style="width: 100%; padding: 9px 10px; border-radius: 6px; border: 1px solid #334155; background: #161920; color: #f8fafc; font-size: 0.85rem;">
                                 </div>
-                                <button type="submit" class="btn-submit">Salvar Mapeamento</button>
+                                <div style="display: flex; gap: 8px;">
+                                    <button type="submit" id="btn-salvar-mapeamento-mot" class="btn-submit" style="flex: 1;">Salvar Mapeamento</button>
+                                    <button type="button" id="btn-cancelar-edicao-mot" style="display: none; background: #334155; color: #f8fafc; border: 1px solid #475569; border-radius: 6px; padding: 10px 14px; font-weight: 600; cursor: pointer;">Cancelar</button>
+                                </div>
                             </form>
                             
                             <div class="tip-box">
-                                <strong>Dica:</strong> É permitido cadastrar mais de um motorista para a mesma cidade! Eles ficarão salvos simultaneamente e a triagem aceitará qualquer um deles na rota.
+                                <strong>Dica:</strong> Escolha o motorista e a cidade! Se vários motoristas dividem a mesma cidade por CEP, preencha a <strong>Faixa de CEP</strong> (ex: <code>18700-000 a 18705-999</code> ou <code>070, 071</code>). Se a conferência for só por cidade, deixe o CEP em branco.
+                            </div>
+
+                            <!-- Cadastro em Massa via Planilha Excel -->
+                            <div style="margin-top: 12px; background: #141822; border: 1px solid #222b3d; border-radius: 8px; padding: 12px;">
+                                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+                                    <strong style="color: #34d399; font-size: 0.84rem;">📊 Planilha Excel (Motoristas_Cidades.xlsx)</strong>
+                                </div>
+                                <p style="font-size: 0.75rem; color: #94a3b8; margin: 0 0 10px 0; line-height: 1.4;">
+                                    Cadastre ou edite vários motoristas e cidades de uma só vez pelo Excel. Basta abrir a planilha, salvar e clicar em Sincronizar!
+                                </p>
+                                <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                                    <button type="button" id="btn-abrir-excel-mot" style="flex: 1; background: #059669; color: #fff; border: none; border-radius: 6px; padding: 7px 10px; font-size: 0.76rem; font-weight: 700; cursor: pointer;" title="Abrir a planilha Motoristas_Cidades.xlsx direto no Excel">
+                                        📂 Abrir Planilha
+                                    </button>
+                                    <button type="button" id="btn-abrir-pasta-excel-mot" style="flex: 1; background: #334155; color: #f8fafc; border: 1px solid #475569; border-radius: 6px; padding: 7px 10px; font-size: 0.76rem; font-weight: 700; cursor: pointer;" title="Abrir a pasta onde está o arquivo Motoristas_Cidades.xlsx">
+                                        📁 Abrir Pasta
+                                    </button>
+                                    <button type="button" id="btn-sincronizar-excel-mot" style="flex: 1; background: #0284c7; color: #fff; border: none; border-radius: 6px; padding: 7px 10px; font-size: 0.76rem; font-weight: 700; cursor: pointer;">
+                                        🔄 Sincronizar
+                                    </button>
+                                    <button type="button" id="btn-importar-excel-mot" style="flex: 1; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 6px; padding: 7px 10px; font-size: 0.76rem; font-weight: 700; cursor: pointer;">
+                                        📤 Importar .xlsx
+                                    </button>
+                                    <input type="file" id="input-importar-excel-mot" accept=".xlsx,.xls" style="display: none;">
+                                </div>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- ABA 3: CREDENCIAIS -->
+                <!-- ABA 3: CREDENCIAIS / MÚLTIPLOS LOGINS -->
                 <div id="tab-credenciais" class="tab-content">
-                    <div style="max-width: 520px; margin: 20px auto; background: #11141a; border: 1px solid #222730; border-radius: 8px; padding: 24px;">
-                        <h3 style="margin-top: 0; margin-bottom: 20px; color: #f8fafc; display: flex; align-items: center; gap: 8px;">🔑 Credenciais de Login das Plataformas</h3>
-                        
-                        <div style="display: flex; flex-direction: column; gap: 16px; margin-bottom: 25px;">
-                            <div class="form-group">
-                                <label for="modal-plat-selector">PLATAFORMA:</label>
-                                <select id="modal-plat-selector" style="width: 100%; padding: 10px 12px; border-radius: 6px; background: #161920; color: #fff; border: 1px solid #334155; font-size: 0.9rem;">
-                                    <!-- Populado dinamicamente -->
+                    <div class="modal-split-view">
+                        <!-- Lista de Contas Cadastradas na Plataforma -->
+                        <div class="modal-list-col">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                                <h3 style="margin: 0;">Contas / Logins Salvos</h3>
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <label for="modal-plat-selector" style="font-size: 0.75rem; color: #94a3b8; font-weight: 700;">PLATAFORMA:</label>
+                                    <select id="modal-plat-selector" style="padding: 5px 10px; border-radius: 6px; background: #161920; color: #38bdf8; border: 1px solid #334155; font-size: 0.82rem; font-weight: 800; cursor: pointer;">
+                                        <!-- Populado dinamicamente -->
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="modal-table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Base / Apelido</th>
+                                            <th>Usuário</th>
+                                            <th style="width: 165px; text-align: right;">Ações</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="contas-plataforma-list-body">
+                                        <!-- Preenchido via JS -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Formulário de Adicionar / Editar Conta -->
+                        <div class="modal-form-col">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                                <h3 id="titulo-form-conta" style="margin: 0;">➕ Nova Conta / Login</h3>
+                                <button type="button" id="btn-nova-conta-limpar" style="display: none; background: transparent; border: 1px solid #475569; color: #cbd5e1; border-radius: 5px; padding: 3px 8px; font-size: 0.72rem; cursor: pointer;">+ Criar Nova</button>
+                            </div>
+                            <input type="hidden" id="modal-conta-id" value="">
+
+                            <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px;">
+                                <div class="form-group">
+                                    <label for="modal-conta-apelido">NOME DA BASE / APELIDO:</label>
+                                    <input type="text" id="modal-conta-apelido" placeholder="Ex: Base 1, Base 2, Conta Principal..." autocomplete="off">
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="modal-login-user">USUÁRIO DE LOGIN:</label>
+                                    <input type="text" id="modal-login-user" placeholder="Usuário ou e-mail de login" autocomplete="off">
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label for="modal-login-pass">SENHA DE LOGIN:</label>
+                                    <input type="password" id="modal-login-pass" placeholder="Senha da plataforma" style="background: #161920; border: 1px solid #334155; border-radius: 6px; padding: 10px 14px; color: #f8fafc; font-size: 0.9rem; outline: none;">
+                                </div>
+                            </div>
+                            
+                            <button type="button" id="btn-modal-salvar" class="btn-submit" style="width: 100%; padding: 11px; font-size: 0.9rem;">
+                                Salvar Conta
+                            </button>
+
+                            <div class="tip-box" style="margin-top: 12px;">
+                                <strong>Múltiplos Logins:</strong> Cadastre quantas contas/bases quiser para Anjun e iMile e alterne entre elas direto no topo da tela principal em <strong>USUÁRIO</strong>!
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ABA 4: VOZ & ÁUDIO (CENTRAL DE VOLUMES E TESTES DE SOM) -->
+                <div id="tab-audio" class="tab-content">
+                    <div style="display: flex; flex-direction: column; gap: 12px; padding: 4px 0;">
+                        <div style="background: #141822; border: 1px solid #222b3d; border-radius: 10px; padding: 16px;">
+                            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; border-bottom: 1px solid #1e2638; padding-bottom: 10px;">
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    <span style="font-size: 1.5rem;">🔊</span>
+                                    <div>
+                                        <h3 style="margin: 0; font-size: 1.02rem; font-weight: 800; color: #f8fafc;">CENTRAL DE VOLUMES E TESTES DE SOM</h3>
+                                        <span style="font-size: 0.76rem; color: #94a3b8;">Ajuste a altura de cada som individualmente (até 300% Turbo Boost) e clique nos botões para testar na hora</span>
+                                    </div>
+                                </div>
+                                <button type="button" id="btn-restaurar-volumes" style="background: #1e293b; border: 1px solid #334155; color: #cbd5e1; border-radius: 6px; padding: 6px 12px; font-size: 0.75rem; font-weight: 700; cursor: pointer;" title="Voltar todos os volumes para o máximo recomendado">
+                                    ↺ Volume Máximo Padrão
+                                </button>
+                            </div>
+
+                            <div style="display: flex; flex-direction: column; gap: 12px;">
+                                <!-- 1. BIPE DE SUCESSO (OK) -->
+                                <div style="background: #0f172a; border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 8px; padding: 12px 14px;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; gap: 10px; flex-wrap: wrap;">
+                                        <div style="display: flex; align-items: center; gap: 8px;">
+                                            <span style="font-size: 1.1rem;">✅</span>
+                                            <strong style="color: #34d399; font-size: 0.86rem;">SOM DE BIPE OK (PACOTE VÁLIDO)</strong>
+                                        </div>
+                                        <div style="display: flex; align-items: center; gap: 8px;">
+                                            <select id="tone-selector" title="Tom do Sinal Sonoro de Bipagem" style="padding: 6px 10px; border-radius: 6px; border: 1px solid #334155; background: #161f33; color: #f8fafc; font-size: 0.8rem; font-weight: 600; outline: none;">
+                                                <option value="padrao">Tom: Padrão Industrial</option>
+                                                <option value="agudo">Tom: Agudo Forte</option>
+                                                <option value="duplo">Tom: Bip Duplo</option>
+                                                <option value="grave">Tom: Encorpado</option>
+                                                <option value="suave">Tom: Suave</option>
+                                                <option value="mudo">🔇 Silencioso</option>
+                                            </select>
+                                            <button type="button" id="btn-testar-bipe-ok" style="background: rgba(16, 185, 129, 0.2); border: 1px solid #10b981; color: #34d399; font-weight: 800; font-size: 0.78rem; padding: 6px 12px; border-radius: 6px; cursor: pointer; white-space: nowrap;">
+                                                🔊 Testar Bipe OK
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 12px;">
+                                        <span id="volume-icon" style="font-size: 1rem;">🔊</span>
+                                        <input type="range" id="volume-slider" min="0" max="300" step="10" value="250" style="flex: 1; accent-color: #10b981; cursor: pointer;">
+                                        <span id="volume-value" style="min-width: 48px; text-align: right; font-weight: 800; font-size: 0.84rem; color: #34d399;">250%</span>
+                                    </div>
+                                </div>
+
+                                <!-- 2. SOM DE DIVERGÊNCIA / CIDADE ERRADA / DUPLICADO -->
+                                <div style="background: #0f172a; border: 1px solid rgba(239, 68, 68, 0.45); border-radius: 8px; padding: 12px 14px;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; gap: 10px; flex-wrap: wrap;">
+                                        <div style="display: flex; align-items: center; gap: 8px;">
+                                            <span style="font-size: 1.1rem;">🛑</span>
+                                            <div>
+                                                <strong style="color: #f87171; font-size: 0.86rem;">SOM DE DIVERGÊNCIA / PACOTE FORA DE ROTA</strong>
+                                                <span style="display: block; font-size: 0.72rem; color: #94a3b8;">Sirene de alta potência + aviso falado quando o pacote pertence a outra cidade/motorista</span>
+                                            </div>
+                                        </div>
+                                        <div style="display: flex; align-items: center; gap: 8px;">
+                                            <select id="div-tone-selector" title="Estilo da Sirene de Divergência" style="padding: 6px 10px; border-radius: 6px; border: 1px solid #334155; background: #161f33; color: #f8fafc; font-size: 0.8rem; font-weight: 600; outline: none;">
+                                                <option value="sirene_divergencia">Sirene Industrial (4 Ciclos)</option>
+                                                <option value="alarme_emergencia">Alarme de Emergência Agudo</option>
+                                                <option value="apito_quadruplo">4 Apitos de Alerta Rápidos</option>
+                                                <option value="buzina_dupla">Buzina Dupla de Galpão</option>
+                                            </select>
+                                            <button type="button" id="btn-testar-divergencia" style="background: rgba(239, 68, 68, 0.22); border: 1px solid #ef4444; color: #fca5a5; font-weight: 800; font-size: 0.78rem; padding: 6px 12px; border-radius: 6px; cursor: pointer; white-space: nowrap;">
+                                                🛑 Testar Divergência
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 12px;">
+                                        <span style="font-size: 1rem;">🚨</span>
+                                        <input type="range" id="vol-divergencia-slider" min="0" max="300" step="10" value="300" style="flex: 1; accent-color: #ef4444; cursor: pointer;">
+                                        <span id="vol-divergencia-value" style="min-width: 48px; text-align: right; font-weight: 800; font-size: 0.84rem; color: #f87171;">300%</span>
+                                    </div>
+                                </div>
+
+                                <!-- 3. SOM DE ALERTA / ERRO GERAL (SEM ENTRADA, FALHA, LOGIN) -->
+                                <div style="background: #0f172a; border: 1px solid rgba(245, 158, 11, 0.4); border-radius: 8px; padding: 12px 14px;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; gap: 10px; flex-wrap: wrap;">
+                                        <div style="display: flex; align-items: center; gap: 8px;">
+                                            <span style="font-size: 1.1rem;">⚠️</span>
+                                            <div>
+                                                <strong style="color: #fbbf24; font-size: 0.86rem;">SOM DE ALERTA E ERRO (SEM ENTRADA / DUPLICADO / AVISOS)</strong>
+                                                <span style="display: block; font-size: 0.72rem; color: #94a3b8;">Frequência otimizada para caixas de som de PC e monitores</span>
+                                            </div>
+                                        </div>
+                                        <div style="display: flex; align-items: center; gap: 8px;">
+                                            <select id="error-tone-selector" title="Estilo do Som de Alerta/Erro" style="padding: 6px 10px; border-radius: 6px; border: 1px solid #334155; background: #161f33; color: #f8fafc; font-size: 0.8rem; font-weight: 600; outline: none;">
+                                                <option value="alarme_forte">Alarme Triplo Forte (Padrão)</option>
+                                                <option value="sirene_curta">Sirene Curta de Alerta</option>
+                                                <option value="triplo_agudo">Triplo Apito Penetrante</option>
+                                                <option value="buzzer_industrial">Buzzer Industrial Forte</option>
+                                            </select>
+                                            <button type="button" id="btn-testar-alerta-erro" style="background: rgba(245, 158, 11, 0.2); border: 1px solid #f59e0b; color: #fcd34d; font-weight: 800; font-size: 0.78rem; padding: 6px 12px; border-radius: 6px; cursor: pointer; white-space: nowrap;">
+                                                ⚠️ Testar Alerta
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 12px;">
+                                        <span style="font-size: 1rem;">🔔</span>
+                                        <input type="range" id="vol-erro-slider" min="0" max="300" step="10" value="300" style="flex: 1; accent-color: #f59e0b; cursor: pointer;">
+                                        <span id="vol-erro-value" style="min-width: 48px; text-align: right; font-weight: 800; font-size: 0.84rem; color: #fbbf24;">300%</span>
+                                    </div>
+                                </div>
+
+                                <!-- 4. VOZ DO ASSISTENTE (FALAR CIDADE E AVISOS FALADOS) -->
+                                <div style="background: #0f172a; border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 8px; padding: 12px 14px;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; gap: 10px; flex-wrap: wrap;">
+                                        <div style="display: flex; align-items: center; gap: 8px;">
+                                            <span style="font-size: 1.1rem;">🗣️</span>
+                                            <strong style="color: #38bdf8; font-size: 0.86rem;">VOZ DO ASSISTENTE (LEITURA DE CIDADES E ALERTAS)</strong>
+                                        </div>
+                                        <div style="display: flex; align-items: center; gap: 8px;">
+                                            <button type="button" id="btn-falar-cidade-modal" class="btn-pacote-solto" style="height: 30px; padding: 0 10px; font-size: 0.75rem;" title="Ativar/Desativar Falar Cidade (Também disponível no topo da tela principal)">
+                                                <span class="btn-solto-icon">🗣️</span>
+                                                <span class="btn-solto-label">FALAR CIDADE:</span>
+                                                <span id="status-falar-cidade-modal" class="btn-solto-badge badge-off">NÃO</span>
+                                            </button>
+                                            <button type="button" id="btn-testar-voz" style="background: rgba(56, 189, 248, 0.2); border: 1px solid #38bdf8; color: #7dd3fc; font-weight: 800; font-size: 0.78rem; padding: 6px 12px; border-radius: 6px; cursor: pointer; white-space: nowrap;">
+                                                🗣️ Testar Voz
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div style="display: grid; grid-template-columns: 1fr 160px; gap: 10px; margin-bottom: 10px;">
+                                        <div>
+                                            <label for="voice-selector" style="font-weight: 700; font-size: 0.74rem; color: #94a3b8; margin-bottom: 4px; display: block;">VOZ DO SISTEMA:</label>
+                                            <select id="voice-selector" style="width: 100%; padding: 7px 10px; border-radius: 6px; border: 1px solid #334155; background: #161f33; color: #f8fafc; font-size: 0.82rem; outline: none;">
+                                                <option value="">Carregando vozes...</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label for="voice-rate-selector" style="font-weight: 700; font-size: 0.74rem; color: #94a3b8; margin-bottom: 4px; display: block;">VELOCIDADE DA FALA:</label>
+                                            <select id="voice-rate-selector" style="width: 100%; padding: 7px 10px; border-radius: 6px; border: 1px solid #334155; background: #161f33; color: #f8fafc; font-size: 0.82rem; outline: none;">
+                                                <option value="1.0">1.0x (Normal)</option>
+                                                <option value="1.2">1.2x (Rápida)</option>
+                                                <option value="1.3" selected>1.3x (Padrão)</option>
+                                                <option value="1.5">1.5x (Turbo)</option>
+                                                <option value="1.7">1.7x (Ultra Rápida)</option>
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    <div style="display: flex; align-items: center; gap: 12px;">
+                                        <span style="font-size: 1rem;">🎙️</span>
+                                        <input type="range" id="vol-voz-slider" min="0" max="100" step="5" value="100" style="flex: 1; accent-color: #38bdf8; cursor: pointer;">
+                                        <span id="vol-voz-value" style="min-width: 48px; text-align: right; font-weight: 800; font-size: 0.84rem; color: #38bdf8;">100%</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Modo Consulta Toggle (Ocultado) -->
+                            <div class="control-group" id="container-consult-toggle" style="display: none;">
+                                <label for="consult-toggle">CONSULTA:</label>
+                                <select id="consult-toggle" style="color: #f87171; font-weight: bold;">
+                                    <option value="ativado" style="color: #4ade80;">ATIVADO</option>
+                                    <option value="desativado" style="color: #f87171;" selected>DESATIVADO</option>
                                 </select>
                             </div>
-                            
-                            <div class="form-group">
-                                <label for="modal-login-user">USUÁRIO DE LOGIN:</label>
-                                <input type="text" id="modal-login-user" placeholder="Usuário ou e-mail de login">
-                            </div>
-                            
-                            <div class="form-group">
-                                <label for="modal-login-pass">SENHA DE LOGIN:</label>
-                                <input type="password" id="modal-login-pass" placeholder="Senha da plataforma" style="background: #161920; border: 1px solid #334155; border-radius: 6px; padding: 10px 14px; color: #f8fafc; font-size: 0.9rem; outline: none;">
-                            </div>
                         </div>
-                        
-                        <button type="button" id="btn-modal-salvar" class="btn-submit" style="width: 100%; padding: 12px; font-size: 0.95rem;">
-                            Salvar Credenciais
-                        </button>
                     </div>
                 </div>
 
-                <!-- ABA 4: SISTEMA & NUVEM -->
+                <!-- ABA 5: SISTEMA & NUVEM -->
                 <div id="tab-sistema" class="tab-content">
                     <div style="display: flex; flex-direction: column; gap: 14px; padding: 6px 0;">
                         <!-- Card de Versão e Auto-Update -->
@@ -472,6 +860,325 @@
                         </div>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Ajuda / Guia Completo de Operação por Empresa -->
+    <div id="modal-ajuda" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(8, 11, 18, 0.92); backdrop-filter: blur(8px); z-index: 99999; align-items: center; justify-content: center; padding: 20px;">
+        <div style="background: #111827; border: 1px solid #38bdf8; border-radius: 14px; max-width: 780px; width: 100%; max-height: 88vh; display: flex; flex-direction: column; padding: 22px 26px; box-shadow: 0 20px 60px rgba(0,0,0,0.85); font-family: 'Outfit', sans-serif;">
+            <!-- Cabeçalho -->
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1e293b; padding-bottom: 12px; margin-bottom: 14px; flex-shrink: 0;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span style="font-size: 1.8rem;">⚡</span>
+                    <div>
+                        <h2 style="margin: 0; font-size: 1.25rem; font-weight: 900; color: #f8fafc; letter-spacing: 0.5px;">TURBOSCAN • MANUAL E GUIA DE OPERAÇÃO</h2>
+                        <span style="font-size: 0.78rem; color: #94a3b8;">Clique na empresa abaixo para ver o passo a passo completo de como operar</span>
+                    </div>
+                </div>
+                <button type="button" id="btn-fechar-ajuda" style="background: transparent; border: none; color: #94a3b8; font-size: 1.4rem; cursor: pointer; padding: 4px 8px; border-radius: 4px;">✕</button>
+            </div>
+
+            <!-- Abas por Empresa + Painéis Gerais -->
+            <div id="ajuda-tabs-bar" style="display: flex; gap: 6px; margin-bottom: 14px; flex-shrink: 0; flex-wrap: wrap;">
+                <button type="button" class="ajuda-tab-btn active" data-ajuda-tab="ajuda-anjun" onclick="trocarAbaAjuda('ajuda-anjun')" style="flex: 1; min-width: 120px; padding: 9px 10px; border-radius: 8px; border: 1px solid #10b981; background: rgba(16, 185, 129, 0.2); color: #34d399; font-weight: 800; font-size: 0.8rem; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 5px;">
+                    🟢 Anjun Express
+                </button>
+                <button type="button" class="ajuda-tab-btn" data-ajuda-tab="ajuda-imile" onclick="trocarAbaAjuda('ajuda-imile')" style="flex: 1; min-width: 110px; padding: 9px 10px; border-radius: 8px; border: 1px solid #334155; background: #0d121f; color: #cbd5e1; font-weight: 800; font-size: 0.8rem; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 5px;">
+                    🟣 iMile
+                </button>
+                <button type="button" class="ajuda-tab-btn" data-ajuda-tab="ajuda-loggi" onclick="trocarAbaAjuda('ajuda-loggi')" style="flex: 1; min-width: 115px; padding: 9px 10px; border-radius: 8px; border: 1px solid #334155; background: #0d121f; color: #cbd5e1; font-weight: 800; font-size: 0.8rem; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 5px;">
+                    🟠 Loggi (Arco)
+                </button>
+                <button type="button" class="ajuda-tab-btn" data-ajuda-tab="ajuda-paineis" onclick="trocarAbaAjuda('ajuda-paineis')" style="flex: 1; min-width: 135px; padding: 9px 10px; border-radius: 8px; border: 1px solid #334155; background: #0d121f; color: #cbd5e1; font-weight: 800; font-size: 0.8rem; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 5px;">
+                    🔁 Duplicados &amp; Dicas
+                </button>
+                <button type="button" class="ajuda-tab-btn" data-ajuda-tab="ajuda-vantagens" onclick="trocarAbaAjuda('ajuda-vantagens')" style="flex: 1; min-width: 120px; padding: 9px 10px; border-radius: 8px; border: 1px solid #334155; background: #0d121f; color: #cbd5e1; font-weight: 800; font-size: 0.8rem; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 5px;">
+                    🚀 Vantagens
+                </button>
+            </div>
+
+            <!-- Conteúdo Rolável das Abas -->
+            <div style="flex: 1; overflow-y: auto; padding-right: 4px;">
+
+                <!-- ABA 1: ANJUN EXPRESS -->
+                <div id="ajuda-anjun" class="ajuda-tab-panel" style="display: flex; flex-direction: column; gap: 10px;">
+                    <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 8px; padding: 10px 14px; font-size: 0.8rem; color: #a7f3d0;">
+                        💡 <strong>Diferencial na Anjun:</strong> O TurboScan permite manter <strong>vários motoristas com grupos abertos ao mesmo tempo</strong> sem travar no site!
+                    </div>
+
+                    <div style="display: flex; gap: 12px; align-items: flex-start; background: #0d121f; border: 1px solid #1e293b; border-radius: 8px; padding: 12px;">
+                        <span style="background: #059669; color: #fff; font-weight: 800; font-size: 0.85rem; width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">1</span>
+                        <div>
+                            <strong style="color: #34d399; font-size: 0.9rem; display: block; margin-bottom: 3px;">Escolha a Plataforma e o Login (Base)</strong>
+                            <span style="font-size: 0.8rem; color: #cbd5e1; line-height: 1.45;">
+                                Clique no card <strong>ANJUN</strong> no topo (ou selecione em <em>PLATAFORMA</em>) e escolha a base em <strong>USUÁRIO</strong> (ex: <em>Base 1</em>, <em>Base 2</em> ou <em>Conta Principal</em>). O Chrome abrirá e preencherá o login sozinho — caso apareça o <em>"Não sou robô"</em> na 1ª vez, marque-o no Chrome.
+                            </span>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 12px; align-items: flex-start; background: #0d121f; border: 1px solid #1e293b; border-radius: 8px; padding: 12px;">
+                        <span style="background: #059669; color: #fff; font-weight: 800; font-size: 0.85rem; width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">2</span>
+                        <div>
+                            <strong style="color: #34d399; font-size: 0.9rem; display: block; margin-bottom: 3px;">Selecione o Motorista na Coluna da Esquerda</strong>
+                            <span style="font-size: 0.8rem; color: #cbd5e1; line-height: 1.45;">
+                                Na lista sempre aberta à esquerda, clique no <strong>Motorista</strong> que vai receber os pacotes. As cidades vinculadas a ele aparecem no card <strong>🚚 MOTORISTA ATUAL</strong> à direita.
+                            </span>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 12px; align-items: flex-start; background: #0d121f; border: 1px solid #1e293b; border-radius: 8px; padding: 12px;">
+                        <span style="background: #059669; color: #fff; font-weight: 800; font-size: 0.85rem; width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">3</span>
+                        <div>
+                            <strong style="color: #34d399; font-size: 0.9rem; display: block; margin-bottom: 3px;">Troca Livre de Motorista &amp; Auto-Atribuição de Cidades Vizinhas</strong>
+                            <span style="font-size: 0.8rem; color: #cbd5e1; line-height: 1.45;">
+                                • <strong>Trocar no meio da pilha:</strong> Você pode clicar em outro motorista na lista da esquerda a qualquer momento e continuar bipando sem precisar fechar o lote anterior.<br>
+                                • <strong>Auto-Atribuição Inteligente:</strong> Se aparecer um pacote misturado de outra cidade que <strong>já tem um grupo aberto hoje</strong> (ex: grupo aberto do João), o sistema envia automaticamente para o grupo do João e avisa na voz!
+                            </span>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 12px; align-items: flex-start; background: #0d121f; border: 1px solid #1e293b; border-radius: 8px; padding: 12px;">
+                        <span style="background: #059669; color: #fff; font-weight: 800; font-size: 0.85rem; width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">4</span>
+                        <div>
+                            <strong style="color: #34d399; font-size: 0.9rem; display: block; margin-bottom: 3px;">Fechamento Automático aos 200 e Botão Finalizar</strong>
+                            <span style="font-size: 0.8rem; color: #cbd5e1; line-height: 1.45;">
+                                • Quando o grupo aberto de um motorista bate <strong>200 pacotes</strong>, o sistema finaliza o grupo no site da Anjun sozinho e abre um novo lote para ele.<br>
+                                • Ao terminar o carregamento do dia, clique em <strong>Finalizar</strong> ao lado do motorista na tabela <strong>👥 MOTORISTAS (HOJE)</strong> (ou no botão vermelho <strong>✓ FINALIZAR LOTE</strong>).
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ABA 2: IMILE -->
+                <div id="ajuda-imile" class="ajuda-tab-panel" style="display: none; flex-direction: column; gap: 10px;">
+                    <div style="background: rgba(139, 92, 246, 0.1); border: 1px solid rgba(167, 139, 250, 0.35); border-radius: 8px; padding: 10px 14px; font-size: 0.8rem; color: #ddd6fe;">
+                        💡 <strong>Atenção na iMile:</strong> Confira sempre no topo se o botão <strong>📦 PACOTE SOLTO</strong> está em <strong>NÃO</strong> (Saca) ou <strong>SIM</strong> (Pacote Solto) conforme a carga!
+                    </div>
+
+                    <div style="display: flex; gap: 12px; align-items: flex-start; background: #0d121f; border: 1px solid #1e293b; border-radius: 8px; padding: 12px;">
+                        <span style="background: #7c3aed; color: #fff; font-weight: 800; font-size: 0.85rem; width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">1</span>
+                        <div>
+                            <strong style="color: #a78bfa; font-size: 0.9rem; display: block; margin-bottom: 3px;">Escolha a Base (Usuário) e o Modo Pacote Solto</strong>
+                            <span style="font-size: 0.8rem; color: #cbd5e1; line-height: 1.45;">
+                                • Selecione a conta da base em <strong>USUÁRIO:</strong> (ex: <em>Base 1</em>, <em>Base 2</em>).<br>
+                                • <strong>PACOTE SOLTO = NÃO (Padrão Saca):</strong> Faz <em>Aba 1 (Recebimento) ➔ Aba 4 (Atribuição)</em>.<br>
+                                • <strong>PACOTE SOLTO = SIM:</strong> Faz primeiro <em>Aba 2 (Descarregamento) ➔ Aba 1 (Recebimento) ➔ Aba 4 (Atribuição)</em>.
+                            </span>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 12px; align-items: flex-start; background: #0d121f; border: 1px solid #1e293b; border-radius: 8px; padding: 12px;">
+                        <span style="background: #7c3aed; color: #fff; font-weight: 800; font-size: 0.85rem; width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">2</span>
+                        <div>
+                            <strong style="color: #a78bfa; font-size: 0.9rem; display: block; margin-bottom: 3px;">Selecione o Motorista na Lista Lateral</strong>
+                            <span style="font-size: 0.8rem; color: #cbd5e1; line-height: 1.45;">
+                                Clique no nome do motorista na coluna esquerda. O robô selecionará esse motorista na Aba 4 da iMile e validará se cada pacote pertence às cidades dele.
+                            </span>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 12px; align-items: flex-start; background: #0d121f; border: 1px solid #1e293b; border-radius: 8px; padding: 12px;">
+                        <span style="background: #7c3aed; color: #fff; font-weight: 800; font-size: 0.85rem; width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">3</span>
+                        <div>
+                            <strong style="color: #a78bfa; font-size: 0.9rem; display: block; margin-bottom: 3px;">Bipagem Direta, Divergência e Troca de Motorista</strong>
+                            <span style="font-size: 0.8rem; color: #cbd5e1; line-height: 1.45;">
+                                • <strong>Atribuição Imediata:</strong> Na iMile cada pacote bipado já fica atribuído direto no motorista no site (não precisa clicar em finalizar lote).<br>
+                                • Se o pacote for de outra cidade, o sistema bloqueia o envio para o motorista errado, fala <strong>"Divergente!"</strong> e anota em <em>Pendências de Divergência</em>.<br>
+                                • Para passar para o próximo motorista, basta clicar no nome dele na lista da esquerda e continuar bipando!
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ABA 3: LOGGI (ARCO) -->
+                <div id="ajuda-loggi" class="ajuda-tab-panel" style="display: none; flex-direction: column; gap: 10px;">
+                    <div style="background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(251, 191, 36, 0.35); border-radius: 8px; padding: 10px 14px; font-size: 0.8rem; color: #fde68a;">
+                        💡 <strong>Como funciona na Loggi:</strong> Na Loggi a separação é por <strong>Cidades / Grupos (Aba 3)</strong>. Você pode criar um grupo novo ou continuar bipando em um grupo já aberto!
+                    </div>
+
+                    <div style="display: flex; gap: 12px; align-items: flex-start; background: #0d121f; border: 1px solid #1e293b; border-radius: 8px; padding: 12px;">
+                        <span style="background: #d97706; color: #fff; font-weight: 800; font-size: 0.85rem; width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">1</span>
+                        <div>
+                            <strong style="color: #fbbf24; font-size: 0.9rem; display: block; margin-bottom: 3px;">Criar Novo Grupo (`➕ Novo Grupo` na Coluna Esquerda)</strong>
+                            <span style="font-size: 0.8rem; color: #cbd5e1; line-height: 1.45;">
+                                • Clique na <strong>1ª Cidade</strong> na lista da esquerda: ela ficará marcada como <strong>⭐ 1ª Principal</strong> (nome que será dado ao grupo na Aba 3).<br>
+                                • Se o mesmo grupo/motorista levar mais cidades juntas, basta clicar nas outras cidades da lista para autorizá-las no lote (<em>2ª, 3ª...</em>).<br>
+                                • Clique em <strong>+ Criar Agora</strong> (no painel da direita) ou simplesmente bipe o 1º pacote para o sistema criar o grupo automaticamente!
+                            </span>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 12px; align-items: flex-start; background: #0d121f; border: 1px solid #1e293b; border-radius: 8px; padding: 12px;">
+                        <span style="background: #d97706; color: #fff; font-weight: 800; font-size: 0.85rem; width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">2</span>
+                        <div>
+                            <strong style="color: #fbbf24; font-size: 0.9rem; display: block; margin-bottom: 3px;">Continuar em um Grupo Já Criado (`📂 Grupo Aberto`)</strong>
+                            <span style="font-size: 0.8rem; color: #cbd5e1; line-height: 1.45;">
+                                Precisa voltar a bipar para uma cidade cujo grupo já está aberto na Loggi? Clique no botão <strong>📂 Grupo Aberto</strong> no topo da coluna esquerda e clique no grupo desejado na lista!
+                            </span>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 12px; align-items: flex-start; background: #0d121f; border: 1px solid #1e293b; border-radius: 8px; padding: 12px;">
+                        <span style="background: #d97706; color: #fff; font-weight: 800; font-size: 0.85rem; width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">3</span>
+                        <div>
+                            <strong style="color: #fbbf24; font-size: 0.9rem; display: block; margin-bottom: 3px;">Proteção Contra Mistura de Cidades</strong>
+                            <span style="font-size: 0.8rem; color: #cbd5e1; line-height: 1.45;">
+                                O sistema dá entrada na Aba 1, consulta a cidade na Aba 2 e só inclui no grupo da Aba 3 se o pacote pertencer às cidades autorizadas daquele grupo.
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ABA 4: DUPLICADOS, PAINÉIS E DICAS -->
+                <div id="ajuda-paineis" class="ajuda-tab-panel" style="display: none; flex-direction: column; gap: 10px;">
+                    <div style="display: flex; gap: 12px; align-items: flex-start; background: #0d121f; border: 1px solid #1e293b; border-radius: 8px; padding: 12px;">
+                        <span style="font-size: 1.3rem; flex-shrink: 0;">📊</span>
+                        <div>
+                            <strong style="color: #34d399; font-size: 0.9rem; display: block; margin-bottom: 4px;">Cadastro Rápido de Motoristas e Cidades por Excel (`Motoristas_Cidades.xlsx`)</strong>
+                            <span style="font-size: 0.8rem; color: #cbd5e1; line-height: 1.5;">
+                                • Além de cadastrar pelo botão <strong>⚙️ Configurações</strong>, você pode cadastrar dezenas de motoristas e cidades de uma vez só pela planilha <strong>Motoristas_Cidades.xlsx</strong>!<br>
+                                • Vá em <strong>⚙️ Configurações ➔ 🚚 Motoristas</strong> e clique em <strong>📂 Abrir Planilha</strong>.<br>
+                                • Preencha as colunas <strong>CIDADE</strong>, <strong>MOTORISTA</strong> e <strong>PLATAFORMA</strong> (<em>Anjun</em>, <em>Imile</em> ou <em>Todas</em>), salve o Excel e clique em <strong>🔄 Sincronizar</strong> (ou abra o sistema, que sincroniza a planilha automaticamente ao iniciar).
+                            </span>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 12px; align-items: flex-start; background: #0d121f; border: 1px solid #1e293b; border-radius: 8px; padding: 12px;">
+                        <span style="font-size: 1.3rem; flex-shrink: 0;">🔁</span>
+                        <div>
+                            <strong style="color: #38bdf8; font-size: 0.9rem; display: block; margin-bottom: 4px;">Como ler o Painel de Bipes Duplicados (Cores por Tempo)</strong>
+                            <span style="font-size: 0.8rem; color: #cbd5e1; line-height: 1.5;">
+                                • <strong style="color: #34d399;">🟢 Verde (&lt; 10s 2x):</strong> O pacote foi bipado duas vezes em menos de 10 segundos. Chance mínima de problema — o operador provavelmente apertou o gatilho 2x na mesma caixa.<br>
+                                • <strong style="color: #fbbf24;">🟡 Amarelo (10s a 2m):</strong> Releitura recente do mesmo pacote pouco tempo depois.<br>
+                                • <strong style="color: #f87171;">🔴 Vermelho (&gt; 2m ou troca de motorista):</strong> Alerta! O pacote foi bipado muito tempo depois ou em outro motorista (pode ser pacote remanejado de pilha ou duas caixas com etiqueta repetida).
+                            </span>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 12px; align-items: flex-start; background: #0d121f; border: 1px solid #1e293b; border-radius: 8px; padding: 12px;">
+                        <span style="font-size: 1.3rem; flex-shrink: 0;">⚠️</span>
+                        <div>
+                            <strong style="color: #f87171; font-size: 0.9rem; display: block; margin-bottom: 3px;">Pendências de Divergência (Baixa Automática)</strong>
+                            <span style="font-size: 0.8rem; color: #cbd5e1; line-height: 1.45;">
+                                Quando um pacote dá <em>Divergente</em>, ele fica anotado em <strong>⚠️ Pendências de Divergência</strong> mostrando onde estava e para quem deveria ir. Assim que você bipar esse pacote no motorista correto, ele some da lista de pendências automaticamente!
+                            </span>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 12px; align-items: flex-start; background: #0d121f; border: 1px solid #1e293b; border-radius: 8px; padding: 12px;">
+                        <span style="font-size: 1.3rem; flex-shrink: 0;">🖥️</span>
+                        <div>
+                            <strong style="color: #34d399; font-size: 0.9rem; display: block; margin-bottom: 3px;">Fechou o Chrome sem querer?</strong>
+                            <span style="font-size: 0.8rem; color: #cbd5e1; line-height: 1.45;">
+                                Não precisa trocar para outra empresa! Basta clicar direto no <strong>card da empresa</strong> no topo (<strong>ANJUN</strong>, <strong>IMILE</strong> ou <strong>LOGGI</strong>) ou selecionar a mesma empresa em <em>PLATAFORMA</em> que o Chrome abre novamente na hora.
+                            </span>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 12px; align-items: flex-start; background: #0d121f; border: 1px solid #1e293b; border-radius: 8px; padding: 12px;">
+                        <span style="font-size: 1.3rem; flex-shrink: 0;">⚙️</span>
+                        <div>
+                            <strong style="color: #fbbf24; font-size: 0.9rem; display: block; margin-bottom: 3px;">Configurações, Múltiplos Logins e Exportar Relatório</strong>
+                            <span style="font-size: 0.8rem; color: #cbd5e1; line-height: 1.45;">
+                                • Clique em <strong>⚙️</strong> no topo para adicionar/editar Cidades, Motoristas e cadastrar vários logins/bases (ex: <em>Base 1</em>, <em>Base 2</em>) em <strong>🔑 Credenciais</strong>.<br>
+                                • Clique em qualquer código nas tabelas para copiá-lo instantaneamente.<br>
+                                • Use o filtro <strong>DE / ATÉ</strong> e clique em <strong>📥 EXPORTAR EXCEL</strong> para baixar o relatório completo de bipes.
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ABA 5: VANTAGENS DO TURBOSCAN -->
+                <div id="ajuda-vantagens" class="ajuda-tab-panel" style="display: none; flex-direction: column; gap: 10px;">
+                    <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(52, 211, 153, 0.35); border-radius: 8px; padding: 10px 14px; font-size: 0.8rem; color: #a7f3d0;">
+                        🚀 <strong>Por que o TurboScan transforma a operação do galpão?</strong> Veja tudo o que o sistema faz sozinho para acelerar a triagem e facilitar a vida do operador e do motorista:
+                    </div>
+
+                    <div style="display: flex; gap: 12px; align-items: flex-start; background: #0d121f; border: 1px solid #1e293b; border-radius: 8px; padding: 12px;">
+                        <span style="font-size: 1.35rem; flex-shrink: 0;">⚡</span>
+                        <div>
+                            <strong style="color: #34d399; font-size: 0.9rem; display: block; margin-bottom: 3px;">1 Único Bipe Faz Todo o Trabalho (Até 5x Mais Rápido)</strong>
+                            <span style="font-size: 0.8rem; color: #cbd5e1; line-height: 1.45;">
+                                No site comum da transportadora, o operador precisa bipar na entrada, trocar de aba para consultar a cidade e bipar de novo na atribuição. No <strong>TurboScan</strong>, com <strong>1 único bipe</strong> o robô dá a entrada, identifica a cidade e já atribui ao motorista/grupo em frações de segundo!
+                            </span>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 12px; align-items: flex-start; background: #0d121f; border: 1px solid #1e293b; border-radius: 8px; padding: 12px;">
+                        <span style="font-size: 1.35rem; flex-shrink: 0;">🛡️</span>
+                        <div>
+                            <strong style="color: #f87171; font-size: 0.9rem; display: block; margin-bottom: 3px;">Zero Pacotes na Cidade Errada — Sem Travar a Bipagem!</strong>
+                            <span style="font-size: 0.8rem; color: #cbd5e1; line-height: 1.45;">
+                                Se aparecer um pacote de outra cidade na pilha, o sistema <strong>não deixa atribuir para o motorista errado</strong> e avisa na voz (<em>"Divergente!"</em>) sem travar a tela — o operador nem precisa ir até o computador! O pacote fica anotado em <strong>⚠️ Pendências de Divergência</strong> e sai da lista sozinho assim que for bipado no motorista certo.
+                            </span>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 12px; align-items: flex-start; background: #0d121f; border: 1px solid #1e293b; border-radius: 8px; padding: 12px;">
+                        <span style="font-size: 1.35rem; flex-shrink: 0;">🔓</span>
+                        <div>
+                            <strong style="color: #38bdf8; font-size: 0.9rem; display: block; margin-bottom: 3px;">Sem Travas de Lote: Evita Vários Grupos Picados para o Motorista</strong>
+                            <span style="font-size: 0.8rem; color: #cbd5e1; line-height: 1.45;">
+                                • <strong>1 Único Grupo Consolidado para o Motorista:</strong> No site da Anjun, trocar de motorista obriga a fechar a lista, gerando vários grupos pequenos e confusos no celular do entregador. No TurboScan você alterna entre motoristas à vontade e todos os pacotes caem <strong>no mesmo grupo aberto dele</strong>!<br>
+                                • <strong>Auto-Atribuição Inteligente:</strong> Achou pacote perdido de outra cidade que já tem grupo aberto hoje? O sistema envia direto para o grupo daquele motorista sem precisar trocar a seleção.<br>
+                                • <strong>Fechamento Automático aos 200:</strong> Quando o lote atinge o limite de 200 pacotes na Anjun, ele finaliza e abre o próximo automaticamente.
+                            </span>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 12px; align-items: flex-start; background: #0d121f; border: 1px solid #1e293b; border-radius: 8px; padding: 12px;">
+                        <span style="font-size: 1.35rem; flex-shrink: 0;">⇄</span>
+                        <div>
+                            <strong style="color: #38bdf8; font-size: 0.9rem; display: block; margin-bottom: 3px;">Transferência de Lote Inteiro entre Motoristas sem Precisar Rebipar!</strong>
+                            <span style="font-size: 0.8rem; color: #cbd5e1; line-height: 1.45;">
+                                O motorista faltou, o veículo quebrou ou precisou dividir a rota? Basta clicar no botão <strong>⇄</strong> ao lado do motorista na tabela <em>MOTORISTAS (HOJE)</em>, escolher se quer transferir <strong>todos os pacotes ou apenas 1 cidade específica</strong> e selecionar o novo entregador: o TurboScan <strong>transfere a contagem e reatribui automaticamente os pacotes no site (Anjun/iMile)</strong> sem precisar rebipar nenhuma caixa!
+                            </span>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 12px; align-items: flex-start; background: #0d121f; border: 1px solid #1e293b; border-radius: 8px; padding: 12px;">
+                        <span style="font-size: 1.35rem; flex-shrink: 0;">🔁</span>
+                        <div>
+                            <strong style="color: #fbbf24; font-size: 0.9rem; display: block; margin-bottom: 3px;">Controle Inteligente de Pacotes Duplicados e Reatribuição Unitária</strong>
+                            <span style="font-size: 0.8rem; color: #cbd5e1; line-height: 1.45;">
+                                • <strong>Diferencia Gatilho Duplo de Duplicidade Real:</strong> O painel colore por tempo (<strong style="color: #34d399;">🟢 &lt;10s</strong> clique duplo acidental no gatilho, <strong style="color: #fbbf24;">🟡 10s-2m</strong> releitura recente, <strong style="color: #f87171;">🔴 &gt;2m</strong> alerta de pacote repetido ou trocado de pilha).<br>
+                                • <strong>Contagem Sempre Exata na Reatribuição:</strong> Se precisar transferir apenas 1 pacote avulso para outro motorista, basta bipar no novo motorista — o sistema transfere no site e <strong>desconta automaticamente da contagem do motorista anterior</strong>!
+                            </span>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 12px; align-items: flex-start; background: #0d121f; border: 1px solid #1e293b; border-radius: 8px; padding: 12px;">
+                        <span style="font-size: 1.35rem; flex-shrink: 0;">🚚</span>
+                        <div>
+                            <strong style="color: #34d399; font-size: 0.9rem; display: block; margin-bottom: 3px;">Detecção Automática de Novos Motoristas e Separação por Base (Base 1 / Base 2)</strong>
+                            <span style="font-size: 0.8rem; color: #cbd5e1; line-height: 1.45;">
+                                • <strong>Sincronização Automática:</strong> Cadastrou um motorista novo no site da transportadora? O TurboScan busca a lista oficial automaticamente e já inclui na planilha (<em>Motoristas_Cidades.xlsx</em>) pronto para vincular a cidade.<br>
+                                • <strong>Isolamento Inteligente por Base/Login:</strong> Opera mais de uma conta na mesma máquina (<em>Base 1</em>, <em>Base 2</em>)? Ao trocar o <strong>USUÁRIO</strong> no topo, o sistema exibe apenas os motoristas daquela base ativa, sem misturar entregadores de cidades diferentes!
+                            </span>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 12px; align-items: flex-start; background: #0d121f; border: 1px solid #1e293b; border-radius: 8px; padding: 12px;">
+                        <span style="font-size: 1.35rem; flex-shrink: 0;">🔊</span>
+                        <div>
+                            <strong style="color: #a78bfa; font-size: 0.9rem; display: block; margin-bottom: 3px;">Operação "Sem Olhar para o Monitor" (Falar Cidade + Tom do Bip + Fila Anti-Perda)</strong>
+                            <span style="font-size: 0.8rem; color: #cbd5e1; line-height: 1.45;">
+                                • <strong>Botão "🗣️ FALAR CIDADE" e Escolha de Tom:</strong> Ative com 1 clique no topo para o sistema falar o nome da cidade a cada bipe (perfeito para separar pacotes na bancada sem olhar para a tela) e personalize o tom do bip sonoro.<br>
+                                • <strong>Pausa Inteligente e Proteção se o Chrome Fechar:</strong> Se o site pedir validação (<em>"não sou robô"</em>) ou se o Chrome fechar por engano, o sistema avisa na hora, <strong>guarda todos os pacotes bipados na fila segura</strong> e retoma exatamente de onde parou sem perder nenhum bipe.<br>
+                                • <strong>Rotas Multi-Cidades e Detalhamento por Cidade:</strong> Vincule várias cidades ao mesmo motorista/grupo Loggi, clique no motorista em <em>MOTORISTAS (HOJE)</em> para ver a contagem separada por cidade e exporte tudo em Excel por período.
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid #1e293b; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;">
+                <span style="font-size: 0.75rem; color: #64748b;">Dica: Clique no ícone ❓ no topo sempre que quiser consultar este guia.</span>
+                <button type="button" id="btn-entendi-ajuda" style="background: linear-gradient(135deg, #0284c7, #0369a1); border: none; color: #fff; font-weight: 800; padding: 9px 22px; border-radius: 8px; cursor: pointer; font-size: 0.88rem;">
+                    ✓ Entendi, Voltar à Operação
+                </button>
             </div>
         </div>
     </div>
@@ -563,34 +1270,85 @@
                 </div>
             </div>
 
-            <!-- Box com ID da Máquina -->
-            <div class="box-hwid-area">
-                <label style="font-size: 0.68rem; font-weight: 800; color: #94a3b8; letter-spacing: 0.5px; display: block; margin-bottom: 6px;">
-                    ID DESTA MÁQUINA (HARDWARE ID):
-                </label>
-                <div style="display: flex; gap: 8px; align-items: center;">
-                    <input type="text" id="input-hwid-display" readonly value="Carregando ID..." style="flex: 1; font-family: monospace; font-size: 0.95rem; font-weight: 800; color: #38bdf8; background: #0b0f19; border: 1px solid #1e293b; border-radius: 6px; padding: 8px 12px; outline: none; letter-spacing: 1px;">
-                    <button type="button" id="btn-copiar-hwid" class="btn-copiar-hwid" title="Copiar ID da Máquina para Área de Transferência">
-                        📋 COPIAR
-                    </button>
-                </div>
-                <span style="font-size: 0.72rem; color: #64748b; margin-top: 6px; display: block;">
-                    Envie este código ao administrador para gerar ou renovar a sua chave de ativação.
-                </span>
+            <!-- Seletor de Método de Ativação -->
+            <div style="display: flex; gap: 8px; border-bottom: 1px solid #1e293b; padding-bottom: 10px;">
+                <button type="button" id="tab-btn-pix" class="btn-tab-licenca active" style="flex: 1; padding: 9px 12px; font-size: 0.82rem; font-weight: 800; border-radius: 6px; cursor: pointer; border: 1px solid #0284c7; background: rgba(2, 132, 199, 0.2); color: #38bdf8;">
+                    💠 PAGAR VIA PIX
+                </button>
+                <button type="button" id="tab-btn-chave" class="btn-tab-licenca" style="flex: 1; padding: 9px 12px; font-size: 0.82rem; font-weight: 800; border-radius: 6px; cursor: pointer; border: 1px solid #334155; background: #141822; color: #94a3b8;">
+                    🔑 CHAVE MANUAL
+                </button>
             </div>
 
-            <!-- Box com Campo para Inserir a Chave -->
-            <div class="box-chave-area">
-                <label for="input-chave-licenca" style="font-size: 0.68rem; font-weight: 800; color: #94a3b8; letter-spacing: 0.5px; display: block; margin-bottom: 6px;">
-                    CHAVE DE ATIVAÇÃO:
-                </label>
-                <textarea id="input-chave-licenca" placeholder="Cole aqui a chave enviada pelo administrador (ex: GSKEY-eyJ...)" rows="3" style="width: 100%; box-sizing: border-box; background: #0b0f19; border: 1px solid #334155; border-radius: 6px; padding: 8px 10px; color: #f8fafc; font-family: monospace; font-size: 0.78rem; outline: none; resize: none;"></textarea>
-                
-                <button type="button" id="btn-ativar-licenca" class="btn-ativar-chave">
-                    🔓 ATIVAR / RENOVAR SISTEMA
-                </button>
+            <!-- Área PIX com QR Code -->
+            <div id="area-ativacao-pix" style="display: flex; flex-direction: column; gap: 12px; align-items: center; text-align: center;">
+                <div style="background: #ffffff; padding: 10px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; width: 160px; height: 160px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); position: relative;">
+                    <div id="pix-qr-loading" style="color: #0f172a; font-size: 0.78rem; font-weight: 800; text-align: center; padding: 8px;">⏳ Gerando QR Code PIX...</div>
+                    <img id="img-pix-qrcode" src="" alt="QR Code PIX" style="width: 160px; height: 160px; display: none; object-fit: contain;">
+                </div>
 
-                <div id="feedback-ativacao-msg" style="display: none; margin-top: 8px; font-size: 0.8rem; font-weight: 700; text-align: center; padding: 8px; border-radius: 6px;"></div>
+                <div style="width: 100%; box-sizing: border-box; background: #0b0f19; border: 1px solid #1e293b; border-radius: 8px; padding: 10px 14px; text-align: left; font-size: 0.8rem; display: flex; flex-direction: column; gap: 5px;">
+                    <div style="display: flex; justify-content: space-between;">
+                        <span style="color: #94a3b8;">Valor:</span>
+                        <strong id="pix-valor-display" style="color: #34d399; font-size: 0.95rem;">Calculando...</strong>
+                    </div>
+                    <div style="display: flex; justify-content: space-between;">
+                        <span style="color: #94a3b8;">Beneficiário:</span>
+                        <strong id="pix-beneficiario-display" style="color: #f8fafc;">FERNANDO GOMEZ</strong>
+                    </div>
+                    <div style="display: flex; justify-content: space-between;">
+                        <span style="color: #94a3b8;">Chave PIX:</span>
+                        <strong id="pix-chave-display" style="color: #38bdf8; font-family: monospace;">Chave Aleatória (QR Code)</strong>
+                    </div>
+                </div>
+
+                <!-- Campo e Botão Copia e Cola -->
+                <div style="width: 100%; box-sizing: border-box; display: flex; gap: 8px;">
+                    <input type="text" id="input-pix-copia-cola" readonly placeholder="Carregando código PIX..." style="flex: 1; background: #0b0f19; border: 1px solid #334155; border-radius: 6px; padding: 8px 12px; color: #94a3b8; font-size: 0.75rem; font-family: monospace; outline: none;">
+                    <button type="button" id="btn-copiar-pix-copia-cola" class="btn-submit" style="white-space: nowrap; padding: 8px 14px; font-size: 0.8rem; display: inline-flex; align-items: center; gap: 6px;">
+                        📋 COPIAR PIX
+                    </button>
+                </div>
+
+                <div style="width: 100%; box-sizing: border-box; display: flex; gap: 8px;">
+                    <button type="button" id="btn-verificar-pix" class="btn-submit" style="flex: 1; background: linear-gradient(135deg, #10b981, #059669); border: none; padding: 10px; font-size: 0.85rem; font-weight: 800; display: inline-flex; justify-content: center; align-items: center; gap: 6px;">
+                        🔄 JÁ PAGUEI / VERIFICAR
+                    </button>
+                </div>
+                <div id="feedback-pix-msg" style="display: none; width: 100%; font-size: 0.8rem; font-weight: 700; text-align: center; padding: 8px; border-radius: 6px;"></div>
+            </div>
+
+            <!-- Área Manual (HWID e Chave) -->
+            <div id="area-ativacao-manual" style="display: none; flex-direction: column; gap: 14px;">
+                <!-- Box com ID da Máquina -->
+                <div class="box-hwid-area">
+                    <label style="font-size: 0.68rem; font-weight: 800; color: #94a3b8; letter-spacing: 0.5px; display: block; margin-bottom: 6px;">
+                        ID DESTA MÁQUINA (HARDWARE ID):
+                    </label>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <input type="text" id="input-hwid-display" readonly value="Carregando ID..." style="flex: 1; font-family: monospace; font-size: 0.95rem; font-weight: 800; color: #38bdf8; background: #0b0f19; border: 1px solid #1e293b; border-radius: 6px; padding: 8px 12px; outline: none; letter-spacing: 1px;">
+                        <button type="button" id="btn-copiar-hwid" class="btn-copiar-hwid" title="Copiar ID da Máquina para Área de Transferência">
+                            📋 COPIAR
+                        </button>
+                    </div>
+                    <span style="font-size: 0.72rem; color: #64748b; margin-top: 6px; display: block;">
+                        Envie este código ao administrador para gerar ou renovar a sua chave de ativação.
+                    </span>
+                </div>
+
+                <!-- Box com Campo para Inserir a Chave -->
+                <div class="box-chave-area">
+                    <label for="input-chave-licenca" style="font-size: 0.68rem; font-weight: 800; color: #94a3b8; letter-spacing: 0.5px; display: block; margin-bottom: 6px;">
+                        CHAVE DE ATIVAÇÃO:
+                    </label>
+                    <textarea id="input-chave-licenca" placeholder="Cole aqui a chave gerada no Painel Admin (ex: GM-XXXX-XXXX-XXXX)" rows="3" style="width: 100%; box-sizing: border-box; background: #0b0f19; border: 1px solid #334155; border-radius: 6px; padding: 8px 10px; color: #f8fafc; font-family: monospace; font-size: 0.85rem; outline: none; resize: none;"></textarea>
+                    
+                    <button type="button" id="btn-ativar-licenca" class="btn-ativar-chave">
+                        🔓 ATIVAR / RENOVAR SISTEMA
+                    </button>
+
+                    <div id="feedback-ativacao-msg" style="display: none; margin-top: 8px; font-size: 0.8rem; font-weight: 700; text-align: center; padding: 8px; border-radius: 6px;"></div>
+                </div>
             </div>
 
             <div id="info-licenca-ativa-box" style="display: none; border-top: 1px solid #1e293b; padding-top: 12px; font-size: 0.78rem; color: #94a3b8;">
@@ -600,13 +1358,171 @@
                 <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
                     <span>Válido até:</span> <strong id="info-licenca-expiracao" style="color: #4ade80;">---</strong>
                 </div>
-                <div style="display: flex; justify-content: space-between;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
                     <span>Dias restantes:</span> <strong id="info-licenca-dias" style="color: #38bdf8;">---</strong>
+                </div>
+                <div style="border-top: 1px solid #1e293b; padding-top: 8px; margin-top: 4px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-weight: 800; color: #cbd5e1; font-size: 0.72rem; text-transform: uppercase;">🚚 Empresas Contratadas (Liberadas nesta Máquina):</span>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 8px;">
+                        <label style="display: flex; align-items: center; gap: 6px; background: #0b0f19; border: 1px solid #334155; border-radius: 6px; padding: 6px 8px; cursor: pointer; font-weight: 700; color: #f8fafc; font-size: 0.75rem;">
+                            <input type="checkbox" class="chk-plat-licenca-local" value="anjun" checked style="accent-color: #10b981; cursor: pointer;">
+                            <span>🟢 Anjun</span>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 6px; background: #0b0f19; border: 1px solid #334155; border-radius: 6px; padding: 6px 8px; cursor: pointer; font-weight: 700; color: #f8fafc; font-size: 0.75rem;">
+                            <input type="checkbox" class="chk-plat-licenca-local" value="imile" checked style="accent-color: #8b5cf6; cursor: pointer;">
+                            <span>🟣 iMile</span>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 6px; background: #0b0f19; border: 1px solid #334155; border-radius: 6px; padding: 6px 8px; cursor: pointer; font-weight: 700; color: #f8fafc; font-size: 0.75rem;">
+                            <input type="checkbox" class="chk-plat-licenca-local" value="loggi" checked style="accent-color: #f59e0b; cursor: pointer;">
+                            <span>🟠 Loggi</span>
+                        </label>
+                    </div>
+                    <button type="button" id="btn-salvar-plats-licenca-local" style="width: 100%; padding: 7px 10px; border-radius: 6px; background: linear-gradient(135deg, #0284c7, #0369a1); border: none; color: #fff; font-weight: 800; font-size: 0.75rem; cursor: pointer;">
+                        💾 Aplicar Empresas Contratadas nesta Máquina
+                    </button>
                 </div>
             </div>
         </div>
     </div>
 
-    <script src="app.js"></script>
+    <!-- Modal / Overlay Aguardando Login / Não sou Robô / Google -->
+    <div id="modal-aguardando-login" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.94); backdrop-filter: blur(8px); z-index: 10005; justify-content: center; align-items: center; padding: 20px;">
+        <div style="background: #1e293b; border: 3px solid #f59e0b; border-radius: 16px; padding: 32px 28px; max-width: 540px; width: 100%; box-shadow: 0 10px 40px rgba(245, 158, 11, 0.4); font-family: 'Outfit', sans-serif; text-align: center; box-sizing: border-box;">
+            <div style="width: 68px; height: 68px; border-radius: 50%; background: rgba(245, 158, 11, 0.15); border: 2px solid #f59e0b; display: flex; align-items: center; justify-content: center; margin: 0 auto 18px auto;">
+                <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                </svg>
+            </div>
+            <h3 id="modal-aguardando-login-titulo" style="color: #fbbf24; font-size: 1.4rem; font-weight: 800; margin: 0 0 8px 0; letter-spacing: 0.5px;">
+                SESSÃO DESCONECTADA
+            </h3>
+            <p id="modal-aguardando-login-msg" style="color: #e2e8f0; font-size: 0.98rem; line-height: 1.5; margin: 0 0 18px 0;">
+                A sessão expirou ou solicitou validação no Chrome.
+            </p>
+            <div style="background: #0f172a; border: 1px solid #334155; border-radius: 10px; padding: 14px; margin-bottom: 22px; text-align: left;">
+                <div style="display: flex; align-items: center; gap: 10px; color: #38bdf8; font-size: 0.88rem; font-weight: 700; margin-bottom: 6px;">
+                    <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #38bdf8;"></span>
+                    A bipagem foi pausada temporariamente:
+                </div>
+                <ul id="modal-aguardando-login-lista" style="margin: 0; padding-left: 20px; color: #94a3b8; font-size: 0.84rem; line-height: 1.6;">
+                    <li>Seus pacotes bipados estão <strong>salvos e seguros na fila</strong>.</li>
+                    <li>Vá até a janela do <strong>Google Chrome</strong> aberta.</li>
+                    <li>Resolva o <strong>não sou robô</strong> ou clique em <strong>Entrar com o Google</strong>.</li>
+                    <li>O sistema irá <strong>reconectar e continuar automaticamente</strong> de onde parou!</li>
+                </ul>
+            </div>
+            <div style="display: flex; align-items: center; justify-content: center; gap: 10px; color: #f59e0b; font-size: 0.92rem; font-weight: 700;">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation: spin 1s linear infinite;">
+                    <circle cx="12" cy="12" r="10" stroke-opacity="0.25"></circle>
+                    <path d="M12 2a10 10 0 0 1 10 10"></path>
+                </svg>
+                <span id="modal-aguardando-login-status-txt">Aguardando você resolver no Chrome...</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Reutilizável de Input / Edição / Confirmação Customizada (Substituto 100% confiável do prompt e confirm no Electron) -->
+    <div id="custom-prompt-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(6px); z-index: 9999999; justify-content: center; align-items: center; padding: 20px;">
+        <div style="background: #0f172a; border: 2px solid #38bdf8; border-radius: 14px; padding: 24px; max-width: 440px; width: 100%; box-shadow: 0 10px 40px rgba(0,0,0,0.8); font-family: 'Outfit', sans-serif; box-sizing: border-box;">
+            <h3 id="prompt-modal-title" style="margin: 0 0 10px 0; color: #f8fafc; font-size: 1.15rem; font-weight: 800; display: flex; align-items: center; gap: 8px;">
+                <span>✏️</span> Editar
+            </h3>
+            <p id="prompt-modal-message" style="color: #94a3b8; font-size: 0.9rem; margin-bottom: 14px; line-height: 1.4;">
+                Informe o novo valor:
+            </p>
+            <input type="text" id="prompt-modal-input" style="width: 100%; padding: 10px 14px; background: #1e293b; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 0.95rem; font-weight: 700; outline: none; margin-bottom: 18px; box-sizing: border-box;">
+            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                <button type="button" id="prompt-modal-btn-cancel" style="padding: 8px 18px; border-radius: 6px; background: #334155; color: #cbd5e1; border: none; font-size: 0.85rem; font-weight: 700; cursor: pointer;">
+                    Cancelar
+                </button>
+                <button type="button" id="prompt-modal-btn-confirm" style="padding: 8px 20px; border-radius: 6px; background: #0284c7; color: #fff; border: none; font-size: 0.85rem; font-weight: 800; cursor: pointer;">
+                    Salvar
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Transferência de Pacotes entre Motoristas -->
+    <div id="modal-transferir-motorista" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(11, 15, 25, 0.88); backdrop-filter: blur(8px); z-index: 9999998; justify-content: center; align-items: center; padding: 20px;">
+        <div style="background: #111827; border: 2px solid #0284c7; border-radius: 14px; padding: 24px 26px; max-width: 500px; width: 100%; box-shadow: 0 15px 45px rgba(0, 0, 0, 0.85); font-family: 'Outfit', sans-serif; box-sizing: border-box; display: flex; flex-direction: column; gap: 14px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1e293b; padding-bottom: 10px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span style="font-size: 1.5rem;">⇄</span>
+                    <div>
+                        <h3 style="margin: 0; color: #f8fafc; font-size: 1.15rem; font-weight: 900; letter-spacing: 0.4px;">TRANSFERIR PACOTES DE MOTORISTA</h3>
+                        <span style="font-size: 0.74rem; color: #94a3b8; font-weight: 600;">Transfere o histórico de hoje e reatribui no site sem precisar rebipar</span>
+                    </div>
+                </div>
+                <button type="button" id="btn-fechar-modal-transferir" style="background: transparent; border: none; color: #94a3b8; font-size: 1.25rem; cursor: pointer; padding: 2px 6px;">✕</button>
+            </div>
+
+            <!-- Resumo do Motorista de Origem -->
+            <div style="background: #090d16; border: 1px solid #1e293b; border-radius: 9px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-size: 0.72rem; font-weight: 800; color: #94a3b8; text-transform: uppercase;">DE (MOTORISTA ATUAL):</span>
+                    <span id="transfer-plat-badge" style="font-size: 0.7rem; font-weight: 800; background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.35); padding: 2px 8px; border-radius: 6px;">---</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <strong id="transfer-origem-nome" style="font-size: 1.02rem; color: #f8fafc; font-weight: 800;">---</strong>
+                    <strong id="transfer-origem-qtd" style="font-size: 0.92rem; color: #fbbf24; font-weight: 800;">0 pacotes</strong>
+                </div>
+            </div>
+
+            <!-- Filtro por Cidade ou Código de Pacote Individual -->
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label for="transfer-cidade-select" style="font-size: 0.72rem; font-weight: 800; color: #94a3b8; letter-spacing: 0.4px;">
+                        QUAIS PACOTES DESEJA TRANSFERIR?
+                    </label>
+                    <div id="transfer-pacotes-actions" style="display: none; gap: 8px; align-items: center;">
+                        <button type="button" id="btn-transfer-marcar-todos" style="background: none; border: none; color: #38bdf8; font-size: 0.7rem; font-weight: 800; cursor: pointer; padding: 0;">Marcar todos</button>
+                        <span style="color: #475569; font-size: 0.7rem;">|</span>
+                        <button type="button" id="btn-transfer-desmarcar-todos" style="background: none; border: none; color: #94a3b8; font-size: 0.7rem; font-weight: 700; cursor: pointer; padding: 0;">Limpar</button>
+                    </div>
+                </div>
+                <select id="transfer-cidade-select" style="width: 100%; padding: 9px 12px; border-radius: 7px; background: #1e293b; color: #fff; border: 1px solid #334155; font-size: 0.86rem; font-weight: 700; outline: none; cursor: pointer;">
+                    <option value="TODAS">Todos os pacotes deste motorista hoje</option>
+                </select>
+                <div id="transfer-pacotes-lista" style="display: none; max-height: 135px; overflow-y: auto; background: #090d16; border: 1px solid #1e293b; border-radius: 7px; padding: 6px 8px; flex-direction: column; gap: 4px;"></div>
+            </div>
+
+            <!-- Seleção do Novo Motorista (com busca rápida) -->
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+                <label for="transfer-destino-select" style="font-size: 0.72rem; font-weight: 800; color: #38bdf8; letter-spacing: 0.4px;">
+                    PARA (NOVO MOTORISTA DE DESTINO):
+                </label>
+                <input type="text" id="transfer-busca-destino" placeholder="🔍 Digite para filtrar motorista..." autocomplete="off" style="width: 100%; padding: 8px 12px; border-radius: 7px; background: #090d16; color: #fff; border: 1px solid #334155; font-size: 0.82rem; font-weight: 600; outline: none; box-sizing: border-box;">
+                <select id="transfer-destino-select" style="width: 100%; padding: 10px 12px; border-radius: 7px; background: #1e293b; color: #4ade80; border: 2px solid #0284c7; font-size: 0.92rem; font-weight: 800; outline: none; cursor: pointer;">
+                    <option value="">-- Selecione o Novo Motorista --</option>
+                </select>
+            </div>
+
+            <!-- Checkbox Lançar no Site Automaticamente -->
+            <label id="transfer-box-lancar-site" style="display: flex; align-items: center; gap: 10px; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 8px; padding: 10px 12px; cursor: pointer; user-select: none;">
+                <input type="checkbox" id="transfer-chk-lancar-site" checked style="width: 17px; height: 17px; accent-color: #10b981; cursor: pointer;">
+                <div style="display: flex; flex-direction: column; gap: 2px;">
+                    <span style="font-size: 0.8rem; font-weight: 800; color: #34d399; text-transform: none;">Lançar e reatribuir automaticamente no site (Anjun / iMile)</span>
+                    <span style="font-size: 0.7rem; color: #94a3b8; font-weight: 500; text-transform: none;">Envia todos os códigos para o motorista novo no site sem precisar rebipar</span>
+                </div>
+            </label>
+
+            <div id="transfer-feedback-msg" style="display: none; padding: 9px 12px; border-radius: 7px; font-size: 0.8rem; font-weight: 700; text-align: center;"></div>
+
+            <!-- Botões -->
+            <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px;">
+                <button type="button" id="btn-cancelar-transferir" style="padding: 10px 16px; border-radius: 7px; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; font-size: 0.82rem; font-weight: 700; cursor: pointer;">
+                    Cancelar
+                </button>
+                <button type="button" id="btn-confirmar-transferir" style="flex: 1; padding: 10px 18px; border-radius: 7px; background: linear-gradient(135deg, #0284c7, #2563eb); color: #fff; border: none; font-size: 0.88rem; font-weight: 900; cursor: pointer; letter-spacing: 0.4px; box-shadow: 0 4px 14px rgba(2, 132, 199, 0.35);">
+                    ⇄ CONFIRMAR E TRANSFERIR PACOTES
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js?v=20261003d"></script>
 </body>
 </html>

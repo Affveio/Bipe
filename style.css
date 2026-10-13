@@ -201,6 +201,58 @@ body { background: #0b0c0f; color: #f1f5f9; height: 100vh; overflow: hidden; pad
     transform: scale(0.97);
 }
 
+/* Indicador Discreto de Conexão com a Internet */
+.status-conexao-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 30px;
+    padding: 0 9px;
+    border-radius: 6px;
+    font-size: 0.68rem;
+    font-weight: 900;
+    letter-spacing: 0.5px;
+    user-select: none;
+    box-sizing: border-box;
+    transition: all 0.25s ease;
+}
+
+.status-conexao-pill.online {
+    background: rgba(16, 185, 129, 0.12);
+    border: 1px solid rgba(16, 185, 129, 0.35);
+    color: #34d399;
+}
+
+.status-conexao-pill.offline {
+    background: rgba(239, 68, 68, 0.18);
+    border: 1px solid #ef4444;
+    color: #f87171;
+    box-shadow: 0 0 10px rgba(239, 68, 68, 0.35);
+    animation: conexaoOfflinePulse 1.4s infinite ease-in-out;
+}
+
+.conexao-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.status-conexao-pill.online .conexao-dot {
+    background: #10b981;
+    box-shadow: 0 0 6px #10b981;
+}
+
+.status-conexao-pill.offline .conexao-dot {
+    background: #ef4444;
+    box-shadow: 0 0 8px #ef4444;
+}
+
+@keyframes conexaoOfflinePulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.8; transform: scale(0.98); }
+}
+
 /* Ações Rápidas e Indicadores à Direita */
 .top-right-group {
     display: flex;
