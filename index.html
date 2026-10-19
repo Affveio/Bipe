@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TurboScan - Triagem Logística Inteligente</title>
-    <link rel="stylesheet" href="style.css?v=20261006b">
+    <link rel="stylesheet" href="style.css?v=20261014">
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800;900&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -47,21 +47,21 @@
                         <span id="status-falar-cidade" class="btn-solto-badge badge-off">NÃO</span>
                     </button>
                 </div>
-
-                <!-- Indicador Visual em Tempo Real da Conexão com a Internet -->
-                <div id="container-status-conexao" style="display: flex; align-items: center;">
-                    <div id="badge-status-conexao" class="status-conexao-pill online" title="Status da Internet: Conexão ativa com o galpão">
-                        <span class="conexao-dot"></span>
-                        <span id="texto-status-conexao" class="conexao-label">ONLINE</span>
-                    </div>
-                </div>
             </div>
 
-            <!-- Ações e Indicadores à Direita (Configurações e Reiniciar) -->
+            <!-- Ações e Indicadores à Direita (Conexão, Licença, Configurações e Reiniciar) -->
             <div class="top-right-group">
+                <!-- Indicador Visual Discreto da Conexão com a Internet -->
+                <div id="container-status-conexao" style="display: flex; align-items: center;">
+                    <div id="badge-status-conexao" class="status-conexao-pill online" title="Status da Internet: Conexão ativa">
+                        <span class="conexao-dot"></span>
+                        <span id="texto-status-conexao" class="conexao-label">Online</span>
+                    </div>
+                </div>
+
                 <button type="button" id="btn-status-licenca" class="btn-licenca-pill" style="display: inline-flex;" title="Status da Licença Comercial (Clique para ver QR Code PIX ou detalhes)">
-                    <span id="icone-status-licenca">💳</span>
-                    <span id="texto-status-licenca">PIX / LICENÇA</span>
+                    <span id="icone-status-licenca">🛡️</span>
+                    <span id="texto-status-licenca">LICENÇA ATIVA</span>
                 </button>
                 <button type="button" id="btn-abrir-ajuda" class="btn-config-icon" title="Guia Rápido de Operação (Como Usar)" style="font-size: 1.05rem;">❓</button>
                 <button type="button" id="btn-abrir-configuracoes" class="btn-config-icon" title="Painel de Configurações (Cidades, Motoristas e Credenciais)">⚙️</button>
@@ -411,7 +411,10 @@
     <div id="settings-modal" class="modal-overlay">
         <div class="modal-content">
             <header class="modal-header">
-                <h2>PAINEL DE CONFIGURAÇÕES</h2>
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <h2>PAINEL DE CONFIGURAÇÕES</h2>
+                    <span id="badge-versao-modal" class="badge-versao-modal" title="Versão instalada do TurboScan">v2.4.2</span>
+                </div>
                 <button id="btn-close-modal" class="btn-close-modal" title="Fechar">&times;</button>
             </header>
             

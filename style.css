@@ -169,32 +169,32 @@ body { background: #0b0c0f; color: #f1f5f9; height: 100vh; overflow: hidden; pad
 }
 
 .btn-solto-badge.badge-off {
-    background: rgba(239, 68, 68, 0.15);
-    color: #f87171;
-    border: 1px solid rgba(239, 68, 68, 0.35);
+    background: rgba(148, 163, 184, 0.12);
+    color: #94a3b8;
+    border: 1px solid rgba(148, 163, 184, 0.25);
 }
 
 .btn-pacote-solto.ativo {
-    background: linear-gradient(135deg, #065f46, #047857);
-    border: 1px solid #10b981;
-    color: #ffffff;
-    box-shadow: 0 0 12px rgba(16, 185, 129, 0.35);
+    background: #151d2f;
+    border: 1px solid #0284c7;
+    color: #f1f5f9;
+    box-shadow: none;
 }
 
 .btn-pacote-solto.ativo .btn-solto-label {
-    color: #ffffff;
+    color: #f1f5f9;
 }
 
 .btn-solto-badge.badge-on {
-    background: #10b981;
-    color: #ffffff;
-    border: 1px solid #34d399;
-    box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
+    background: rgba(14, 165, 233, 0.2);
+    color: #38bdf8;
+    border: 1px solid rgba(14, 165, 233, 0.45);
+    box-shadow: none;
 }
 
 .btn-pacote-solto.ativo:hover {
-    filter: brightness(1.15);
-    box-shadow: 0 0 16px rgba(16, 185, 129, 0.5);
+    background: #1e293b;
+    border-color: #38bdf8;
 }
 
 .btn-pacote-solto:active {
@@ -207,45 +207,53 @@ body { background: #0b0c0f; color: #f1f5f9; height: 100vh; overflow: hidden; pad
     align-items: center;
     gap: 6px;
     height: 30px;
-    padding: 0 9px;
+    padding: 0 10px;
     border-radius: 6px;
     font-size: 0.68rem;
-    font-weight: 900;
-    letter-spacing: 0.5px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
     user-select: none;
     box-sizing: border-box;
     transition: all 0.25s ease;
+    background: #111827;
+    border: 1px solid #1e293b;
+    color: #94a3b8;
 }
 
 .status-conexao-pill.online {
-    background: rgba(16, 185, 129, 0.12);
-    border: 1px solid rgba(16, 185, 129, 0.35);
-    color: #34d399;
+    background: #111827;
+    border: 1px solid #1e293b;
+    color: #94a3b8;
+}
+
+.status-conexao-pill.online:hover {
+    border-color: #334155;
+    color: #cbd5e1;
 }
 
 .status-conexao-pill.offline {
-    background: rgba(239, 68, 68, 0.18);
+    background: rgba(239, 68, 68, 0.15);
     border: 1px solid #ef4444;
-    color: #f87171;
-    box-shadow: 0 0 10px rgba(239, 68, 68, 0.35);
+    color: #fca5a5;
     animation: conexaoOfflinePulse 1.4s infinite ease-in-out;
 }
 
 .conexao-dot {
-    width: 7px;
-    height: 7px;
+    width: 6px;
+    height: 6px;
     border-radius: 50%;
     display: inline-block;
+    flex-shrink: 0;
 }
 
 .status-conexao-pill.online .conexao-dot {
     background: #10b981;
-    box-shadow: 0 0 6px #10b981;
+    box-shadow: 0 0 4px rgba(16, 185, 129, 0.5);
 }
 
 .status-conexao-pill.offline .conexao-dot {
     background: #ef4444;
-    box-shadow: 0 0 8px #ef4444;
+    box-shadow: 0 0 6px #ef4444;
 }
 
 @keyframes conexaoOfflinePulse {
@@ -521,6 +529,20 @@ tr:hover td {
     font-weight: 800;
     letter-spacing: 1px;
     color: #f8fafc;
+}
+
+.badge-versao-modal {
+    display: inline-flex;
+    align-items: center;
+    background: rgba(14, 165, 233, 0.12);
+    border: 1px solid rgba(56, 189, 248, 0.35);
+    color: #38bdf8;
+    padding: 2px 9px;
+    border-radius: 12px;
+    font-size: 0.76rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    user-select: none;
 }
 
 .btn-close-modal {
@@ -1615,18 +1637,18 @@ td, th, td * {
 
 /* Botão Status da Licença no Topo */
 .btn-licenca-pill {
-    background: rgba(16, 185, 129, 0.12);
-    border: 1px solid #10b981;
-    color: #34d399;
+    background: #111827;
+    border: 1px solid #1e293b;
+    color: #cbd5e1;
     height: 30px;
-    padding: 0 8px;
+    padding: 0 10px;
     border-radius: 6px;
     font-size: 0.68rem;
     font-weight: 800;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 6px;
     white-space: nowrap;
     transition: all 0.2s ease;
     user-select: none;
@@ -1635,8 +1657,9 @@ td, th, td * {
 }
 
 .btn-licenca-pill:hover {
-    background: rgba(16, 185, 129, 0.22);
-    border-color: #34d399;
+    background: #1e293b;
+    border-color: #334155;
+    color: #ffffff;
     transform: translateY(-1px);
 }
 

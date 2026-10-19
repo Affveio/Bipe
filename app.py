@@ -479,11 +479,20 @@ def sincronizar_excel_na_inicializacao():
     """
     excel_path = obter_caminho_excel()
     if not os.path.exists(excel_path):
-        try:
-            gerar_planilha_motoristas_excel(excel_path)
-        except Exception as e_gen:
-            print(f"[Aviso] Não foi possível gerar planilha inicial: {e_gen}")
-            return
+        modelo_path = os.path.join(BASE_DIR, "Motoristas_Cidades_Modelo.xlsx")
+        if os.path.exists(modelo_path):
+            try:
+                import shutil
+                shutil.copy2(modelo_path, excel_path)
+                print(f"[+] Inicialização: Planilha modelo criada em {excel_path} a partir de Motoristas_Cidades_Modelo.xlsx!")
+            except Exception as e_cp:
+                print(f"[Aviso] Falha ao copiar modelo de planilha: {e_cp}")
+        if not os.path.exists(excel_path):
+            try:
+                gerar_planilha_motoristas_excel(excel_path)
+            except Exception as e_gen:
+                print(f"[Aviso] Não foi possível gerar planilha inicial: {e_gen}")
+                return
 
     if os.path.exists(excel_path):
         try:
@@ -2643,6 +2652,38 @@ def motorista_pertence_a_base_ativa(mot_nome, nomes_base_oficiais, nomes_outras_
 
     return True
 
+def normalizar_faixa_cep(texto):
+    """
+    Padroniza qualquer formato digitado de CEP ou faixa de CEPs (com ou sem hífen, com 'a', 'ate', '-', etc.)
+    para o formato padrão canônico (ex: '18873-000 a 18873-460' ou '18873-000').
+    """
+    if not texto:
+        return ""
+    partes = re.split(r'[,;]+', str(texto).strip())
+    partes_norm = []
+    padrao_range = re.compile(r'^\s*(\d{5}-?\d{3}|\d{2,5})\s*(?:a|ate|até|to|~|-)\s*(\d{5}-?\d{3}|\d{2,5})\s*$', re.IGNORECASE)
+    for p in partes:
+        p = p.strip()
+        if not p:
+            continue
+        digitos_p = re.sub(r'\D', '', p)
+        if len(digitos_p) == 8 and (re.match(r'^\d{8}$', p) or re.match(r'^\d{5}-\d{3}$', p)):
+            partes_norm.append(f"{digitos_p[:5]}-{digitos_p[5:8]}")
+            continue
+        m = padrao_range.match(p)
+        if m:
+            ini_raw = re.sub(r'\D', '', m.group(1))
+            fim_raw = re.sub(r'\D', '', m.group(2))
+            ini_fmt = f"{ini_raw[:5]}-{ini_raw[5:8]}" if len(ini_raw) == 8 else ini_raw
+            fim_fmt = f"{fim_raw[:5]}-{fim_raw[5:8]}" if len(fim_raw) == 8 else fim_raw
+            partes_norm.append(f"{ini_fmt} a {fim_fmt}")
+        else:
+            if len(digitos_p) == 8:
+                partes_norm.append(f"{digitos_p[:5]}-{digitos_p[5:8]}")
+            else:
+                partes_norm.append(p)
+    return ", ".join(partes_norm)
+
 def cep_bate_com_regra(cep_pacote, regra_cep):
     """
     Verifica se o CEP do pacote (ex: '18701-700' ou '18701700') bate com a regra configurada
@@ -2755,9 +2796,9 @@ def carregar_motoristas(plataforma=None, conta_id=None):
     return resultado
 
 
-def carregar_motoristas_cidade(cidade, plataforma=None, cep=None):
+def carregar_motoristas_cidade_detalhado(cidade, plataforma=None, cep=None):
     if not cidade:
-        return []
+        return [], False, False
     if not plataforma:
         plataforma = plataforma_ativa if plataforma_ativa else "anjun"
         
@@ -2805,10 +2846,10 @@ def carregar_motoristas_cidade(cidade, plataforma=None, cep=None):
                     
             _CACHE_RAM_MOTORISTAS_CIDADE[cache_key] = rows_cidade
         except Exception:
-            return []
+            return [], False, False
 
     if not rows_cidade:
-        return []
+        return [], False, False
 
     todos_motoristas = []
     for m_nome, _ in rows_cidade:
@@ -2828,11 +2869,18 @@ def carregar_motoristas_cidade(cidade, plataforma=None, cep=None):
                 if m_nome not in mots_sem_regra:
                     mots_sem_regra.append(m_nome)
         if mots_cep_exato:
-            return mots_cep_exato
+            return mots_cep_exato, True, tem_regra_cep
         if mots_sem_regra:
-            return mots_sem_regra
+            return mots_sem_regra, False, tem_regra_cep
+        # Se tem regra de CEP para motoristas desta cidade, e o CEP do pacote não bate com nenhuma regra nem tem motorista sem regra:
+        # Retorna lista vazia para caracterizar que NENHUM motorista está autorizado para este CEP!
+        return [], True, tem_regra_cep
 
-    return todos_motoristas
+    return todos_motoristas, False, tem_regra_cep
+
+def carregar_motoristas_cidade(cidade, plataforma=None, cep=None):
+    mots, _, _ = carregar_motoristas_cidade_detalhado(cidade, plataforma, cep)
+    return mots
 
 _cache_plataformas = None
 
@@ -4776,6 +4824,10 @@ def rota_pix_config():
 def rota_checar_atualizacao():
     resultado = atualizador.verificar_atualizacao()
     return jsonify(resultado)
+
+@app.route('/versao-sistema', methods=['GET'])
+def rota_versao_sistema():
+    return jsonify(atualizador.obter_versao_local())
 
 def obter_env_limpo_pyinstaller():
     """
@@ -7419,10 +7471,20 @@ def bipar_pacote_imile_api(codigo_qr, motorista, pacote_solto=False):
     if mot_clean and mot_clean not in ["---", "Apenas Entrada (Sem Atribuição)"] and cidade_pacote:
         lista_cidades = carregar_cidades()
         cidade_map = encontrar_cidade_mapeada(cidade_pacote, lista_cidades) or cidade_pacote
-        mots_esperados = carregar_motoristas_cidade(cidade_map, "imile", cep=cep_pacote)
+        todos_mots_cidade = carregar_motoristas_cidade(cidade_map, "imile")
+        if not todos_mots_cidade and cidade_map != cidade_pacote:
+            todos_mots_cidade = carregar_motoristas_cidade(cidade_pacote, "imile")
+
+        mots_esperados, foi_por_cep, _ = carregar_motoristas_cidade_detalhado(cidade_map, "imile", cep=cep_pacote)
         if not mots_esperados and cidade_map != cidade_pacote:
-            mots_esperados = carregar_motoristas_cidade(cidade_pacote, "imile", cep=cep_pacote)
+            mots_esperados, foi_por_cep, _ = carregar_motoristas_cidade_detalhado(cidade_pacote, "imile", cep=cep_pacote)
             
+        if todos_mots_cidade and not mots_esperados:
+            cep_info = f" (CEP {cep_pacote})" if cep_pacote else ""
+            msg_alerta = f"Divergência de CEP: Pacote de {cidade_pacote}{cep_info} está fora da faixa de CEP permitida para {cidade_pacote}!"
+            print(f"[!] [iMile API] DIVERGÊNCIA! {msg_alerta}")
+            return "divergente", msg_alerta, "Fora da Faixa de CEP", cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
+
         if mots_esperados:
             norm_mot = remover_acentos(mot_clean.lower()).replace('-', '').replace('_', '').replace(' ', '')
             da_obj_check = resolver_motorista_imile_api(mot_clean)
@@ -7434,7 +7496,8 @@ def bipar_pacote_imile_api(codigo_qr, motorista, pacote_solto=False):
                 esp_display = " / ".join(mots_esperados)
                 cep_info = f" (CEP {cep_pacote})" if cep_pacote else ""
                 print(f"[!] [iMile API] DIVERGÊNCIA! Pacote de {cidade_pacote}{cep_info} pertence a {esp_display}, mas lote ativo é de {mot_clean}!")
-                return "divergente", f"Pacote de {cidade_pacote}{cep_info} pertence ao motorista {esp_display}, mas você está bipando a pilha de {mot_clean}!", esp_display, cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
+                mot_retorno = esp_display if foi_por_cep else ""
+                return "divergente", f"Pacote de {cidade_pacote}{cep_info} pertence a {esp_display}, mas você está bipando a pilha de {mot_clean}!", mot_retorno, cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
 
     # 5. Atribuição ao Entregador (assignDA)
     mot_nome_final = motorista
@@ -9233,10 +9296,20 @@ def bipar_pacote_anjun_api(codigo_qr, motorista):
         if cidade_pacote:
             lista_cidades = carregar_cidades()
             cidade_map = encontrar_cidade_mapeada(cidade_pacote, lista_cidades) or cidade_pacote
-            mots_esperados = carregar_motoristas_cidade(cidade_map, "anjun", cep=cep_pacote)
+            todos_mots_cidade = carregar_motoristas_cidade(cidade_map, "anjun")
+            if not todos_mots_cidade and cidade_map != cidade_pacote:
+                todos_mots_cidade = carregar_motoristas_cidade(cidade_pacote, "anjun")
+
+            mots_esperados, foi_por_cep, _ = carregar_motoristas_cidade_detalhado(cidade_map, "anjun", cep=cep_pacote)
             if not mots_esperados and cidade_map != cidade_pacote:
-                mots_esperados = carregar_motoristas_cidade(cidade_pacote, "anjun", cep=cep_pacote)
+                mots_esperados, foi_por_cep, _ = carregar_motoristas_cidade_detalhado(cidade_pacote, "anjun", cep=cep_pacote)
                 
+            if todos_mots_cidade and not mots_esperados:
+                cep_info = f" (CEP {cep_pacote})" if cep_pacote else ""
+                msg_alerta = f"Divergência de CEP: Pacote de {cidade_pacote}{cep_info} está fora da faixa de CEP permitida para {cidade_pacote}!"
+                print(f"[!] [Anjun API] DIVERGÊNCIA! {msg_alerta}")
+                return "divergente", msg_alerta, "Fora da Faixa de CEP", cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
+
             if mots_esperados:
                 norm_mot = remover_acentos(mot_clean.lower()).replace('-', '').replace('_', '').replace(' ', '')
                 da_obj_check = resolver_motorista_anjun_api(mot_clean)
@@ -9287,7 +9360,8 @@ def bipar_pacote_anjun_api(codigo_qr, motorista):
                         else:
                             msg_alerta = f"Pacote de {cidade_pacote}{cep_info} possui mais de um grupo aberto ({', '.join(candidatos_abertos)}). Selecione o motorista desejado na tela."
                         print(f"[!] [Anjun API] DIVERGÊNCIA! {msg_alerta}")
-                        return "divergente", msg_alerta, esp_display, cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
+                        mot_retorno = esp_display if foi_por_cep else ""
+                        return "divergente", msg_alerta, mot_retorno, cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
 
     # 4. ATRIBUIÇÃO AO ENTREGADOR (Aba 3)
     mot_nome_final = motorista
@@ -10734,7 +10808,7 @@ def salvar_motoristas():
         if acao in ('adicionar', 'editar', 'deletar'):
             cid_alvo = (dados.get("cidade") or "").strip()
             mot_alvo = (dados.get("motorista") or "").strip()
-            faixa_cep_alvo = (dados.get("faixa_cep") or "").strip()
+            faixa_cep_alvo = normalizar_faixa_cep(dados.get("faixa_cep") or "")
             cid_antiga = (dados.get("cidade_antiga") or "").strip()
             mot_antigo = (dados.get("motorista_antigo") or "").strip()
 
@@ -10787,7 +10861,7 @@ def salvar_motoristas():
                     if isinstance(item, dict):
                         c = (item.get("cidade") or "").strip()
                         m = (item.get("motorista") or "").strip()
-                        f_cep = (item.get("faixa_cep") or "").strip()
+                        f_cep = normalizar_faixa_cep(item.get("faixa_cep") or "")
                         if _eh_cidade_valida(c) and m:
                             lista_mapeamentos.append((c, m, f_cep))
             elif isinstance(motoristas, dict):
@@ -12734,8 +12808,12 @@ def processar_bip():
                 houve_divergencia = False
             else:
                 if cidade_detectada and cidade_detectada not in ["Não Consultada", "---", "Desconhecida", "Não Encontrada"]:
+                    todos_mots_cidade = carregar_motoristas_cidade(cidade_detectada, p_id)
                     motoristas_esperados = carregar_motoristas_cidade(cidade_detectada, p_id, cep=cep)
-                    if motoristas_esperados:
+                    if todos_mots_cidade and not motoristas_esperados:
+                        houve_divergencia = True
+                        motorista_esperado_display = f"Fora da Faixa de CEP ({cidade_detectada})"
+                    elif motoristas_esperados:
                         # Se o motorista_lote estiver entre os motoristas mapeados para essa cidade, é VÁLIDO!
                         motoristas_lower = [m.lower() for m in motoristas_esperados]
                         if motorista_lote.lower() not in motoristas_lower:

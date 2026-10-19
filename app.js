@@ -1760,8 +1760,8 @@ async function processarProximoDaFila() {
                     subStatusLabel.innerText = `⚠️ Pacote já bipado anteriormente às ${horaAntDup}${textoFila}`;
                 }
                 emitirBeepErro();
-                if (resultado.auto_atribuido && motAlvoDup && motAlvoDup !== 'Sem Motorista') {
-                    falarCidade(`Pacote duplicado, atribuindo para o motorista ${motAlvoDup}`);
+                if (motAlvoDup && motAlvoDup !== 'Sem Motorista' && motAlvoDup !== '---' && !motAlvoDup.includes('Sem Atribuição')) {
+                    falarCidade(`Pacote duplicado, atribuído para o motorista ${motAlvoDup}`);
                 } else {
                     falarCidade("Pacote duplicado");
                 }
@@ -1771,7 +1771,7 @@ async function processarProximoDaFila() {
                 subStatusLabel.innerText = `📍 Auto-atribuído ➔ Grupo Aberto: ${resultado.motorista}${textoFila}`;
                 emitirBeepSucesso();
                 const cidAuto = (resultado.cidade && resultado.cidade !== '---' && resultado.cidade !== 'Anjun' && resultado.cidade !== 'Não Consultada' && !resultado.cidade.includes('Não Informada')) ? `${resultado.cidade}, ` : '';
-                falarCidade(`${cidAuto}atribuindo para o motorista ${resultado.motorista}`);
+                falarCidade(`${cidAuto}motorista ${resultado.motorista}`);
             } else if (resultado.cidade && resultado.cidade.includes('Não Informada')) {
                 statusPanel.className = 'status-container success';
                 statusLabel.innerText = "SEM RETORNO DE CIDADE";
@@ -1906,16 +1906,39 @@ async function processarProximoDaFila() {
             statusLabel.innerText = "DIVERGENTE";
             
             const durSirene = emitirSomDivergencia() || 500;
-            const cidadePacote = (resultado.cidade && resultado.cidade !== '---' && resultado.cidade !== 'Não Consultada') ? resultado.cidade : '';
-            if (cidadePacote) {
-                subStatusLabel.innerText = `Pacote de: ${cidadePacote} | Esperado: ${resultado.motorista_esperado}${textoFila}`;
-                falarCidade(`Divergente! Pacote de ${cidadePacote}`, durSirene);
+            const cidadePacote = (resultado.cidade && resultado.cidade !== '---' && resultado.cidade !== 'Não Consultada') ? resultado.cidade.trim() : '';
+            const motEsp = (resultado.motorista_esperado || '').trim();
+            const ehForaDeFaixa = motEsp.toLowerCase().includes('fora da faixa') || motEsp.toLowerCase().includes('fora de cep');
+            const ehMultiplosMotoristas = motEsp.includes('/') || motEsp.includes(' ou ');
+
+            let textoVoz = '';
+            if (ehForaDeFaixa) {
+                subStatusLabel.innerText = `⛔ Fora da faixa de CEP${cidadePacote ? ` (${cidadePacote})` : ''}${textoFila}`;
+                textoVoz = "Divergente! Fora da faixa de CEP";
+            } else if (plataformaAtiva === 'loggi' && cidadePacote && (motEsp.toLowerCase() !== cidadePacote.toLowerCase())) {
+                subStatusLabel.innerText = `⚠️ Pacote de: ${cidadePacote} | Grupo ativo: ${motEsp}${textoFila}`;
+                textoVoz = `Divergente! Pertence a cidade ${cidadePacote}`;
+            } else if (motEsp && motEsp !== '---' && !motEsp.toLowerCase().includes('sem motorista') && !ehMultiplosMotoristas) {
+                // Consulta por CEP: identificou exatamente o motorista responsável daquele CEP
+                subStatusLabel.innerText = `⚠️ Pertence ao motorista: ${motEsp}${cidadePacote ? ` (${cidadePacote})` : ''}${textoFila}`;
+                textoVoz = `Divergente! Pertence ao motorista ${motEsp}`;
+            } else if (cidadePacote) {
+                // Sem consulta por CEP ou múltiplos motoristas da cidade: avisa a cidade!
+                const detalheMot = (motEsp && motEsp !== '---') ? ` | ${motEsp}` : '';
+                subStatusLabel.innerText = `⚠️ Pertence a cidade ${cidadePacote}${detalheMot}${textoFila}`;
+                textoVoz = `Divergente! Pertence a cidade ${cidadePacote}`;
+            } else if (motEsp && motEsp !== '---') {
+                const motFalar = motEsp.replace(/\s*\/\s*/g, ' ou ');
+                subStatusLabel.innerText = `⚠️ Pertence ao motorista: ${motEsp}${textoFila}`;
+                textoVoz = `Divergente! Pertence ao motorista ${motFalar}`;
             } else {
-                subStatusLabel.innerText = `Destinado a: ${resultado.motorista_esperado}${textoFila}`;
-                falarCidade(`Divergente! Pertence ao motorista ${resultado.motorista_esperado}`, durSirene);
+                subStatusLabel.innerText = `⚠️ Pacote divergente${textoFila}`;
+                textoVoz = "Divergente! Fora da faixa de CEP";
             }
             
-            adicionarAoHistorico(codigo, resultado.recebedor, resultado.cidade, "DIVERGENTE", "badge-err");
+            falarCidade(textoVoz, durSirene);
+            const detalheHist = ehForaDeFaixa ? "Fora da Faixa de CEP" : (motEsp ? (ehMultiplosMotoristas ? (cidadePacote || motEsp) : `Motorista: ${motEsp}`) : (cidadePacote || 'Divergente'));
+            adicionarAoHistorico(codigo, resultado.recebedor, resultado.cidade, "DIVERGENTE", "badge-err", detalheHist);
             
             if (motorista) {
                 atribuicaoFeedback.innerText = `Falha: ${resultado.mensagem}`;
@@ -1977,7 +2000,12 @@ async function processarProximoDaFila() {
             subStatusLabel.innerText = `⛔ Já bipado${avisoHora} para ${motAnterior}${textoFila}`;
             
             emitirBeepErro();
-            falarCidade("Pacote duplicado", 420);
+            const motDestino = motorista || resultado.motorista || motAnterior;
+            if (motDestino && motDestino !== 'Sem Motorista' && motDestino !== '---' && !motDestino.includes('Sem Atribuição') && motDestino !== 'outro motorista') {
+                falarCidade(`Pacote duplicado, atribuído para o motorista ${motDestino}`, 420);
+            } else {
+                falarCidade("Pacote duplicado", 420);
+            }
             const agoraDupRespMs = Date.now();
             registrarEventoDuplicado({
                 codigo,
@@ -4413,9 +4441,26 @@ function abrirModalConfiguracoes(tabInicial = 'tab-cidades') {
     popularMotoristaPlataformaDropdownModal();
     atualizarMotoristasPlataformaModal();
     popularCredenciaisPlataformaModal();
+    atualizarVersaoModalBadge();
 
     settingsModal.classList.add('active');
     settingsModal.style.display = 'flex';
+}
+
+async function atualizarVersaoModalBadge() {
+    const badgeModal = document.getElementById('badge-versao-modal');
+    const badgeSistema = document.getElementById('badge-versao-sistema');
+    try {
+        const res = await fetch(`${API_URL}/versao-sistema`);
+        if (res.ok) {
+            const data = await res.json();
+            if (data && data.versao) {
+                const vStr = String(data.versao).startsWith('v') ? data.versao : `v${data.versao}`;
+                if (badgeModal) badgeModal.innerText = vStr;
+                if (badgeSistema) badgeSistema.innerText = vStr;
+            }
+        }
+    } catch (_) {}
 }
 
 async function fecharModalConfiguracoes() {
@@ -4858,7 +4903,10 @@ async function carregarMotoristasSiteModal(forcar = false) {
         motoristasSiteModalLista = Array.from(nomesSet).sort((a, b) =>
             a.localeCompare(b, 'pt-BR', { sensitivity: 'base' })
         );
-        renderizarSelectMotoristasSiteModal(valorAtual);
+        const valorPreservar = (indexEdicaoMapeamentoModal !== null && motoristasPlataformaModal[indexEdicaoMapeamentoModal])
+            ? motoristasPlataformaModal[indexEdicaoMapeamentoModal].motorista
+            : ((motNomeSelect.value && motNomeSelect.value !== '__manual__') ? motNomeSelect.value : null);
+        renderizarSelectMotoristasSiteModal(valorPreservar);
     } catch (err) {
         console.error("Erro ao carregar lista de motoristas do site:", err);
     } finally {
@@ -4872,17 +4920,54 @@ async function carregarMotoristasSiteModal(forcar = false) {
 function renderizarSelectMotoristasSiteModal(valorSelecionar = null) {
     if (!motNomeSelect) return;
     const termo = motBuscaSiteInput ? normalizarTextoBuscaModal(motBuscaSiteInput.value) : '';
-    const valorPreservado = valorSelecionar !== null ? valorSelecionar : motNomeSelect.value;
+
+    let valorDesejado = valorSelecionar !== null ? valorSelecionar : null;
+    if (valorDesejado === null) {
+        if (indexEdicaoMapeamentoModal !== null && motoristasPlataformaModal[indexEdicaoMapeamentoModal]) {
+            valorDesejado = motoristasPlataformaModal[indexEdicaoMapeamentoModal].motorista;
+        } else if (motNomeSelect.value && motNomeSelect.value !== '__manual__') {
+            valorDesejado = motNomeSelect.value;
+        } else {
+            valorDesejado = '';
+        }
+    }
+    valorDesejado = String(valorDesejado || '').trim();
+
+    if (valorDesejado && valorDesejado !== '__manual__') {
+        const existeNorm = motoristasSiteModalLista.some(m => 
+            normalizarTextoBuscaModal(m) === normalizarTextoBuscaModal(valorDesejado) ||
+            normalizarTextoBuscaModal(m).replace(/\s+/g, '') === normalizarTextoBuscaModal(valorDesejado).replace(/\s+/g, '')
+        );
+        if (!existeNorm) {
+            motoristasSiteModalLista.push(valorDesejado);
+            motoristasSiteModalLista.sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }));
+        }
+    }
 
     const filtrados = termo
         ? motoristasSiteModalLista.filter(m => normalizarTextoBuscaModal(m).includes(termo))
         : motoristasSiteModalLista;
+
+    let itemCasado = null;
+    if (valorDesejado && valorDesejado !== '__manual__') {
+        itemCasado = filtrados.find(m => m === valorDesejado)
+            || filtrados.find(m => normalizarTextoBuscaModal(m) === normalizarTextoBuscaModal(valorDesejado))
+            || filtrados.find(m => normalizarTextoBuscaModal(m).replace(/\s+/g, '') === normalizarTextoBuscaModal(valorDesejado).replace(/\s+/g, ''))
+            || motoristasSiteModalLista.find(m => m === valorDesejado)
+            || motoristasSiteModalLista.find(m => normalizarTextoBuscaModal(m) === normalizarTextoBuscaModal(valorDesejado))
+            || valorDesejado;
+    }
 
     let html = `<option value="">${
         filtrados.length > 0
             ? `Selecione o motorista (${filtrados.length} disponíveis)...`
             : `Nenhum motorista encontrado para "${motBuscaSiteInput ? motBuscaSiteInput.value : ''}"`
     }</option>`;
+
+    if (itemCasado && !filtrados.includes(itemCasado) && itemCasado !== '__manual__') {
+        const escaped = itemCasado.replace(/"/g, '&quot;');
+        html += `<option value="${escaped}">${itemCasado}</option>`;
+    }
 
     html += filtrados.map(m => {
         const escaped = m.replace(/"/g, '&quot;');
@@ -4892,8 +4977,10 @@ function renderizarSelectMotoristasSiteModal(valorSelecionar = null) {
     html += `<option value="__manual__">✏️ Digitar outro nome manualmente...</option>`;
     motNomeSelect.innerHTML = html;
 
-    if (valorPreservado && (filtrados.includes(valorPreservado) || valorPreservado === '__manual__')) {
-        motNomeSelect.value = valorPreservado;
+    if (itemCasado) {
+        motNomeSelect.value = itemCasado;
+    } else if (valorDesejado === '__manual__') {
+        motNomeSelect.value = '__manual__';
     } else if (termo && filtrados.length > 0) {
         motNomeSelect.value = filtrados[0];
     } else {
@@ -5084,11 +5171,50 @@ function renderizarListaMotoristasModal() {
     }).join('');
 }
 
+function normalizarFaixaCep(texto) {
+    if (!texto) return '';
+    const partes = String(texto).split(/[,;]+/);
+    const partesNorm = [];
+    const padraoRange = /^\s*(\d{5}-?\d{3}|\d{2,5})\s*(?:a|ate|até|to|~|-)\s*(\d{5}-?\d{3}|\d{2,5})\s*$/i;
+
+    for (let p of partes) {
+        p = p.trim();
+        if (!p) continue;
+        const digitosP = p.replace(/\D/g, '');
+        if (digitosP.length === 8 && (/^\d{8}$/.test(p) || /^\d{5}-\d{3}$/.test(p))) {
+            partesNorm.push(`${digitosP.slice(0, 5)}-${digitosP.slice(5, 8)}`);
+            continue;
+        }
+        const m = padraoRange.exec(p);
+        if (m) {
+            const iniRaw = m[1].replace(/\D/g, '');
+            const fimRaw = m[2].replace(/\D/g, '');
+            const iniFmt = iniRaw.length === 8 ? `${iniRaw.slice(0, 5)}-${iniRaw.slice(5, 8)}` : iniRaw;
+            const fimFmt = fimRaw.length === 8 ? `${fimRaw.slice(0, 5)}-${fimRaw.slice(5, 8)}` : fimRaw;
+            partesNorm.push(`${iniFmt} a ${fimFmt}`);
+        } else {
+            if (digitosP.length === 8) {
+                partesNorm.push(`${digitosP.slice(0, 5)}-${digitosP.slice(5, 8)}`);
+            } else {
+                partesNorm.push(p);
+            }
+        }
+    }
+    return partesNorm.join(', ');
+}
+
+if (motCepInput) {
+    motCepInput.addEventListener('blur', () => {
+        motCepInput.value = normalizarFaixaCep(motCepInput.value);
+    });
+}
+
 async function salvarMapeamentoMotoristaModal(e) {
     e.preventDefault();
     if (!motCidadeSelect) return;
     const cidade = motCidadeSelect.value.trim();
-    const faixaCep = motCepInput ? motCepInput.value.trim() : '';
+    const faixaCep = motCepInput ? normalizarFaixaCep(motCepInput.value.trim()) : '';
+    if (motCepInput) motCepInput.value = faixaCep;
     const motorista = (motNomeSelect && motNomeSelect.value && motNomeSelect.value !== '__manual__')
         ? motNomeSelect.value.trim()
         : (motNome ? motNome.value.trim() : '');
@@ -5232,10 +5358,6 @@ window.editarMapeamentoModal = async (index) => {
         btnCancelarEdicaoMot.style.display = "inline-block";
     }
 
-    if (!motoristasSiteModalLista.includes(item.motorista)) {
-        motoristasSiteModalLista.push(item.motorista);
-        motoristasSiteModalLista.sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }));
-    }
     if (motBuscaSiteInput) {
         motBuscaSiteInput.value = '';
     }
@@ -5248,10 +5370,12 @@ window.editarMapeamentoModal = async (index) => {
         } else {
             motCidadeSelect.value = '';
         }
-        motCidadeSelect.focus();
     }
     if (motCepInput) {
         motCepInput.value = item.faixa_cep || '';
+        motCepInput.focus();
+    } else if (motCidadeSelect) {
+        motCidadeSelect.focus();
     }
 
     renderizarListaMotoristasModal();
@@ -6118,16 +6242,16 @@ function atualizarInterfaceLicenca(lic) {
 
         // Formatação inteligente e profissional do status da licença
         let textoLic = "LICENÇA ATIVA";
-        let iconeLic = "🟢";
+        let iconeLic = "🛡️";
         if (lic.dias_restantes > 365) {
             textoLic = "LICENÇA ATIVA";
-            iconeLic = "🟢";
+            iconeLic = "🛡️";
         } else if (lic.dias_restantes <= 5) {
             textoLic = `EXPIRA EM ${lic.dias_restantes}D`;
-            iconeLic = "🟡";
+            iconeLic = "⚠️";
         } else {
-            textoLic = `LICENÇA (${lic.dias_restantes} DIAS)`;
-            iconeLic = "🟢";
+            textoLic = `LICENÇA (${lic.dias_restantes}D)`;
+            iconeLic = "🛡️";
         }
 
         if (iconeStatusLicenca) iconeStatusLicenca.innerText = iconeLic;
@@ -6138,11 +6262,11 @@ function atualizarInterfaceLicenca(lic) {
             if (lic.dias_restantes <= 5) {
                 btnStatusLicenca.style.borderColor = "#f59e0b";
                 btnStatusLicenca.style.color = "#fbbf24";
-                btnStatusLicenca.style.background = "rgba(245, 158, 11, 0.15)";
+                btnStatusLicenca.style.background = "rgba(245, 158, 11, 0.12)";
             } else {
-                btnStatusLicenca.style.borderColor = "#10b981";
-                btnStatusLicenca.style.color = "#34d399";
-                btnStatusLicenca.style.background = "rgba(16, 185, 129, 0.15)";
+                btnStatusLicenca.style.borderColor = "#1e293b";
+                btnStatusLicenca.style.color = "#cbd5e1";
+                btnStatusLicenca.style.background = "#111827";
             }
             const platsAtivas = Array.isArray(lic.plataformas_liberadas) && lic.plataformas_liberadas.length > 0
                 ? lic.plataformas_liberadas.filter(p => String(p).toLowerCase() !== 'magalog').map(p => p.toUpperCase()).join(', ')
@@ -6598,8 +6722,11 @@ if (btnChecarAtualizacao) {
             const data = await res.json();
 
             if (data.sucesso) {
-                if (data.versao_atual && badgeVersaoSistema) {
-                    badgeVersaoSistema.innerText = `v${data.versao_atual}`;
+                if (data.versao_atual) {
+                    const vTxt = `v${data.versao_atual}`;
+                    if (badgeVersaoSistema) badgeVersaoSistema.innerText = vTxt;
+                    const bMod = document.getElementById('badge-versao-modal');
+                    if (bMod) bMod.innerText = vTxt;
                 }
 
                 if (data.tem_atualizacao) {
@@ -6720,10 +6847,13 @@ async function checarAtualizacaoAutomatica() {
         const res = await fetch(`${API_URL}/checar-atualizacao?_=${Date.now()}`);
         const data = await res.json();
         if (data && data.sucesso) {
-            if (data.versao_atual && badgeVersaoSistema) {
-                badgeVersaoSistema.innerText = `v${data.versao_atual}`;
+            if (data.versao_atual) {
+                const vTxt = `v${data.versao_atual}`;
+                if (badgeVersaoSistema) badgeVersaoSistema.innerText = vTxt;
+                const bMod = document.getElementById('badge-versao-modal');
+                if (bMod) bMod.innerText = vTxt;
             }
-            if (data.tem_atualizacao) {
+            if (data.tem_atualizacao && !loteAtivo) {
                 const overlay = document.getElementById('overlay-reiniciando');
                 const overlayMsg = document.getElementById('overlay-reiniciando-msg');
                 if (overlay) {
@@ -6753,7 +6883,10 @@ async function checarAtualizacaoAutomatica() {
         // Falha silenciosa em caso de oscilação de rede
     }
 }
-setTimeout(checarAtualizacaoAutomatica, 4500);
+setTimeout(checarAtualizacaoAutomatica, 3500);
+setInterval(() => {
+    if (!loteAtivo) checarAtualizacaoAutomatica();
+}, 15 * 60 * 1000);
 
 // ========================================================
 // GUIA DE OPERAÇÃO POR EMPRESA (MODAL DE AJUDA)
@@ -6844,11 +6977,11 @@ if (modalAjuda) {
         onlineAtual = isOnline;
         if (isOnline) {
             badge.className = 'status-conexao-pill online';
-            texto.textContent = 'ONLINE';
+            texto.textContent = 'Online';
             badge.setAttribute('title', 'Conectado à Internet');
         } else {
             badge.className = 'status-conexao-pill offline';
-            texto.textContent = 'SEM INTERNET';
+            texto.textContent = 'Sem Internet';
             badge.setAttribute('title', 'Atenção: Sem conexão com a Internet!');
         }
     }

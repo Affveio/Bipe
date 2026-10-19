@@ -1,8 +1,8 @@
 {
-    "versao": "2.4.0",
-    "data": "2026-10-13",
-    "titulo": "TurboScan v2.4.0 - Multi-Cidades Loggi e Otimização Visual",
-    "descricao": "Correção de proporção das cidades e grupos na Loggi para telas compactas, retentativa automática na iMile e melhorias de performance.",
+    "versao": "2.4.3",
+    "data": "2026-10-19",
+    "titulo": "TurboScan v2.4.3 - Refinamento de Voz Anti-Divergência e Edição de CEP",
+    "descricao": "Voz inteligente diferenciando consulta por CEP ('Pertence ao motorista') de divergência por cidade ('Pertence a cidade'), correção no campo de motorista ao editar faixa de CEP.",
     "arquivos": [
         "app.py",
         "app.js",
