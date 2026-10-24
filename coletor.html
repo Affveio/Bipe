@@ -1,0 +1,1090 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#0b0f19">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>TurboScan Coletor Mobile</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            -webkit-tap-highlight-color: transparent;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        body {
+            background-color: #0b0f19;
+            color: #f8fafc;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+            padding-bottom: env(safe-area-inset-bottom);
+        }
+
+        /* Top Bar */
+        .header {
+            background: #111827;
+            border-bottom: 1px solid #1f2937;
+            padding: 12px 14px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 50;
+        }
+
+        .brand-box {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .brand-title {
+            font-size: 1.1rem;
+            font-weight: 900;
+            letter-spacing: -0.5px;
+            color: #38bdf8;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .brand-badge {
+            background: #0284c7;
+            color: #fff;
+            font-size: 0.65rem;
+            font-weight: 800;
+            padding: 2px 6px;
+            border-radius: 4px;
+            letter-spacing: 0.5px;
+        }
+
+        .status-pill {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.75rem;
+            background: #0f172a;
+            border: 1px solid #334155;
+            padding: 4px 8px;
+            border-radius: 20px;
+            color: #94a3b8;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #10b981;
+            box-shadow: 0 0 6px #10b981;
+        }
+
+        .status-dot.offline {
+            background: #ef4444;
+            box-shadow: 0 0 6px #ef4444;
+        }
+
+        /* Controls Bar */
+        .controls-bar {
+            background: #131b2e;
+            padding: 10px 14px;
+            border-bottom: 1px solid #1e293b;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .btn-control {
+            flex: 1;
+            background: #1e293b;
+            border: 1px solid #334155;
+            color: #f8fafc;
+            padding: 10px 8px;
+            border-radius: 8px;
+            font-size: 0.82rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .btn-control:active {
+            transform: scale(0.97);
+            background: #334155;
+        }
+
+        .btn-control.active-triagem {
+            background: #065f46;
+            border-color: #059669;
+            color: #6ee7b7;
+        }
+
+        .btn-control.plat-btn {
+            background: #1e1b4b;
+            border-color: #4338ca;
+            color: #c7d2fe;
+        }
+
+        /* Driver select bar (Modo Pilha) */
+        .driver-bar {
+            background: #182238;
+            padding: 8px 14px;
+            border-bottom: 1px solid #1e293b;
+            display: none;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .driver-select {
+            flex: 1;
+            background: #0f172a;
+            border: 1px solid #38bdf8;
+            color: #f8fafc;
+            padding: 8px 10px;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            outline: none;
+        }
+
+        /* Main Container */
+        .main-container {
+            flex: 1;
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        /* Big Result Card */
+        .result-card {
+            background: #111827;
+            border: 2px solid #1f2937;
+            border-radius: 14px;
+            padding: 16px;
+            text-align: center;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+            min-height: 200px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .result-card.ok {
+            border-color: #10b981;
+            background: linear-gradient(180deg, #064e3b 0%, #062b21 100%);
+            box-shadow: 0 0 20px rgba(16, 185, 129, 0.25);
+        }
+
+        .result-card.duplicado {
+            border-color: #f59e0b;
+            background: linear-gradient(180deg, #78350f 0%, #3a1a05 100%);
+            box-shadow: 0 0 20px rgba(245, 158, 11, 0.25);
+        }
+
+        .result-card.divergente {
+            border-color: #ef4444;
+            background: linear-gradient(180deg, #7f1d1d 0%, #450a0a 100%);
+            box-shadow: 0 0 20px rgba(239, 68, 68, 0.35);
+            animation: shake 0.4s ease-in-out;
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            20%, 60% { transform: translateX(-6px); }
+            40%, 80% { transform: translateX(6px); }
+        }
+
+        .status-tag {
+            font-size: 0.85rem;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            padding: 4px 12px;
+            border-radius: 20px;
+            background: #1e293b;
+            color: #94a3b8;
+        }
+
+        .result-card.ok .status-tag {
+            background: #10b981;
+            color: #064e3b;
+        }
+
+        .result-card.duplicado .status-tag {
+            background: #f59e0b;
+            color: #78350f;
+        }
+
+        .result-card.divergente .status-tag {
+            background: #ef4444;
+            color: #ffffff;
+        }
+
+        .mot-display {
+            font-size: 1.85rem;
+            font-weight: 900;
+            line-height: 1.15;
+            color: #f8fafc;
+            word-break: break-word;
+            margin-top: 4px;
+        }
+
+        .cidade-display {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: #cbd5e1;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .detail-display {
+            font-size: 0.85rem;
+            color: #94a3b8;
+            word-break: break-all;
+        }
+
+        .msg-display {
+            font-size: 0.85rem;
+            color: #fbbf24;
+            margin-top: 4px;
+            font-weight: 600;
+        }
+
+        /* Scan Input Section */
+        .input-card {
+            background: #111827;
+            border: 1px solid #1f2937;
+            border-radius: 12px;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .input-row {
+            display: flex;
+            gap: 8px;
+        }
+
+        .barcode-input {
+            flex: 1;
+            background: #0f172a;
+            border: 2px solid #38bdf8;
+            color: #f8fafc;
+            padding: 12px 14px;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 700;
+            outline: none;
+            letter-spacing: 0.5px;
+        }
+
+        .barcode-input:focus {
+            border-color: #0284c7;
+            box-shadow: 0 0 10px rgba(56, 189, 248, 0.3);
+        }
+
+        .btn-cam {
+            background: #0369a1;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            padding: 0 14px;
+            font-size: 1.1rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .btn-cam:active {
+            background: #0284c7;
+        }
+
+        /* Counters Bar */
+        .stats-bar {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+        }
+
+        .stat-box {
+            background: #111827;
+            border: 1px solid #1f2937;
+            border-radius: 8px;
+            padding: 8px 10px;
+            text-align: center;
+        }
+
+        .stat-val {
+            font-size: 1.25rem;
+            font-weight: 900;
+            color: #38bdf8;
+        }
+
+        .stat-label {
+            font-size: 0.68rem;
+            color: #94a3b8;
+            text-transform: uppercase;
+            font-weight: 700;
+            margin-top: 2px;
+        }
+
+        /* Camera Scanner Modal */
+        #camera-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.95);
+            z-index: 100;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+        }
+
+        #camera-video {
+            width: 100%;
+            max-width: 400px;
+            height: 280px;
+            border-radius: 12px;
+            border: 2px solid #38bdf8;
+            object-fit: cover;
+            background: #000;
+        }
+
+        .cam-controls {
+            margin-top: 14px;
+            display: flex;
+            gap: 12px;
+            width: 100%;
+            max-width: 400px;
+        }
+
+        .btn-close-cam {
+            flex: 1;
+            background: #ef4444;
+            color: #fff;
+            border: none;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            font-weight: 800;
+            cursor: pointer;
+        }
+
+        /* Platform Selection Sheet */
+        #sheet-plataforma {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 90;
+            align-items: flex-end;
+            justify-content: center;
+        }
+
+        .sheet-content {
+            background: #111827;
+            border-top: 1px solid #374151;
+            border-radius: 16px 16px 0 0;
+            width: 100%;
+            max-width: 500px;
+            padding: 18px 16px 28px 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            animation: slideUp 0.2s ease-out;
+        }
+
+        @keyframes slideUp {
+            from { transform: translateY(100%); }
+            to { transform: translateY(0); }
+        }
+
+        .sheet-title {
+            font-size: 1rem;
+            font-weight: 800;
+            color: #cbd5e1;
+            margin-bottom: 6px;
+            text-align: center;
+        }
+
+        .sheet-opt {
+            background: #1e293b;
+            border: 1px solid #334155;
+            color: #f8fafc;
+            padding: 14px;
+            border-radius: 10px;
+            font-size: 0.95rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+        }
+
+        .sheet-opt:active {
+            background: #334155;
+        }
+
+        .sheet-opt.selected {
+            border-color: #38bdf8;
+            background: #0f2744;
+            color: #38bdf8;
+        }
+
+        /* Recent Scans */
+        .history-card {
+            background: #111827;
+            border: 1px solid #1f2937;
+            border-radius: 10px;
+            padding: 10px 12px;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .history-title {
+            font-size: 0.75rem;
+            font-weight: 800;
+            color: #94a3b8;
+            text-transform: uppercase;
+            margin-bottom: 6px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .history-list {
+            list-style: none;
+            overflow-y: auto;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .history-item {
+            background: #182238;
+            border-radius: 6px;
+            padding: 6px 8px;
+            font-size: 0.78rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .history-item.divergente {
+            border-left: 3px solid #ef4444;
+        }
+
+        .history-item.ok {
+            border-left: 3px solid #10b981;
+        }
+
+        .history-item.duplicado {
+            border-left: 3px solid #f59e0b;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Top Bar -->
+    <header class="header">
+        <div class="brand-box">
+            <span class="brand-title">⚡ TurboScan</span>
+            <span class="brand-badge">COLETOR</span>
+        </div>
+        <div class="status-pill">
+            <div id="status-dot" class="status-dot"></div>
+            <span id="status-text">Online</span>
+        </div>
+    </header>
+
+    <!-- Controls Bar -->
+    <div class="controls-bar">
+        <button id="btn-plat-selector" class="btn-control plat-btn">
+            <span id="plat-icon">🚚</span>
+            <span id="plat-label">Anjun Express</span>
+            <span>▾</span>
+        </button>
+        <button id="btn-modo-triagem" class="btn-control active-triagem">
+            <span>🎯 Triagem Direta</span>
+        </button>
+    </div>
+
+    <!-- Driver Selector Bar (Pilha Mode) -->
+    <div id="driver-bar" class="driver-bar">
+        <span style="font-size: 0.8rem; font-weight: 700; color: #94a3b8;">Motorista:</span>
+        <select id="driver-select" class="driver-select">
+            <option value="">Selecione o motorista...</option>
+        </select>
+    </div>
+
+    <!-- Main Container -->
+    <main class="main-container">
+
+        <!-- Big Result Card -->
+        <div id="result-card" class="result-card">
+            <span id="res-tag" class="status-tag">PRONTO PARA BIPAR</span>
+            <div id="res-mot" class="mot-display">Aponte o leitor</div>
+            <div id="res-cidade" class="cidade-display">Aguardando pacote...</div>
+            <div id="res-detail" class="detail-display"></div>
+            <div id="res-msg" class="msg-display"></div>
+        </div>
+
+        <!-- Scan Input Field -->
+        <div class="input-card">
+            <div class="input-row">
+                <input type="text" id="barcode-input" class="barcode-input" placeholder="Aponte o leitor laser aqui..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" autofocus>
+                <button type="button" id="btn-open-cam" class="btn-cam" title="Abrir câmera">📷</button>
+            </div>
+        </div>
+
+        <!-- Stats Bar -->
+        <div class="stats-bar">
+            <div class="stat-box">
+                <div id="stat-sessao" class="stat-val">0</div>
+                <div class="stat-label">Nesta Sessão</div>
+            </div>
+            <div class="stat-box">
+                <div id="stat-motorista" class="stat-val">0</div>
+                <div class="stat-label">Motorista</div>
+            </div>
+            <div class="stat-box">
+                <div id="stat-total" class="stat-val">0</div>
+                <div class="stat-label">Total Hoje</div>
+            </div>
+        </div>
+
+        <!-- Recent Scans History -->
+        <div class="history-card">
+            <div class="history-title">
+                <span>Últimos Bipes</span>
+                <span id="clear-hist-btn" style="cursor: pointer; color: #38bdf8;">Limpar</span>
+            </div>
+            <ul id="history-list" class="history-list">
+                <!-- Inserido dinamicamente -->
+            </ul>
+        </div>
+
+    </main>
+
+    <!-- Platform Selection Sheet -->
+    <div id="sheet-plataforma">
+        <div class="sheet-content">
+            <div class="sheet-title">Trocar Transportadora</div>
+            <div class="sheet-opt" data-plat="anjun">
+                <span>🚚 Anjun Express</span>
+                <span class="check-mark">✓</span>
+            </div>
+            <div class="sheet-opt" data-plat="imile">
+                <span>📦 iMile Delivery</span>
+                <span class="check-mark"></span>
+            </div>
+            <div class="sheet-opt" data-plat="loggi">
+                <span>⚡ Loggi</span>
+                <span class="check-mark"></span>
+            </div>
+            <button id="btn-close-sheet" style="background: #334155; color: #fff; border: none; padding: 12px; border-radius: 8px; font-weight: 700; margin-top: 6px; cursor: pointer;">Cancelar</button>
+        </div>
+    </div>
+
+    <!-- Camera Scanner Modal -->
+    <div id="camera-modal">
+        <video id="camera-video" playsinline></video>
+        <div class="cam-controls">
+            <button id="btn-close-cam" class="btn-close-cam">Fechar Câmera</button>
+        </div>
+    </div>
+
+    <script>
+        // State
+        let plataformaAtiva = 'anjun';
+        let modoTriagemDireta = true;
+        let motoristaAtivo = '';
+        let contagemSessao = 0;
+        let cameraStream = null;
+        let barcodeDetector = null;
+        let cameraLoopId = null;
+
+        // Elements
+        const barcodeInput = document.getElementById('barcode-input');
+        const resultCard = document.getElementById('result-card');
+        const resTag = document.getElementById('res-tag');
+        const resMot = document.getElementById('res-mot');
+        const resCidade = document.getElementById('res-cidade');
+        const resDetail = document.getElementById('res-detail');
+        const resMsg = document.getElementById('res-msg');
+        const statSessao = document.getElementById('stat-sessao');
+        const statMotorista = document.getElementById('stat-motorista');
+        const statTotal = document.getElementById('stat-total');
+        const historyList = document.getElementById('history-list');
+        const clearHistBtn = document.getElementById('clear-hist-btn');
+        const statusDot = document.getElementById('status-dot');
+        const statusText = document.getElementById('status-text');
+
+        const btnModoTriagem = document.getElementById('btn-modo-triagem');
+        const driverBar = document.getElementById('driver-bar');
+        const driverSelect = document.getElementById('driver-select');
+        const btnPlatSelector = document.getElementById('btn-plat-selector');
+        const platLabel = document.getElementById('plat-label');
+        const platIcon = document.getElementById('plat-icon');
+        const sheetPlataforma = document.getElementById('sheet-plataforma');
+        const btnCloseSheet = document.getElementById('btn-close-sheet');
+
+        const btnOpenCam = document.getElementById('btn-open-cam');
+        const cameraModal = document.getElementById('camera-modal');
+        const cameraVideo = document.getElementById('camera-video');
+        const btnCloseCam = document.getElementById('btn-close-cam');
+
+        // Web Audio Synthesizer Beeps
+        let audioCtx = null;
+        function getAudioContext() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+            return audioCtx;
+        }
+
+        function playBeep(type = 'ok') {
+            try {
+                const ctx = getAudioContext();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+
+                if (type === 'ok') {
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(1200, ctx.currentTime);
+                    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.12);
+                    osc.start(ctx.currentTime);
+                    osc.stop(ctx.currentTime + 0.12);
+                } else if (type === 'duplicado') {
+                    osc.type = 'square';
+                    osc.frequency.setValueAtTime(800, ctx.currentTime);
+                    gain.gain.setValueAtTime(0.2, ctx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.25);
+                    osc.start(ctx.currentTime);
+                    osc.stop(ctx.currentTime + 0.25);
+                } else if (type === 'divergente') {
+                    osc.type = 'sawtooth';
+                    osc.frequency.setValueAtTime(350, ctx.currentTime);
+                    gain.gain.setValueAtTime(0.4, ctx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.45);
+                    osc.start(ctx.currentTime);
+                    osc.stop(ctx.currentTime + 0.45);
+                }
+            } catch (e) {
+                console.warn("Audio erro:", e);
+            }
+        }
+
+        function falarTexto(texto) {
+            try {
+                if ('speechSynthesis' in window && texto) {
+                    window.speechSynthesis.cancel();
+                    const utt = new SpeechSynthesisUtterance(texto);
+                    utt.lang = 'pt-BR';
+                    utt.rate = 1.15;
+                    window.speechSynthesis.speak(utt);
+                }
+            } catch (e) {
+                console.warn("Speech erro:", e);
+            }
+        }
+
+        function vibrar(padrao = [80]) {
+            try {
+                if ('vibrate' in navigator) {
+                    navigator.vibrate(padrao);
+                }
+            } catch (_) {}
+        }
+
+        // Auto Focus Input Management
+        function manterFocoInput() {
+            if (cameraModal.style.display !== 'flex' && sheetPlataforma.style.display !== 'flex') {
+                if (document.activeElement !== barcodeInput) {
+                    barcodeInput.focus();
+                }
+            }
+        }
+        document.addEventListener('click', (e) => {
+            if (sheetPlataforma.style.display === 'flex' || cameraModal.style.display === 'flex') return;
+            if (!['BUTTON', 'SELECT', 'INPUT'].includes(e.target.tagName)) {
+                manterFocoInput();
+            }
+        });
+
+        // Toggle Modo Triagem Direta vs Pilha
+        btnModoTriagem.addEventListener('click', () => {
+            modoTriagemDireta = !modoTriagemDireta;
+            if (modoTriagemDireta) {
+                btnModoTriagem.className = 'btn-control active-triagem';
+                btnModoTriagem.innerHTML = '<span>🎯 Triagem Direta</span>';
+                driverBar.style.display = 'none';
+            } else {
+                btnModoTriagem.className = 'btn-control';
+                btnModoTriagem.innerHTML = '<span>📦 Modo Pilha</span>';
+                driverBar.style.display = 'flex';
+            }
+            manterFocoInput();
+        });
+
+        // Platform Selector Sheet
+        btnPlatSelector.addEventListener('click', (e) => {
+            e.stopPropagation();
+            sheetPlataforma.style.display = 'flex';
+        });
+
+        btnCloseSheet.addEventListener('click', (e) => {
+            e.stopPropagation();
+            sheetPlataforma.style.display = 'none';
+            manterFocoInput();
+        });
+
+        sheetPlataforma.addEventListener('click', (e) => {
+            if (e.target === sheetPlataforma) {
+                e.stopPropagation();
+                sheetPlataforma.style.display = 'none';
+                manterFocoInput();
+            }
+        });
+
+        document.querySelectorAll('.sheet-opt').forEach(opt => {
+            opt.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const plat = opt.getAttribute('data-plat');
+                sheetPlataforma.style.display = 'none';
+                await trocarPlataforma(plat);
+                manterFocoInput();
+            });
+        });
+
+        async function trocarPlataforma(plat) {
+            try {
+                plataformaAtiva = plat;
+                atualizarUiPlataforma(plat);
+                const res = await fetch('/api/coletor/trocar-plataforma', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ plataforma: plat })
+                });
+                if (res.ok) {
+                    await carregarStatus();
+                    falarTexto(plat === 'imile' ? 'iMile Delivery' : (plat === 'loggi' ? 'Loggi' : 'Anjun Express'));
+                }
+            } catch (e) {
+                console.error("Erro ao trocar plataforma:", e);
+            }
+        }
+
+        function atualizarUiPlataforma(plat) {
+            document.querySelectorAll('.sheet-opt').forEach(opt => {
+                const isSel = opt.getAttribute('data-plat') === plat;
+                opt.className = 'sheet-opt' + (isSel ? ' selected' : '');
+                opt.querySelector('.check-mark').innerText = isSel ? '✓' : '';
+            });
+
+            if (plat === 'anjun') {
+                platLabel.innerText = 'Anjun Express';
+                platIcon.innerText = '🚚';
+            } else if (plat === 'imile') {
+                platLabel.innerText = 'iMile Delivery';
+                platIcon.innerText = '📦';
+            } else if (plat === 'loggi') {
+                platLabel.innerText = 'Loggi';
+                platIcon.innerText = '⚡';
+            }
+        }
+
+        // Driver Selection Change
+        driverSelect.addEventListener('change', async () => {
+            motoristaAtivo = driverSelect.value;
+            try {
+                await fetch('/api/coletor/trocar-motorista', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ motorista: motoristaAtivo })
+                });
+            } catch (_) {}
+            manterFocoInput();
+        });
+
+        // Load Status from Server
+        async function carregarStatus() {
+            try {
+                const res = await fetch('/api/coletor/status?_=' + Date.now());
+                if (res.ok) {
+                    const data = await res.json();
+                    statusDot.className = 'status-dot';
+                    statusText.innerText = 'Online';
+
+                    plataformaAtiva = data.plataforma || plataformaAtiva;
+                    atualizarUiPlataforma(plataformaAtiva);
+
+                    statMotorista.innerText = data.contagem || 0;
+                    statTotal.innerText = data.contagem_total_hoje || 0;
+
+                    // Atualiza opções de motoristas
+                    const selVal = driverSelect.value;
+                    driverSelect.innerHTML = '<option value="">Selecione o motorista...</option>';
+                    (data.motoristas || []).forEach(m => {
+                        const opt = document.createElement('option');
+                        opt.value = m;
+                        opt.innerText = m;
+                        if (m === data.motorista_ativo || m === selVal) {
+                            opt.selected = true;
+                        }
+                        driverSelect.appendChild(opt);
+                    });
+                } else {
+                    statusDot.className = 'status-dot offline';
+                    statusText.innerText = 'Offline';
+                }
+            } catch (e) {
+                statusDot.className = 'status-dot offline';
+                statusText.innerText = 'Desconectado';
+            }
+        }
+
+        // Process Scan
+        async function processarCodigo(codigo) {
+            const codLimpo = String(codigo || '').trim();
+            if (!codLimpo) return;
+
+            // Feedback imediato
+            resultCard.className = 'result-card';
+            resTag.innerText = 'PROCESSANDO...';
+            resMot.innerText = codLimpo;
+            resCidade.innerText = 'Consultando transportadora...';
+            resDetail.innerText = '';
+            resMsg.innerText = '';
+
+            try {
+                const payload = {
+                    codigo: codLimpo,
+                    plataforma: plataformaAtiva,
+                    motorista: modoTriagemDireta ? null : (driverSelect.value || null),
+                    cidades_selecionadas: [],
+                    triagem_direta: Boolean(modoTriagemDireta)
+                };
+
+                const res = await fetch('/bip', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const data = await res.json();
+                exibirResultado(codLimpo, data);
+            } catch (e) {
+                resultCard.className = 'result-card divergente';
+                resTag.innerText = 'ERRO DE CONEXÃO';
+                resMot.innerText = 'FALHA DE REDE';
+                resCidade.innerText = 'Verifique o Wi-Fi do galpão';
+                resMsg.innerText = e.message;
+                playBeep('divergente');
+                vibrar([200, 100, 200]);
+            } finally {
+                barcodeInput.value = '';
+                manterFocoInput();
+            }
+        }
+
+        function exibirResultado(codigo, data) {
+            contagemSessao++;
+            statSessao.innerText = contagemSessao;
+
+            const st = (data.status || '').toLowerCase();
+            const mot = data.motorista || 'Sem Motorista';
+            const cid = data.cidade || '';
+            const msg = data.mensagem || '';
+            const bairro = data.bairro ? ` • Bairro: ${data.bairro}` : '';
+            const cep = data.cep ? ` • CEP: ${data.cep}` : '';
+
+            if (st === 'sucesso' || st === 'ok') {
+                resultCard.className = 'result-card ok';
+                resTag.innerText = 'SUCESSO';
+                resMot.innerText = mot;
+                resCidade.innerText = (cid ? '📍 ' + cid : '') + bairro;
+                resDetail.innerText = `Pacote: ${codigo}`;
+                resMsg.innerText = '';
+
+                playBeep('ok');
+                vibrar([90]);
+                falarTexto(mot + (cid ? ' - ' + cid : ''));
+                adicionarHistorico(codigo, mot, cid, 'ok');
+
+                if (data.contagem !== undefined) {
+                    statMotorista.innerText = data.contagem;
+                }
+            } else if (st === 'duplicado') {
+                resultCard.className = 'result-card duplicado';
+                resTag.innerText = 'DUPLICADO (JÁ BIPADO)';
+                resMot.innerText = mot;
+                resCidade.innerText = (cid ? '📍 ' + cid : '') + bairro;
+                resDetail.innerText = `Pacote: ${codigo}`;
+                resMsg.innerText = msg || 'Pacote já registrado no lote!';
+
+                playBeep('duplicado');
+                vibrar([120, 80, 120]);
+                falarTexto("Duplicado! " + mot);
+                adicionarHistorico(codigo, mot, cid, 'duplicado');
+            } else if (st === 'divergente') {
+                resultCard.className = 'result-card divergente';
+                resTag.innerText = 'DIVERGÊNCIA!';
+                resMot.innerText = mot !== 'Sem Motorista' ? mot : 'ATENÇÃO!';
+                resCidade.innerText = (cid ? 'Destino: ' + cid : 'Cidade Não Autorizada') + bairro;
+                resDetail.innerText = `Pacote: ${codigo}`;
+                resMsg.innerText = msg;
+
+                playBeep('divergente');
+                vibrar([250, 100, 250, 100, 250]);
+                falarTexto("Divergência! " + (cid || msg));
+                adicionarHistorico(codigo, mot || 'Divergente', cid, 'divergente');
+            } else {
+                resultCard.className = 'result-card divergente';
+                resTag.innerText = 'AVISO / FALHA';
+                resMot.innerText = 'VERIFICAR PACOTE';
+                resCidade.innerText = cid || '---';
+                resDetail.innerText = `Pacote: ${codigo}`;
+                resMsg.innerText = msg || 'Verifique o status no computador central';
+
+                playBeep('divergente');
+                vibrar([200]);
+                adicionarHistorico(codigo, 'Falha', cid, 'divergente');
+            }
+        }
+
+        function adicionarHistorico(codigo, motorista, cidade, status) {
+            const li = document.createElement('li');
+            li.className = 'history-item ' + status;
+            const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            li.innerHTML = `
+                <div>
+                    <strong style="color: #f8fafc;">${motorista}</strong>
+                    <span style="color: #94a3b8; font-size: 0.72rem; margin-left: 4px;">${cidade || ''}</span>
+                    <div style="color: #64748b; font-size: 0.7rem;">${codigo}</div>
+                </div>
+                <span style="color: #64748b; font-size: 0.72rem;">${hora}</span>
+            `;
+            historyList.insertBefore(li, historyList.firstChild);
+
+            // Mantém no máximo 15 itens
+            while (historyList.children.length > 15) {
+                historyList.removeChild(historyList.lastChild);
+            }
+        }
+
+        clearHistBtn.addEventListener('click', () => {
+            historyList.innerHTML = '';
+        });
+
+        // Barcode Input Handler
+        barcodeInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                const val = barcodeInput.value;
+                if (val.trim()) {
+                    processarCodigo(val);
+                }
+            }
+        });
+
+        // Camera Scanner Feature
+        btnOpenCam.addEventListener('click', async () => {
+            cameraModal.style.display = 'flex';
+            await iniciarCamera();
+        });
+
+        btnCloseCam.addEventListener('click', () => {
+            pararCamera();
+            cameraModal.style.display = 'none';
+            manterFocoInput();
+        });
+
+        async function iniciarCamera() {
+            try {
+                if ('BarcodeDetector' in window) {
+                    barcodeDetector = new BarcodeDetector({ formats: ['code_128', 'code_39', 'qr_code', 'ean_13', 'itf'] });
+                }
+
+                cameraStream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+                });
+                cameraVideo.srcObject = cameraStream;
+                await cameraVideo.play();
+
+                if (barcodeDetector) {
+                    cameraLoopId = requestAnimationFrame(scanVideoFrame);
+                }
+            } catch (err) {
+                alert("Não foi possível acessar a câmera do aparelho: " + err.message);
+                cameraModal.style.display = 'none';
+            }
+        }
+
+        async function scanVideoFrame() {
+            if (cameraModal.style.display === 'flex' && barcodeDetector && cameraVideo.readyState >= 2) {
+                try {
+                    const barcodes = await barcodeDetector.detect(cameraVideo);
+                    if (barcodes.length > 0) {
+                        const raw = barcodes[0].rawValue;
+                        if (raw) {
+                            pararCamera();
+                            cameraModal.style.display = 'none';
+                            processarCodigo(raw);
+                            return;
+                        }
+                    }
+                } catch (_) {}
+                cameraLoopId = requestAnimationFrame(scanVideoFrame);
+            }
+        }
+
+        function pararCamera() {
+            if (cameraLoopId) {
+                cancelAnimationFrame(cameraLoopId);
+                cameraLoopId = null;
+            }
+            if (cameraStream) {
+                cameraStream.getTracks().forEach(t => t.stop());
+                cameraStream = null;
+            }
+        }
+
+        // Init
+        carregarStatus();
+        setInterval(carregarStatus, 5000);
+        manterFocoInput();
+    </script>
+</body>
+</html>

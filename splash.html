@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TurboScan - Carregando</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800;900&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            user-select: none;
+        }
+        body {
+            background: #090d16;
+            color: #f8fafc;
+            font-family: 'Outfit', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+            border: 1px solid #1e293b;
+        }
+        .logo-box {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            margin-bottom: 24px;
+        }
+        .logo-icon {
+            font-size: 2.8rem;
+            filter: drop-shadow(0 0 16px rgba(56, 189, 248, 0.4));
+        }
+        .logo-title {
+            font-size: 2.2rem;
+            font-weight: 900;
+            letter-spacing: 2px;
+            background: linear-gradient(135deg, #ffffff, #38bdf8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .subtitle {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: #94a3b8;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            margin-bottom: 30px;
+        }
+        .loader-bar {
+            width: 280px;
+            height: 4px;
+            background: #1e293b;
+            border-radius: 4px;
+            overflow: hidden;
+            position: relative;
+        }
+        .loader-progress {
+            position: absolute;
+            top: 0;
+            left: 0;
+            height: 100%;
+            width: 40%;
+            background: linear-gradient(90deg, #0284c7, #38bdf8);
+            border-radius: 4px;
+            animation: loading 1.5s infinite ease-in-out;
+        }
+        @keyframes loading {
+            0% { left: -40%; width: 30%; }
+            50% { left: 40%; width: 50%; }
+            100% { left: 100%; width: 30%; }
+        }
+        .status-text {
+            margin-top: 16px;
+            font-size: 0.8rem;
+            color: #64748b;
+            font-weight: 500;
+        }
+        .version-tag {
+            position: absolute;
+            bottom: 16px;
+            font-size: 0.72rem;
+            color: #475569;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="logo-box">
+        <span class="logo-icon">⚡</span>
+        <h1 class="logo-title">TURBOSCAN</h1>
+    </div>
+    <div class="subtitle">Triagem Logística Inteligente & Auditoria</div>
+    <div class="loader-bar">
+        <div class="loader-progress"></div>
+    </div>
+    <div id="status-msg" class="status-text">Inicializando serviços locais...</div>
+    <div class="version-tag">TurboScan v2.3.0 • Windows Edition</div>
+</body>
+</html>

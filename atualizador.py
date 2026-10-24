@@ -24,7 +24,12 @@ RAW_BASE_URL = f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/{
 VERSAO_REMOTA_URL = f"{RAW_BASE_URL}/versao.json"
 
 # Diretório base do sistema
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+def get_base_dir():
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+BASE_DIR = get_base_dir()
 VERSAO_LOCAL_FILE = os.path.join(BASE_DIR, "versao.json")
 BACKUP_DIR = os.path.join(BASE_DIR, "backups_atualizacao")
 
@@ -51,12 +56,12 @@ def obter_versao_local():
         except Exception as e:
             print(f"[Aviso] Erro ao ler versao.json local: {e}")
     
-    # Fallback caso versao.json ainda não exista
+    # Fallback da versão atual instalada
     return {
-        "versao": "2.0.0",
-        "data": "2026-09-13",
-        "titulo": "Versão Inicial",
-        "descricao": "Galpão Monitored 2.0"
+        "versao": "2.3.0",
+        "data": "2026-09-29",
+        "titulo": "TurboScan v2.3.0 Master",
+        "descricao": "TurboScan com master license, sincronização de Excel e multi-plataformas."
     }
 
 
@@ -184,7 +189,7 @@ def aplicar_atualizacao(lista_arquivos=None):
                 url_arquivo,
                 headers={"User-Agent": "Galpao-Monitored-Updater/2.0"}
             )
-            with urllib.request.urlopen(req, timeout=8.0) as resp:
+            with urllib.request.urlopen(req, timeout=30.0) as resp:
                 if resp.status != 200:
                     erros.append(f"HTTP {resp.status} para {nome_arq_limpo}")
                     continue
@@ -201,6 +206,20 @@ def aplicar_atualizacao(lista_arquivos=None):
                     shutil.copy2(caminho_local, caminho_backup)
                 except Exception:
                     pass
+
+            # No Windows, um .exe em execução não pode ser sobrescrito diretamente,
+            # mas o Windows permite renomear o .exe em execução para .old e gravar o novo!
+            if os.path.exists(caminho_local) and nome_arq_limpo.lower().endswith(".exe"):
+                caminho_old = caminho_local + ".old"
+                try:
+                    if os.path.exists(caminho_old):
+                        os.remove(caminho_old)
+                except Exception:
+                    caminho_old = caminho_local + f".{int(time.time())}.old"
+                try:
+                    os.replace(caminho_local, caminho_old)
+                except Exception as e_ren:
+                    print(f"[Aviso] Não foi possível renomear executável ativo: {e_ren}")
 
             # Grava o novo arquivo
             with open(caminho_local, "wb") as f_out:
@@ -240,6 +259,11 @@ def aplicar_atualizacao(lista_arquivos=None):
         }
         with open(VERSAO_LOCAL_FILE, "w", encoding="utf-8") as f_ver:
             json.dump(dados_nova_versao, f_ver, indent=4, ensure_ascii=False)
+        try:
+            from licenca import validar_licenca
+            validar_licenca(forcar_rede=True)
+        except Exception:
+            pass
     except Exception as e:
         print(f"[Aviso] Falha ao atualizar versao.json local: {e}")
 

@@ -1,9 +1,13 @@
 {
-    "chave_pix": "14996405436",
-    "tipo_chave": "TELEFONE",
-    "beneficiario": "GS TRANSPORTES",
-    "cidade": "MARILIA",
-    "valor_padrao_mensalidade": 150.00,
+    "provedor": "ASAAS",
+    "asaas_api_key": "",
+    "asaas_ambiente": "PRODUCAO",
+    "cpf_cnpj_padrao_cliente": "36971699807",
+    "chave_pix": "fernandoapgomez@gmail.com",
+    "tipo_chave": "EMAIL",
+    "beneficiario": "LUIS FERNANDO GOMEZ",
+    "cidade": "AVARE",
+    "valor_padrao_mensalidade": 150.0,
     "mercado_pago_access_token": "",
     "permitir_simulacao_teste": true
 }

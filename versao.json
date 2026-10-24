@@ -1,13 +1,14 @@
 {
-    "versao": "2.4.3",
-    "data": "2026-10-19",
-    "titulo": "TurboScan v2.4.3 - Refinamento de Voz Anti-Divergência e Edição de CEP",
-    "descricao": "Voz inteligente diferenciando consulta por CEP ('Pertence ao motorista') de divergência por cidade ('Pertence a cidade'), correção no campo de motorista ao editar faixa de CEP.",
+    "versao": "2.4.4",
+    "data": "2026-10-24",
+    "titulo": "TurboScan v2.4.4 - Topo Responsivo, Loggi Multi-Base e Coletor Mobile",
+    "descricao": "Correção do corte de botões no topo em qualquer resolução, suporte a grupos por motorista na Loggi e integração do Coletor Mobile.",
     "arquivos": [
         "app.py",
         "app.js",
         "index.html",
         "style.css",
+        "coletor.html",
         "dashboard.html",
         "dashboard.js",
         "dashboard.css",

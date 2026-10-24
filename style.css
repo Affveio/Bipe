@@ -12,20 +12,26 @@ body { background: #0b0c0f; color: #f1f5f9; height: 100vh; overflow: hidden; pad
     background: #0e121a;
     border: 1px solid #1e2638;
     border-radius: 10px;
-    padding: 4px 10px;
-    gap: 6px;
+    padding: 3px 8px;
+    gap: 4px;
     flex-wrap: nowrap;
-    min-height: 44px;
+    min-height: 42px;
     box-sizing: border-box;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
     flex-shrink: 0;
-    overflow: hidden;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+.top-bar::-webkit-scrollbar {
+    display: none;
+    height: 0px;
 }
 
 .logo {
-    font-size: 1.05rem;
+    font-size: 0.95rem;
     font-weight: 900;
-    letter-spacing: 1.5px;
+    letter-spacing: 1px;
     background: linear-gradient(135deg, #ffffff 40%, #38bdf8 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
@@ -40,16 +46,17 @@ body { background: #0b0c0f; color: #f1f5f9; height: 100vh; overflow: hidden; pad
 .top-controls {
     display: flex;
     align-items: center;
-    gap: 5px;
-    flex-shrink: 0;
+    gap: 4px;
+    flex-shrink: 1;
+    min-width: 0;
 }
 
 .control-group {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 3px;
     background: #141822;
-    padding: 0 6px;
+    padding: 0 5px;
     border-radius: 6px;
     border: 1px solid #222b3d;
     height: 30px;
@@ -265,7 +272,7 @@ body { background: #0b0c0f; color: #f1f5f9; height: 100vh; overflow: hidden; pad
 .top-right-group {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
     margin-left: auto;
     flex-shrink: 0;
 }
@@ -1874,4 +1881,74 @@ td, th, td * {
     opacity: 1 !important;
     color: #38bdf8 !important;
     transform: scale(1.2);
+}
+
+.btn-solto-badge.badge-pilha {
+    background: rgba(56, 189, 248, 0.16);
+    color: #38bdf8;
+    border: 1px solid rgba(56, 189, 248, 0.4);
+    font-weight: 800;
+}
+
+.btn-solto-badge.badge-gaiolas,
+.btn-solto-badge.badge-direta {
+    background: rgba(16, 185, 129, 0.24);
+    color: #34d399;
+    border: 1px solid rgba(16, 185, 129, 0.6);
+    font-weight: 800;
+    box-shadow: 0 0 10px rgba(16, 185, 129, 0.35);
+}
+
+
+/* Responsividade do Topo para Telas Menores e Zoom DPI 125% */
+@media (max-width: 1440px) {
+    .logo {
+        font-size: 0.88rem;
+        letter-spacing: 0.8px;
+    }
+    .top-bar {
+        padding: 3px 6px;
+        gap: 3px;
+    }
+    .top-controls {
+        gap: 3px;
+    }
+    .top-right-group {
+        gap: 3px;
+    }
+    .btn-solto-label {
+        font-size: 0.64rem;
+    }
+    .control-group label {
+        font-size: 0.62rem;
+    }
+    .control-group select {
+        font-size: 0.72rem;
+        max-width: 125px;
+    }
+    .btn-licenca-pill {
+        padding: 0 6px;
+        font-size: 0.65rem;
+    }
+    .status-conexao-pill {
+        padding: 0 6px;
+    }
+}
+
+@media (max-width: 1280px) {
+    .btn-solto-label {
+        display: none;
+    }
+    .control-group label {
+        display: none;
+    }
+    #texto-status-licenca {
+        display: none;
+    }
+    #texto-status-conexao {
+        display: none;
+    }
+    .btn-reiniciar-sistema span.reiniciar-label {
+        display: none;
+    }
 }
