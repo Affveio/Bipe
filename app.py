@@ -230,6 +230,10 @@ def inicializar_db():
         cursor.execute("ALTER TABLE motoristas_plataforma ADD COLUMN faixa_cep TEXT DEFAULT ''")
     except Exception:
         pass
+    try:
+        cursor.execute("ALTER TABLE motoristas_plataforma ADD COLUMN bairros TEXT DEFAULT ''")
+    except Exception:
+        pass
     
     # 5. Tabela Divergências Pendentes
     cursor.execute('''
@@ -542,6 +546,7 @@ def sincronizar_motoristas_excel(caminho_arquivo=None):
         col_motorista = -1
         col_plat = -1
         col_cep = -1
+        col_bairro = -1
         col_plat_map = {}
         
         primeira_linha = [str(cell.value or '').strip() for cell in next(ws.iter_rows(min_row=1, max_row=1))]
@@ -579,6 +584,8 @@ def sincronizar_motoristas_excel(caminho_arquivo=None):
                 col_plat = idx
             elif any(k in val for k in ['CEP', 'FAIXA']):
                 col_cep = idx
+            elif any(k in val for k in ['BAIRRO', 'BAIRROS']):
+                col_bairro = idx
 
         # 4. Se não tem coluna única 'MOTORISTA', mas tem colunas por plataforma ('ANJUN', 'IMILE', 'LOGGI')
         if col_cidade != -1 and col_motorista == -1:
@@ -604,13 +611,16 @@ def sincronizar_motoristas_excel(caminho_arquivo=None):
                 faixa_cep_row = str(row[col_cep] or '').strip() if col_cep != -1 and col_cep < len(row) and row[col_cep] is not None else ''
                 if faixa_cep_row.upper() == 'NONE':
                     faixa_cep_row = ''
+                bairros_row = str(row[col_bairro] or '').strip() if col_bairro != -1 and col_bairro < len(row) and row[col_bairro] is not None else ''
+                if bairros_row.upper() == 'NONE':
+                    bairros_row = ''
                 
                 if col_plat_map:
                     for p_nome, c_idx in col_plat_map.items():
                         if c_idx < len(row) and row[c_idx]:
                             m_val = str(row[c_idx]).strip()
                             if m_val and m_val.upper() != 'NONE':
-                                mapeamentos_para_inserir.append((cidade, p_nome, m_val, faixa_cep_row))
+                                mapeamentos_para_inserir.append((cidade, p_nome, m_val, faixa_cep_row, bairros_row))
                 elif col_motorista != -1:
                     motorista = str(row[col_motorista] or '').strip() if col_motorista < len(row) and row[col_motorista] is not None else ''
                     plat_raw = str(row[col_plat] or '').strip().lower() if col_plat != -1 and col_plat < len(row) and row[col_plat] is not None else 'todas'
@@ -630,7 +640,7 @@ def sincronizar_motoristas_excel(caminho_arquivo=None):
                         platas = [plat_raw]
                         
                     for p in platas:
-                        mapeamentos_para_inserir.append((cidade, p, motorista, faixa_cep_row))
+                        mapeamentos_para_inserir.append((cidade, p, motorista, faixa_cep_row, bairros_row))
 
         # 5. Suporte extra: se existir um arquivo Cidades.xlsx separado na pasta do sistema
         path_cidades_avulso = os.path.join(BASE_DIR, "Cidades.xlsx")
@@ -661,21 +671,29 @@ def sincronizar_motoristas_excel(caminho_arquivo=None):
         if mapeamentos_para_inserir:
             # Preserva faixas de CEP existentes caso a planilha importada não tenha coluna de CEP
             faixas_existentes = {}
-            if col_cep == -1:
+            bairros_existentes = {}
+            if col_cep == -1 or col_bairro == -1:
                 try:
-                    cursor.execute("SELECT LOWER(cidade), LOWER(plataforma), LOWER(motorista), COALESCE(faixa_cep, '') FROM motoristas_plataforma WHERE faixa_cep IS NOT NULL AND faixa_cep != ''")
-                    for c_old, p_old, m_old, f_old in cursor.fetchall():
-                        faixas_existentes[(c_old, p_old, m_old)] = f_old
+                    cursor.execute("SELECT LOWER(cidade), LOWER(plataforma), LOWER(motorista), COALESCE(faixa_cep, ''), COALESCE(bairros, '') FROM motoristas_plataforma")
+                    for c_old, p_old, m_old, f_old, b_old in cursor.fetchall():
+                        faixas_existentes[(c_old, p_old, m_old)] = f_old or ""
+                        bairros_existentes[(c_old, p_old, m_old)] = b_old or ""
                 except Exception:
                     pass
             cursor.execute("DELETE FROM motoristas_plataforma")
             cursor.execute("DELETE FROM motoristas")
-            for cid, plat, mot, f_cep in mapeamentos_para_inserir:
+            for item_ins in mapeamentos_para_inserir:
+                cid = item_ins[0]
+                plat = item_ins[1]
+                mot = item_ins[2]
+                f_cep = item_ins[3] if len(item_ins) > 3 else ""
+                b_val = item_ins[4] if len(item_ins) > 4 else ""
                 f_final = f_cep if col_cep != -1 else faixas_existentes.get((cid.lower(), plat.lower(), mot.lower()), "")
+                b_final = b_val if col_bairro != -1 else bairros_existentes.get((cid.lower(), plat.lower(), mot.lower()), "")
                 cursor.execute("""
-                    INSERT OR REPLACE INTO motoristas_plataforma (cidade, plataforma, motorista, faixa_cep)
-                    VALUES (?, ?, ?, ?)
-                """, (cid, plat, mot, f_final))
+                    INSERT OR REPLACE INTO motoristas_plataforma (cidade, plataforma, motorista, faixa_cep, bairros)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (cid, plat, mot, f_final, b_final))
                 if plat == 'anjun':
                     cursor.execute("INSERT OR REPLACE INTO motoristas (cidade, motorista) VALUES (?, ?)", (cid, mot))
                 
@@ -724,7 +742,7 @@ def gerar_planilha_motoristas_excel(caminho_destino=None):
     conn = conectar_banco()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT cidade, motorista, plataforma, COALESCE(faixa_cep, '')
+        SELECT cidade, motorista, plataforma, COALESCE(faixa_cep, ''), COALESCE(bairros, '')
         FROM motoristas_plataforma 
         WHERE cidade NOT IN ('iMile', 'Anjun', 'Geral', 'Sem Cidade', '')
         ORDER BY plataforma ASC, cidade ASC, motorista ASC
@@ -793,7 +811,7 @@ def gerar_planilha_motoristas_excel(caminho_destino=None):
     header_font = Font(name="Arial", size=11, bold=True, color="FFFFFF")
     header_fill = PatternFill(start_color="0284C7", end_color="0284C7", fill_type="solid")
     
-    ws1.append(["CIDADE", "MOTORISTA", "PLATAFORMA", "FAIXA DE CEP (OPCIONAL)"])
+    ws1.append(["CIDADE", "MOTORISTA", "PLATAFORMA", "FAIXA DE CEP (OPCIONAL)", "BAIRROS (OPCIONAL)"])
     for cell in ws1[1]:
         cell.font = header_font
         cell.fill = header_fill
@@ -802,9 +820,14 @@ def gerar_planilha_motoristas_excel(caminho_destino=None):
     mots_imile_mapeados = set()
     mots_anjun_mapeados = set()
     
-    for cid, mot, plat, f_cep in rows_mapeados:
+    for r_map in rows_mapeados:
+        cid = r_map[0]
+        mot = r_map[1]
+        plat = r_map[2]
+        f_cep = r_map[3] if len(r_map) > 3 else ""
+        b_val = r_map[4] if len(r_map) > 4 else ""
         plat_cap = (plat or "TODAS").capitalize()
-        ws1.append([cid, mot, plat_cap, f_cep or ""])
+        ws1.append([cid, mot, plat_cap, f_cep or "", b_val or ""])
         if (plat or '').lower() == 'imile':
             mots_imile_mapeados.add(mot.strip().lower())
         elif (plat or '').lower() == 'anjun':
@@ -831,6 +854,7 @@ def gerar_planilha_motoristas_excel(caminho_destino=None):
     ws1.column_dimensions['B'].width = 34
     ws1.column_dimensions['C'].width = 18
     ws1.column_dimensions['D'].width = 28
+    ws1.column_dimensions['E'].width = 36
 
     # ----------------------------------------------------
     # ABA 2: Lista Completa de Motoristas do Sistema
@@ -2684,6 +2708,44 @@ def normalizar_faixa_cep(texto):
                 partes_norm.append(p)
     return ", ".join(partes_norm)
 
+def normalizar_bairro(txt):
+    if not txt:
+        return ""
+    s = remover_acentos(str(txt).lower()).strip()
+    s = re.sub(r'\bjd\.?\s*', 'jardim ', s)
+    s = re.sub(r'\bvl\.?\s*', 'vila ', s)
+    s = re.sub(r'\bpq\.?\s*', 'parque ', s)
+    s = re.sub(r'\bres\.?\s*', 'residencial ', s)
+    s = re.sub(r'\bconj\.?\s*', 'conjunto ', s)
+    s = re.sub(r'\bbairro\s*', '', s)
+    s = re.sub(r'[^a-z0-9\s]', ' ', s)
+    return ' '.join(s.split())
+
+def bairro_bate_com_regra(bairro_pacote, regra_bairros):
+    """
+    Verifica se o bairro do pacote bate com a lista de bairros permitidos para o motorista
+    (ex: 'Centro, Jardim Europa, Vila Nova'). Suporta abreviações comuns (Jd., Vl., Pq.).
+    """
+    if not bairro_pacote or not regra_bairros:
+        return False
+    norm_pct = normalizar_bairro(bairro_pacote)
+    if not norm_pct:
+        return False
+    partes = [b.strip() for b in re.split(r'[,;/]+', str(regra_bairros)) if b.strip()]
+    for parte in partes:
+        norm_r = normalizar_bairro(parte)
+        if not norm_r:
+            continue
+        if norm_pct == norm_r:
+            return True
+        if len(norm_r) >= 3 and (norm_r in norm_pct or norm_pct in norm_r):
+            return True
+        words_r = set(norm_r.split())
+        words_pct = set(norm_pct.split())
+        if words_r and words_r.issubset(words_pct):
+            return True
+    return False
+
 def cep_bate_com_regra(cep_pacote, regra_cep):
     """
     Verifica se o CEP do pacote (ex: '18701-700' ou '18701700') bate com a regra configurada
@@ -2746,8 +2808,8 @@ def carregar_motoristas(plataforma=None, conta_id=None):
         conn = conectar_banco()
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT cidade, motorista, COALESCE(faixa_cep, '')
-            FROM motoristas_plataforma 
+            SELECT cidade, motorista, COALESCE(faixa_cep, ''), COALESCE(bairros, '')
+            FROM motoristas_plataforma
             WHERE LOWER(plataforma) = LOWER(?) AND cidade NOT IN ('iMile', 'Anjun', 'Geral', 'Sem Cidade', '')
             ORDER BY cidade COLLATE NOCASE ASC, motorista COLLATE NOCASE ASC
         """, (plat_key,))
@@ -2758,10 +2820,11 @@ def carregar_motoristas(plataforma=None, conta_id=None):
             cid = (r[0] or "").strip()
             mot = (r[1] or "").strip()
             f_cep = (r[2] or "").strip() if len(r) > 2 else ""
+            bairros_val = (r[3] or "").strip() if len(r) > 3 else ""
             if cid and mot:
                 if plat_key in ('anjun', 'imile') and not motorista_pertence_a_base_ativa(mot, nomes_base_oficiais, nomes_outras_bases, plat_key):
                     continue
-                resultado.append({"cidade": cid, "motorista": mot, "faixa_cep": f_cep})
+                resultado.append({"cidade": cid, "motorista": mot, "faixa_cep": f_cep, "bairros": bairros_val})
                 motoristas_vistos.add(mot.lower())
     except Exception as e_db:
         print(f"[Aviso] Erro ao carregar motoristas do banco: {e_db}")
@@ -2796,7 +2859,7 @@ def carregar_motoristas(plataforma=None, conta_id=None):
     return resultado
 
 
-def carregar_motoristas_cidade_detalhado(cidade, plataforma=None, cep=None):
+def carregar_motoristas_cidade_detalhado(cidade, plataforma=None, cep=None, bairro=None):
     if not cidade:
         return [], False, False
     if not plataforma:
@@ -2805,6 +2868,7 @@ def carregar_motoristas_cidade_detalhado(cidade, plataforma=None, cep=None):
     plataforma_key = str(plataforma).strip().lower()
     cidade_clean = remover_acentos(str(cidade).strip().lower())
     cep_clean = re.sub(r'\D', '', str(cep or ''))
+    bairro_clean = str(bairro or '').strip()
     
     global _CACHE_RAM_MOTORISTAS_CIDADE
     cache_key = (cidade_clean, plataforma_key)
@@ -2815,7 +2879,7 @@ def carregar_motoristas_cidade_detalhado(cidade, plataforma=None, cep=None):
             conn = conectar_banco()
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT motorista, cidade, COALESCE(faixa_cep, '')
+                SELECT motorista, cidade, COALESCE(faixa_cep, ''), COALESCE(bairros, '')
                 FROM motoristas_plataforma 
                 WHERE LOWER(plataforma) = ?
                 ORDER BY motorista COLLATE NOCASE ASC
@@ -2824,7 +2888,7 @@ def carregar_motoristas_cidade_detalhado(cidade, plataforma=None, cep=None):
             conn.close()
             
             rows_cidade = [
-                (r[0].strip(), (r[2] or "").strip() if len(r) > 2 else "")
+                (r[0].strip(), (r[2] or "").strip(), (r[3] or "").strip() if len(r) > 3 else "")
                 for r in rows
                 if r[0] and r[0].strip() and remover_acentos(r[1].strip().lower()) == cidade_clean
             ]
@@ -2837,7 +2901,7 @@ def carregar_motoristas_cidade_detalhado(cidade, plataforma=None, cep=None):
                     rows2 = cursor2.fetchall()
                     conn2.close()
                     rows_cidade = [
-                        (r[0].strip(), "")
+                        (r[0].strip(), "", "")
                         for r in rows2
                         if r[0] and r[0].strip() and remover_acentos(r[1].strip().lower()) == cidade_clean
                     ]
@@ -2852,35 +2916,97 @@ def carregar_motoristas_cidade_detalhado(cidade, plataforma=None, cep=None):
         return [], False, False
 
     todos_motoristas = []
-    for m_nome, _ in rows_cidade:
+    for m_nome, _, _ in rows_cidade:
         if m_nome not in todos_motoristas:
             todos_motoristas.append(m_nome)
 
-    # Se o pacote tiver CEP e pelo menos um motorista dessa cidade tiver faixa de CEP configurada:
-    tem_regra_cep = any(bool(f_cep) for _, f_cep in rows_cidade)
-    if cep_clean and tem_regra_cep:
-        mots_cep_exato = []
-        mots_sem_regra = []
-        for m_nome, f_cep in rows_cidade:
-            if f_cep:
-                if cep_bate_com_regra(cep_clean, f_cep) and m_nome not in mots_cep_exato:
-                    mots_cep_exato.append(m_nome)
-            else:
-                if m_nome not in mots_sem_regra:
-                    mots_sem_regra.append(m_nome)
-        if mots_cep_exato:
-            return mots_cep_exato, True, tem_regra_cep
-        if mots_sem_regra:
-            return mots_sem_regra, False, tem_regra_cep
-        # Se tem regra de CEP para motoristas desta cidade, e o CEP do pacote não bate com nenhuma regra nem tem motorista sem regra:
-        # Retorna lista vazia para caracterizar que NENHUM motorista está autorizado para este CEP!
-        return [], True, tem_regra_cep
+    tem_regra_cep = any(bool(f_cep) for _, f_cep, _ in rows_cidade)
+    tem_regra_bairro = any(bool(b_str) for _, _, b_str in rows_cidade)
+    tem_alguma_regra = tem_regra_cep or tem_regra_bairro
 
-    return todos_motoristas, False, tem_regra_cep
+    if not tem_alguma_regra:
+        return todos_motoristas, False, False
 
-def carregar_motoristas_cidade(cidade, plataforma=None, cep=None):
-    mots, _, _ = carregar_motoristas_cidade_detalhado(cidade, plataforma, cep)
+    candidatos_especificos = []
+    candidatos_gerais = []
+
+    for m_nome, f_cep, b_str in rows_cidade:
+        tem_restricao_mot = bool(f_cep) or bool(b_str)
+        if not tem_restricao_mot:
+            if m_nome not in candidatos_gerais:
+                candidatos_gerais.append(m_nome)
+            continue
+
+        bateu_cep = bool(cep_clean and f_cep and cep_bate_com_regra(cep_clean, f_cep))
+        bateu_bairro = bool(bairro_clean and b_str and bairro_bate_com_regra(bairro_clean, b_str))
+
+        if f_cep and b_str:
+            if cep_clean and bairro_clean:
+                if bateu_cep or bateu_bairro:
+                    if m_nome not in candidatos_especificos:
+                        candidatos_especificos.append(m_nome)
+            elif cep_clean and bateu_cep:
+                if m_nome not in candidatos_especificos:
+                    candidatos_especificos.append(m_nome)
+            elif bairro_clean and bateu_bairro:
+                if m_nome not in candidatos_especificos:
+                    candidatos_especificos.append(m_nome)
+        elif f_cep and bateu_cep:
+            if m_nome not in candidatos_especificos:
+                candidatos_especificos.append(m_nome)
+        elif b_str and bateu_bairro:
+            if m_nome not in candidatos_especificos:
+                candidatos_especificos.append(m_nome)
+
+    if candidatos_especificos:
+        return candidatos_especificos, True, tem_alguma_regra
+    if candidatos_gerais:
+        return candidatos_gerais, False, tem_alguma_regra
+
+    return [], True, tem_alguma_regra
+
+def carregar_motoristas_cidade(cidade, plataforma=None, cep=None, bairro=None):
+    mots, _, _ = carregar_motoristas_cidade_detalhado(cidade, plataforma, cep, bairro)
     return mots
+
+def obter_cidades_motorista(mot_clean, plataforma_key, da_nome_oficial=None):
+    """
+    Retorna a lista de cidades mapeadas especificamente para este motorista nesta plataforma.
+    Ignora rótulos genéricos como 'iMile', 'Anjun', 'Geral', 'Sem Cidade'.
+    """
+    if not mot_clean or mot_clean in ["---", "Apenas Entrada (Sem Atribuição)"]:
+        return []
+    
+    plat_key = str(plataforma_key or "").strip().lower()
+    norm_mot = normalizar_cidade_estrita(mot_clean)
+    norm_da = normalizar_cidade_estrita(da_nome_oficial) if da_nome_oficial else norm_mot
+
+    try:
+        conn = conectar_banco()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT DISTINCT cidade, motorista
+            FROM motoristas_plataforma
+            WHERE LOWER(plataforma) = LOWER(?) AND cidade NOT IN ('iMile', 'Anjun', 'Geral', 'Sem Cidade', '')
+        """, (plat_key,))
+        rows = cursor.fetchall()
+        conn.close()
+    except Exception:
+        return []
+
+    cidades = []
+    for cid, m in rows:
+        cid_str = (cid or "").strip()
+        m_str = (m or "").strip()
+        if not cid_str or not m_str:
+            continue
+        m_norm = normalizar_cidade_estrita(m_str)
+        if (norm_mot == m_norm or norm_da == m_norm or 
+            (len(m_norm) >= 4 and (m_norm in norm_mot or norm_mot in m_norm)) or
+            (len(norm_da) >= 4 and (m_norm in norm_da or norm_da in m_norm))):
+            if cid_str not in cidades:
+                cidades.append(cid_str)
+    return cidades
 
 _cache_plataformas = None
 
@@ -3472,8 +3598,7 @@ def verificar_tela_login_loggi(drv):
         if "login" in url or "auth" in url or "accounts.google.com" in url:
             return True
         if "arco.loggi.com" in url:
-            # Se não tiver /av3 na url, com certeza ainda não entrou na área autenticada do Arco
-            if "/av3" not in url:
+            if url.rstrip('/') in ["https://arco.loggi.com", "http://arco.loggi.com"]:
                 return True
             res = drv.execute_script("""
                 var txt = (document.body ? document.body.innerText : '').toLowerCase();
@@ -3537,6 +3662,45 @@ def tentar_clicar_login_google_loggi(drv):
         print(f"[!] Erro ao tentar clicar 'Entrar com o Google': {e}")
     return False
 
+def extrair_codigo_base_loggi(driver_ou_url):
+    """
+    Extrai dinamicamente o código da base da Loggi (ex: 'ERE', 'AV3', 'POA') da URL ou abas.
+    """
+    ignorar = {'login', 'auth', 'signin', 'static', 'api', 'logout', 'oauth', 'token'}
+    if isinstance(driver_ou_url, str):
+        urls = [driver_ou_url]
+    elif driver_ou_url:
+        urls = []
+        orig_handle = None
+        try:
+            orig_handle = driver_ou_url.current_window_handle
+            urls.append(driver_ou_url.current_url or '')
+        except Exception:
+            pass
+        try:
+            for h in driver_ou_url.window_handles:
+                if h != orig_handle:
+                    try:
+                        driver_ou_url.switch_to.window(h)
+                        urls.append(driver_ou_url.current_url or '')
+                    except Exception:
+                        pass
+            if orig_handle:
+                driver_ou_url.switch_to.window(orig_handle)
+        except Exception:
+            pass
+    else:
+        urls = []
+        
+    for u in urls:
+        if 'arco.loggi.com' in u.lower():
+            m = re.search(r'arco\.loggi\.com/([a-zA-Z0-9_-]+)', u)
+            if m:
+                code = m.group(1).upper()
+                if code.lower() not in ignorar:
+                    return code
+    return 'AV3'
+
 def garantir_abas_loggi(driver):
     global aba_recebimento, aba_atribuicao, aba_atribuicao_anjun
     if not driver:
@@ -3551,6 +3715,11 @@ def garantir_abas_loggi(driver):
             if handles:
                 aba_recebimento = handles[0]
             return
+
+        base_code = extrair_codigo_base_loggi(driver)
+        recebimento_url = f'https://arco.loggi.com/{base_code}/na-base/colecoes'
+        hoje_url = f'https://arco.loggi.com/{base_code}/hoje'
+        grupos_url = f'https://arco.loggi.com/{base_code}/na-base/grupos'
 
         # 1. Verifica se aba_atribuicao_anjun realmente tem 'grupos' na URL
         aba_grupos_ok = False
@@ -3580,7 +3749,7 @@ def garantir_abas_loggi(driver):
         # 3. Se mesmo assim não achou a aba de grupos, abre uma nova
         if not aba_grupos_ok:
             print("[*] Aba Grupos da Loggi ausente. Abrindo nova aba de grupos...")
-            driver.execute_script("window.open('https://arco.loggi.com/AV3/na-base/grupos', '_blank');")
+            driver.execute_script(f"window.open('{grupos_url}', '_blank');")
             time.sleep(1.0)
             for h in driver.window_handles:
                 try:
@@ -3624,7 +3793,7 @@ def garantir_abas_loggi(driver):
                 try:
                     driver.switch_to.window(aba_recebimento)
                     if "colecoes" not in driver.current_url.lower():
-                        driver.get('https://arco.loggi.com/AV3/na-base/colecoes')
+                        driver.get(recebimento_url)
                         time.sleep(1.0)
                 except Exception:
                     pass
@@ -3655,7 +3824,7 @@ def garantir_abas_loggi(driver):
                     
         if not aba_hoje_ok:
             print("[*] Aba Hoje da Loggi ausente. Abrindo nova aba de hoje...")
-            driver.execute_script("window.open('https://arco.loggi.com/AV3/hoje', '_blank');")
+            driver.execute_script(f"window.open('{hoje_url}', '_blank');")
             time.sleep(1.0)
             for h in driver.window_handles:
                 try:
@@ -3698,11 +3867,12 @@ def fluxo_login_loggi(driver, config):
     except Exception:
         pass
         
-    recebimento_url = config.get('recebimento_url', 'https://arco.loggi.com/AV3/na-base/colecoes')
+    recebimento_url = config.get('recebimento_url', 'https://arco.loggi.com/')
     
     # 2. Navega até a página
     curr_url = (driver.current_url or '').lower()
-    if "/av3" not in curr_url or verificar_tela_login_loggi(driver):
+    esta_na_area_operacional = "arco.loggi.com" in curr_url and not verificar_tela_login_loggi(driver)
+    if not esta_na_area_operacional or verificar_tela_login_loggi(driver):
         driver.get(recebimento_url)
         time.sleep(2.0)
         
@@ -3717,9 +3887,9 @@ def fluxo_login_loggi(driver, config):
                 if not driver or not driver.window_handles:
                     break
                 current_url = driver.current_url.lower()
-                # Critério estrito: arco.loggi.com + /av3 + NÃO na tela de login
-                if "arco.loggi.com" in current_url and "/av3" in current_url and not verificar_tela_login_loggi(driver):
-                    print(f"[+] Login Loggi detectado com sucesso: {current_url}")
+                if "arco.loggi.com" in current_url and not verificar_tela_login_loggi(driver):
+                    base_detectada = extrair_codigo_base_loggi(driver)
+                    print(f"[+] Login Loggi detectado com sucesso: {current_url} | Base: {base_detectada}")
                     login_concluido = True
                     break
                 else:
@@ -3731,7 +3901,14 @@ def fluxo_login_loggi(driver, config):
         if not login_concluido:
             raise Exception("Tempo limite esgotado para o login na Loggi.")
             
-    # 3. Garante que a primeira aba esteja na tela de coleções/recebimento
+    # 3. Detecta a base da unidade (ex: ERE, AV3, etc.)
+    base_code = extrair_codigo_base_loggi(driver) or 'AV3'
+    print(f"[*] Base Loggi identificada: {base_code}")
+    recebimento_url = f"https://arco.loggi.com/{base_code}/na-base/colecoes"
+    hoje_url = f"https://arco.loggi.com/{base_code}/hoje"
+    grupos_url = f"https://arco.loggi.com/{base_code}/na-base/grupos"
+            
+    # 4. Garante que a primeira aba esteja na tela de coleções/recebimento da base detectada
     try:
         if "colecoes" not in driver.current_url.lower():
             driver.get(recebimento_url)
@@ -3754,7 +3931,7 @@ def fluxo_login_loggi(driver, config):
         except Exception:
             pass
     if not tem_hoje:
-        driver.execute_script("window.open('https://arco.loggi.com/AV3/hoje', '_blank');")
+        driver.execute_script(f"window.open('{hoje_url}', '_blank');")
         time.sleep(0.8)
         
     # Aba 3 (Grupos)
@@ -3769,7 +3946,7 @@ def fluxo_login_loggi(driver, config):
         except Exception:
             pass
     if not tem_grupos:
-        driver.execute_script("window.open('https://arco.loggi.com/AV3/na-base/grupos', '_blank');")
+        driver.execute_script(f"window.open('{grupos_url}', '_blank');")
         time.sleep(0.8)
         
     garantir_abas_loggi(driver)
@@ -6528,7 +6705,7 @@ def verificar_sessao_status():
                 try:
                     driver.switch_to.window(h)
                     u = driver.current_url.lower()
-                    if "arco.loggi.com" in u and ("av3" in u or "na-base" in u or "colecoes" in u or "hoje" in u):
+                    if "arco.loggi.com" in u and not verificar_tela_login_loggi(driver):
                         tem_aba_ativa = True
                         break
                 except Exception:
@@ -7332,7 +7509,7 @@ def executar_post_imile(endpoint_path, payload):
                 continue
     return False, f"Internet lenta / oscilação na iMile ({ultimo_erro})", {}
 
-def bipar_pacote_imile_api(codigo_qr, motorista, pacote_solto=False):
+def bipar_pacote_imile_api(codigo_qr, motorista, pacote_solto=False, modo_triagem_direta=False):
     """
     Executa a bipagem ultra-rápida via API na iMile em ~80-150ms:
     1. Descarregamento (se modo pacote solto)
@@ -7468,36 +7645,70 @@ def bipar_pacote_imile_api(codigo_qr, motorista, pacote_solto=False):
 
     # 4. Verificação de Divergência de Cidade / CEP vs Motorista (Anti-Divergência Automático)
     mot_clean = str(motorista).strip() if motorista else ""
-    if mot_clean and mot_clean not in ["---", "Apenas Entrada (Sem Atribuição)"] and cidade_pacote:
+    if modo_triagem_direta:
+        if not cidade_pacote:
+            return "divergente", "Divergência: Pacote sem cidade de destino informada pelo rastreio!", "Sem Cidade", cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
+
         lista_cidades = carregar_cidades()
         cidade_map = encontrar_cidade_mapeada(cidade_pacote, lista_cidades) or cidade_pacote
-        todos_mots_cidade = carregar_motoristas_cidade(cidade_map, "imile")
-        if not todos_mots_cidade and cidade_map != cidade_pacote:
-            todos_mots_cidade = carregar_motoristas_cidade(cidade_pacote, "imile")
-
-        mots_esperados, foi_por_cep, _ = carregar_motoristas_cidade_detalhado(cidade_map, "imile", cep=cep_pacote)
+        mots_esperados, foi_por_regra, _ = carregar_motoristas_cidade_detalhado(cidade_map, "imile", cep=cep_pacote, bairro=bairro_pacote)
         if not mots_esperados and cidade_map != cidade_pacote:
-            mots_esperados, foi_por_cep, _ = carregar_motoristas_cidade_detalhado(cidade_pacote, "imile", cep=cep_pacote)
+            mots_esperados, foi_por_regra, _ = carregar_motoristas_cidade_detalhado(cidade_pacote, "imile", cep=cep_pacote, bairro=bairro_pacote)
+
+        if not mots_esperados:
+            detalhe_loc = f"Bairro {bairro_pacote}" if bairro_pacote else (f"CEP {cep_pacote}" if cep_pacote else "")
+            detalhe_info = f" ({detalhe_loc})" if detalhe_loc else ""
+            msg_alerta = f"Divergência: Nenhum motorista cadastrado para {cidade_pacote}{detalhe_info}!"
+            print(f"[!] [iMile API] DIVERGÊNCIA MODO TRIAGEM DIRETA! {msg_alerta}")
+            return "divergente", msg_alerta, "Sem Motorista", cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
+
+        mot_clean = mots_esperados[0]
+        print(f"[+] [iMile API] MODO TRIAGEM DIRETA: {cidade_pacote} -> Atribuindo automaticamente para {mot_clean}!")
+    elif mot_clean and mot_clean not in ["---", "Apenas Entrada (Sem Atribuição)"] and cidade_pacote:
+        lista_cidades = carregar_cidades()
+        cidade_map = encontrar_cidade_mapeada(cidade_pacote, lista_cidades) or cidade_pacote
+        todos_mots_cidade = carregar_motoristas_cidade(cidade_map, "imile", cep=cep_pacote, bairro=bairro_pacote)
+        if not todos_mots_cidade and cidade_map != cidade_pacote:
+            todos_mots_cidade = carregar_motoristas_cidade(cidade_pacote, "imile", cep=cep_pacote, bairro=bairro_pacote)
+
+        mots_esperados, foi_por_regra, _ = carregar_motoristas_cidade_detalhado(cidade_map, "imile", cep=cep_pacote, bairro=bairro_pacote)
+        if not mots_esperados and cidade_map != cidade_pacote:
+            mots_esperados, foi_por_regra, _ = carregar_motoristas_cidade_detalhado(cidade_pacote, "imile", cep=cep_pacote, bairro=bairro_pacote)
             
         if todos_mots_cidade and not mots_esperados:
-            cep_info = f" (CEP {cep_pacote})" if cep_pacote else ""
-            msg_alerta = f"Divergência de CEP: Pacote de {cidade_pacote}{cep_info} está fora da faixa de CEP permitida para {cidade_pacote}!"
+            detalhe_loc = f"Bairro {bairro_pacote}" if bairro_pacote else (f"CEP {cep_pacote}" if cep_pacote else "")
+            detalhe_info = f" ({detalhe_loc})" if detalhe_loc else ""
+            msg_alerta = f"Divergência: Pacote de {cidade_pacote}{detalhe_info} não está coberto pelas regras permitidas para {cidade_pacote}!"
             print(f"[!] [iMile API] DIVERGÊNCIA! {msg_alerta}")
-            return "divergente", msg_alerta, "Fora da Faixa de CEP", cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
+            return "divergente", msg_alerta, "Fora da Regra", cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
+
+        norm_mot = remover_acentos(mot_clean.lower()).replace('-', '').replace('_', '').replace(' ', '')
+        da_obj_check = resolver_motorista_imile_api(mot_clean)
+        da_uname_norm = remover_acentos(da_obj_check["daName"].lower()).replace('-', '').replace('_', '').replace(' ', '') if da_obj_check else norm_mot
 
         if mots_esperados:
-            norm_mot = remover_acentos(mot_clean.lower()).replace('-', '').replace('_', '').replace(' ', '')
-            da_obj_check = resolver_motorista_imile_api(mot_clean)
-            da_uname_norm = remover_acentos(da_obj_check["daName"].lower()).replace('-', '').replace('_', '').replace(' ', '') if da_obj_check else norm_mot
-            
             mots_esp_norm = [remover_acentos(m.lower()).replace('-', '').replace('_', '').replace(' ', '') for m in mots_esperados]
             
             if norm_mot not in mots_esp_norm and da_uname_norm not in mots_esp_norm:
                 esp_display = " / ".join(mots_esperados)
-                cep_info = f" (CEP {cep_pacote})" if cep_pacote else ""
-                print(f"[!] [iMile API] DIVERGÊNCIA! Pacote de {cidade_pacote}{cep_info} pertence a {esp_display}, mas lote ativo é de {mot_clean}!")
-                mot_retorno = esp_display if foi_por_cep else ""
+                bairro_info = f" ({bairro_pacote})" if bairro_pacote else ""
+                cep_info = f" (CEP {cep_pacote})" if cep_pacote and not bairro_pacote else ""
+                print(f"[!] [iMile API] DIVERGÊNCIA! Pacote de {cidade_pacote}{bairro_info}{cep_info} pertence a {esp_display}, mas lote ativo é de {mot_clean}!")
+                mot_retorno = esp_display if foi_por_regra else ""
                 return "divergente", f"Pacote de {cidade_pacote}{cep_info} pertence a {esp_display}, mas você está bipando a pilha de {mot_clean}!", mot_retorno, cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
+        else:
+            # BLINDAGEM ANTI-DIVERGÊNCIA: Se a cidade do pacote não possui motorista mapeado na iMile,
+            # verifica se o motorista ativo possui cidades mapeadas especificamente para ele nesta plataforma.
+            cidades_mot = obter_cidades_motorista(mot_clean, "imile", da_uname_norm)
+            if cidades_mot:
+                cids_mot_norm = [normalizar_cidade_estrita(c) for c in cidades_mot]
+                cid_teste_norm = normalizar_cidade_estrita(cidade_map or cidade_pacote)
+                if cid_teste_norm not in cids_mot_norm:
+                    cidades_display = " / ".join(cidades_mot)
+                    cep_info = f" (CEP {cep_pacote})" if cep_pacote else ""
+                    msg_alerta = f"Divergência: Pacote de {cidade_pacote}{cep_info} não pertence ao motorista {mot_clean} (Cidades vinculadas: {cidades_display})!"
+                    print(f"[!] [iMile API] DIVERGÊNCIA BLINDADA! {msg_alerta}")
+                    return "divergente", msg_alerta, "", cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
 
     # 5. Atribuição ao Entregador (assignDA)
     mot_nome_final = motorista
@@ -7673,10 +7884,10 @@ def obter_contexto_loggi(drv=None, forcar=False):
         
         routing_code = 'AV3'
         try:
-            curr_u = (alvo.current_url or '').lower()
-            m = re.search(r'/(av\w+)/', curr_u)
-            if m:
-                routing_code = m.group(1).upper()
+            curr_u = (alvo.current_url or '')
+            code_det = extrair_codigo_base_loggi(curr_u)
+            if code_det:
+                routing_code = code_det
         except Exception:
             pass
             
@@ -7797,49 +8008,118 @@ def loggi_listar_grupos_api():
             })
     return grupos
 
-def loggi_criar_novo_grupo_api(cidade, forcar_novo=False):
+def obter_cidades_do_motorista(motorista, plataforma="loggi"):
+    """
+    Retorna a lista de cidades vinculadas ao motorista no banco de dados.
+    """
+    if not motorista or str(motorista).strip() in ["", "---", "Apenas Entrada (Sem Atribuição)"]:
+        return []
+    cidades = []
+    try:
+        conn = conectar_banco()
+        c = conn.cursor()
+        c.execute("SELECT DISTINCT cidade FROM motoristas_plataforma WHERE LOWER(motorista) = LOWER(?) AND (LOWER(plataforma) = LOWER(?) OR LOWER(plataforma) = 'todas')", (str(motorista).strip(), plataforma))
+        cidades = [r[0] for r in c.fetchall() if r[0]]
+        if not cidades:
+            c.execute("SELECT DISTINCT cidade FROM motoristas_plataforma WHERE LOWER(motorista) = LOWER(?)", (str(motorista).strip(),))
+            cidades = [r[0] for r in c.fetchall() if r[0]]
+        if not cidades:
+            c.execute("SELECT DISTINCT cidade FROM motoristas WHERE LOWER(motorista) = LOWER(?)", (str(motorista).strip(),))
+            cidades = [r[0] for r in c.fetchall() if r[0]]
+        conn.close()
+    except Exception as e:
+        print(f"[Aviso] Erro ao buscar cidades do motorista {motorista}: {e}")
+    return cidades
+
+def loggi_criar_novo_grupo_api(cidade=None, motorista=None, forcar_novo=False):
     global grupo_loggi_ativo, aba_atribuicao_anjun, driver
     with _lock_grupo_loggi:
         ctx = obter_contexto_loggi()
         from datetime import datetime
         dia_mes = datetime.now().strftime("%d-%m")
-        cid_limpa = str(cidade or "Geral").strip().title()
-        tag_nome = f"{cid_limpa} {dia_mes}"
+        cid_limpa = str(cidade or "").strip().title()
+        if cid_limpa.lower() in ["geral", "none", "null"]:
+            cid_limpa = ""
+            
+        mot_limpo = str(motorista or "").strip().title()
+        if mot_limpo.lower() in ["---", "apenas entrada (sem atribuição)", "none", "null", "geral"]:
+            mot_limpo = ""
 
-        # 0. Verifica se já está ativo na memória para esta mesma cidade E com a data de HOJE
+        # Regra de Palavra-chave solicitada pelo cliente:
+        # 1. Se tem motorista selecionado: Palavra-chave = [Motorista] [Data] (ex: 'Joao 23-10' ou 'Marcelo 23-10')
+        # 2. Se NÃO tem motorista (apenas cidade): Palavra-chave = [Cidade] [Data] (ex: 'Erechim 23-10')
+        if mot_limpo:
+            tag_nome = f"{mot_limpo} {dia_mes}"
+            cidade_base = cid_limpa or "Geral"
+        elif cid_limpa:
+            tag_nome = f"{cid_limpa} {dia_mes}"
+            cidade_base = cid_limpa
+        else:
+            tag_nome = f"Geral {dia_mes}"
+            cidade_base = "Geral"
+
+        # 0. Verifica se já está ativo na memória para a mesma chave E com a data de HOJE
         placa_mem = grupo_loggi_ativo.get("licensePlate")
         cid_mem = grupo_loggi_ativo.get("cidade")
+        mot_mem = grupo_loggi_ativo.get("motorista")
         tags_mem = grupo_loggi_ativo.get("tags") or []
-        if not forcar_novo and placa_mem and (cidades_sao_iguais(cid_limpa, cid_mem) or any(cidades_sao_iguais(cid_limpa, t) for t in tags_mem)):
-            tag_mem_0 = str(tags_mem[0] if tags_mem else "")
-            # Só reaproveita a memória se contiver a data de HOJE
-            if dia_mes in tag_mem_0:
-                tag_ret = tags_mem[0] if tags_mem else tag_nome
-                return placa_mem, tag_ret
+        
+        if not forcar_novo and placa_mem:
+            if mot_limpo:
+                bateu_mem = (mot_limpo.lower() == str(mot_mem or "").lower()) or any(mot_limpo.lower() in str(t).lower() for t in tags_mem)
+            else:
+                bateu_mem = (cidades_sao_iguais(cid_limpa, cid_mem) or any(cidades_sao_iguais(cid_limpa, t) for t in tags_mem))
+                
+            if bateu_mem:
+                tag_mem_0 = str(tags_mem[0] if tags_mem else "")
+                if dia_mes in tag_mem_0 or not any(char.isdigit() for char in tag_mem_0):
+                    tag_ret = tags_mem[0] if tags_mem else tag_nome
+                    return placa_mem, tag_ret
 
-        # 0.1 Consulta na API da Loggi se JÁ EXISTE um grupo aberto para esta cidade HOJE!
-        # Regra obrigatória: Só reutiliza grupos abertos da DATA DE HOJE (ex: '09-10').
-        # Grupos de datas anteriores (ex: '08-10') NUNCA devem ser reutilizados para bipagem nova!
+        # 0.1 Consulta na API da Loggi se JÁ EXISTE um grupo aberto para este Motorista ou Cidade
         if not forcar_novo:
             try:
                 grupos_abertos = loggi_listar_grupos_api()
                 for g in grupos_abertos:
                     tags_list = g.get("tags", [])
                     tags_str = " ".join(tags_list)
-                    bateu_cidade = any(cidades_sao_iguais(cid_limpa, t) for t in tags_list) or cidades_sao_iguais(cid_limpa, tags_str)
-                    if bateu_cidade and dia_mes in tags_str:
-                        placa_existente = g["licensePlate"]
-                        tag_existente = tags_list[0] if tags_list else tag_nome
-                        grupo_loggi_ativo["licensePlate"] = placa_existente
-                        grupo_loggi_ativo["tags"] = tags_list or [tag_existente]
-                        grupo_loggi_ativo["cidade"] = cid_limpa
-                        grupo_loggi_ativo["quantity"] = g.get("quantity", 0)
-                        print(f"[+] [Loggi API] Grupo existente de HOJE ({dia_mes}) localizado para '{cid_limpa}': Placa {placa_existente} ({tag_existente}). Reutilizando!")
-                        return placa_existente, tag_existente
+                    tags_str_lower = tags_str.lower()
+                    tem_data_hoje = dia_mes in tags_str
+                    
+                    if mot_limpo:
+                        # Busca por motorista: ex: 'Marcelo 23-10' ou 'MARCELO'
+                        bateu = (mot_limpo.lower() in tags_str_lower)
+                        if bateu and (tem_data_hoje or tags_str_lower.strip() == mot_limpo.lower()):
+                            placa_existente = g["licensePlate"]
+                            tag_existente = tags_list[0] if tags_list else tag_nome
+                            grupo_loggi_ativo["licensePlate"] = placa_existente
+                            grupo_loggi_ativo["tags"] = tags_list or [tag_existente]
+                            grupo_loggi_ativo["cidade"] = cidade_base
+                            grupo_loggi_ativo["motorista"] = mot_limpo
+                            grupo_loggi_ativo["quantity"] = g.get("quantity", 0)
+                            print(f"[+] [Loggi API] Grupo existente de HOJE localizado para o Motorista '{mot_limpo}': Placa {placa_existente} ({tag_existente}). Reutilizando!")
+                            return placa_existente, tag_existente
+                    elif cid_limpa:
+                        # Busca apenas por cidade: ex: 'Erechim 23-10' ou 'ERECHIM'
+                        bateu = (
+                            cidades_sao_iguais(cid_limpa, tags_str) 
+                            or any(cidades_sao_iguais(cid_limpa, t) for t in tags_list)
+                            or cid_limpa.lower() in tags_str_lower
+                        )
+                        if bateu and (tem_data_hoje or tags_str_lower.strip() == cid_limpa.lower()):
+                            placa_existente = g["licensePlate"]
+                            tag_existente = tags_list[0] if tags_list else tag_nome
+                            grupo_loggi_ativo["licensePlate"] = placa_existente
+                            grupo_loggi_ativo["tags"] = tags_list or [tag_existente]
+                            grupo_loggi_ativo["cidade"] = cid_limpa
+                            grupo_loggi_ativo["motorista"] = None
+                            grupo_loggi_ativo["quantity"] = g.get("quantity", 0)
+                            print(f"[+] [Loggi API] Grupo existente de HOJE localizado para a Cidade '{cid_limpa}': Placa {placa_existente} ({tag_existente}). Reutilizando!")
+                            return placa_existente, tag_existente
             except Exception as e_chk:
                 print(f"[Aviso] Falha ao consultar grupos existentes antes de criar: {e_chk}")
         
-        # 1. Gera nova placa de unitLoad (somente se não existir nenhum grupo aberto para a cidade)
+        # 1. Gera nova placa de unitLoad (somente se não existir nenhum grupo aberto)
         url_ul = 'https://leve.loggi.com/proxy/wms/api/v1/get-create-unitload'
         payload_ul = json.dumps({
             'prefixLicensePlate': ctx['routing_code'],
@@ -7856,7 +8136,7 @@ def loggi_criar_novo_grupo_api(cidade, forcar_novo=False):
         if not nova_placa:
             raise Exception("Placa de grupo retornada vazia pela Loggi.")
             
-        # 2. Cria o grupo com a palavra-chave (Cidade Dia-Mês)
+        # 2. Cria o grupo com a palavra-chave (Motorista Dia-Mês ou Cidade Dia-Mês)
         url_create = f"https://leve.loggi.com/api/v1/last_mile/{ctx['company_id']}:{ctx['dc_id']}/package-group/create"
         payload_create = json.dumps({
             "licensePlate": nova_placa,
@@ -7873,7 +8153,8 @@ def loggi_criar_novo_grupo_api(cidade, forcar_novo=False):
             
         grupo_loggi_ativo["licensePlate"] = nova_placa
         grupo_loggi_ativo["tags"] = [tag_nome]
-        grupo_loggi_ativo["cidade"] = cid_limpa
+        grupo_loggi_ativo["cidade"] = cidade_base
+        grupo_loggi_ativo["motorista"] = mot_limpo
         grupo_loggi_ativo["modo"] = "novo"
         grupo_loggi_ativo["quantity"] = 0
         
@@ -7963,7 +8244,7 @@ def resolver_pacote_avulso_loggi(codigo_procurado, ctx):
         print(f"[Aviso] Falha ao resolver pacote avulso Loggi: {e}")
     return None
 
-def bipar_pacote_loggi_api(codigo_qr, cidades_selecionadas=None, motorista_lote=None):
+def bipar_pacote_loggi_api(codigo_qr, cidades_selecionadas=None, motorista_lote=None, modo_triagem_direta=False):
     """
     Executa a bipagem ultra-rápida via API na Loggi em ~120-200ms:
     1. Entrada/Recebimento na Base (move-package para AV3 COL 01)
@@ -8142,48 +8423,67 @@ def bipar_pacote_loggi_api(codigo_qr, cidades_selecionadas=None, motorista_lote=
         endereco=endereco
     )
     
-    # 3. Anti-Divergência (Comparação Estrita de Cidade - permite múltiplas cidades no mesmo grupo novo ou existente)
-    cidades_permitidas = []
-    if cidades_selecionadas:
-        cidades_permitidas.extend([str(c).strip() for c in cidades_selecionadas if c])
-    if grupo_loggi_ativo.get("cidades_autorizadas"):
-        cidades_permitidas.extend([str(c).strip() for c in grupo_loggi_ativo.get("cidades_autorizadas", []) if c])
-    if grupo_loggi_ativo.get("tags"):
-        cidades_permitidas.extend([str(c).strip() for c in grupo_loggi_ativo.get("tags", []) if c])
-    if grupo_loggi_ativo.get("cidade"):
-        cidades_permitidas.append(str(grupo_loggi_ativo.get("cidade")).strip())
-    if motorista_lote and str(motorista_lote).strip() not in ["", "---", "Apenas Entrada (Sem Atribuição)"]:
-        cidades_permitidas.append(str(motorista_lote).strip())
-    # Remove duplicados preservando ordem
-    cidades_permitidas = list(dict.fromkeys(c for c in cidades_permitidas if c))
-        
-    if cidades_permitidas and cidade_destino:
-        bateu = any(cidades_sao_iguais(cidade_destino, p) for p in cidades_permitidas)
-        if not bateu:
-            esperado_display = ", ".join(cidades_permitidas) if cidades_permitidas else (grupo_loggi_ativo.get("cidade") or motorista_lote)
-            print(f"[!] [Loggi API] DIVERGÊNCIA DETECTADA! Pacote de '{cidade_destino}', esperado '{esperado_display}'")
+    # 3. Anti-Divergência
+    tem_motorista_lote = bool(motorista_lote and str(motorista_lote).strip() not in ["", "---", "Apenas Entrada (Sem Atribuição)"])
+    
+    if tem_motorista_lote:
+        # REGRA SOLICITADA: Quando o motorista é selecionado (ex: Joao), busca no banco quais cidades ele atende
+        # e valida se o pacote bipado pertence a uma das cidades dele!
+        cidades_motorista = obter_cidades_do_motorista(motorista_lote, "loggi")
+        if cidades_motorista and cidade_destino:
+            bateu_mot_cidade = any(cidades_sao_iguais(cidade_destino, c) for c in cidades_motorista)
+            if not bateu_mot_cidade:
+                cids_display = ", ".join(cidades_motorista)
+                msg_alerta = f"Divergência: Pacote é de {cidade_destino}, mas o motorista {motorista_lote} atende: {cids_display}!"
+                print(f"[!] [Loggi API] DIVERGÊNCIA MOTORISTA! {msg_alerta}")
+                return "divergente", msg_alerta, motorista_lote, cidade_destino, cep, empresa, endereco
+    elif modo_triagem_direta:
+        if not cidade_destino:
+            return "divergente", "Divergência: Pacote sem cidade de destino informada pela Loggi!", "Sem Cidade", cidade_destino, cep, empresa, endereco
+        mots_esperados, foi_por_regra, _ = carregar_motoristas_cidade_detalhado(cidade_destino, "loggi", cep=cep, bairro=bairro)
+        if not mots_esperados:
+            msg_alerta = f"Divergência: Nenhum motorista/rota cadastrada para {cidade_destino}!"
+            print(f"[!] [Loggi API] DIVERGÊNCIA MODO TRIAGEM DIRETA! {msg_alerta}")
+            return "divergente", msg_alerta, "Sem Rota", cidade_destino, cep, empresa, endereco
+    elif cidades_selecionadas:
+        cidades_permitidas = [str(c).strip() for c in cidades_selecionadas if c]
+        if cidade_destino and not any(cidades_sao_iguais(cidade_destino, p) for p in cidades_permitidas):
+            esperado_display = ", ".join(cidades_permitidas)
             return "divergente", f"Pacote é de {cidade_destino}, mas o grupo é de {esperado_display}", esperado_display, cidade_destino, cep, empresa, endereco
 
-    # 4. Atribuição ao Grupo Ativo (Único por Cidade + Data)
-    if cidades_selecionadas and len(cidades_selecionadas) > 0 and cidades_selecionadas[0]:
-        cid_para_criar = str(cidades_selecionadas[0]).strip()
-    elif grupo_loggi_ativo.get("modo") == "existente" and grupo_loggi_ativo.get("cidade"):
-        cid_para_criar = str(grupo_loggi_ativo.get("cidade")).strip()
+    # 4. Atribuição ao Grupo Ativo (Motorista + Data ou Cidade + Data)
+    if tem_motorista_lote:
+        mot_para_criar = str(motorista_lote).strip()
+        cid_para_criar = str(cidade_destino or "Geral").strip()
     else:
-        cid_para_criar = str(cidade_destino or grupo_loggi_ativo.get("cidade") or "Geral").strip()
+        mot_para_criar = None
+        if cidades_selecionadas and len(cidades_selecionadas) > 0 and cidades_selecionadas[0]:
+            cid_para_criar = str(cidades_selecionadas[0]).strip()
+        elif grupo_loggi_ativo.get("modo") == "existente" and grupo_loggi_ativo.get("cidade"):
+            cid_para_criar = str(grupo_loggi_ativo.get("cidade")).strip()
+        else:
+            cid_para_criar = str(cidade_destino or grupo_loggi_ativo.get("cidade") or "Geral").strip()
 
     placa_grupo = grupo_loggi_ativo.get("licensePlate")
     if placa_grupo and grupo_loggi_ativo.get("modo") != "existente":
         cid_grp_atual = grupo_loggi_ativo.get("cidade")
+        mot_grp_atual = grupo_loggi_ativo.get("motorista")
         tags_grp_atual = grupo_loggi_ativo.get("tags") or []
-        if not (cidades_sao_iguais(cid_para_criar, cid_grp_atual) or any(cidades_sao_iguais(cid_para_criar, t) for t in tags_grp_atual)):
+        
+        if mot_para_criar:
+            bateu_ativo = (mot_para_criar.lower() == str(mot_grp_atual or "").lower()) or any(mot_para_criar.lower() in str(t).lower() for t in tags_grp_atual)
+        else:
+            bateu_ativo = (cidades_sao_iguais(cid_para_criar, cid_grp_atual) or any(cidades_sao_iguais(cid_para_criar, t) for t in tags_grp_atual))
+
+        if not bateu_ativo:
             placa_grupo = None
             grupo_loggi_ativo["licensePlate"] = None
             grupo_loggi_ativo["tags"] = []
+            grupo_loggi_ativo["cidade"] = None
+            grupo_loggi_ativo["motorista"] = None
 
     if not placa_grupo:
-        # loggi_criar_novo_grupo_api já verifica automaticamente se existe um grupo aberto para a cidade e o reutiliza!
-        placa_grupo, tag_criada = loggi_criar_novo_grupo_api(cid_para_criar)
+        placa_grupo, tag_criada = loggi_criar_novo_grupo_api(cidade=cid_para_criar, motorista=mot_para_criar)
             
     # Move para o grupo com verificação real e até 3 tentativas automáticas (evita pacote ficar preso em Avulsos!)
     url_move_group = f"https://leve.loggi.com/proxy/last-mile/v1/{ctx['company_id']}:{ctx['dc_id']}/group-packages/validate-and-move-packages"
@@ -8392,6 +8692,7 @@ cache_sessoes_anjun_por_conta = {}
 mapa_motorista_sessao_anjun = {}
 waybills_cancelados_anjun = set()
 _ultimo_sync_lotes_anjun = 0
+ultimo_erro_finalizacao_anjun = ""
 
 def carregar_tokens_anjun_salvos():
     try:
@@ -9012,7 +9313,7 @@ def resolver_motorista_anjun_api(mot_clean):
 
     return None
 
-def bipar_pacote_anjun_api(codigo_qr, motorista):
+def bipar_pacote_anjun_api(codigo_qr, motorista, modo_triagem_direta=False):
     """
     Executa a bipagem ultra-rápida via API na Anjun Express em ~60-100ms:
     1. Entrada na Base (warehousingScan + queryList + warehousingUpload)
@@ -9292,23 +9593,43 @@ def bipar_pacote_anjun_api(codigo_qr, motorista):
 
     # 3. VERIFICAÇÃO DE DIVERGÊNCIA DE CIDADE / CEP vs MOTORISTA
     mot_clean = str(motorista).strip() if motorista else ""
-    if mot_clean and mot_clean not in ["---", "Apenas Entrada (Sem Atribuição)"]:
+    if modo_triagem_direta:
+        if not cidade_pacote:
+            return "divergente", "Divergência: Pacote sem cidade de destino informada pelo rastreio!", "Sem Cidade", cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
+
+        lista_cidades = carregar_cidades()
+        cidade_map = encontrar_cidade_mapeada(cidade_pacote, lista_cidades) or cidade_pacote
+        mots_esperados, foi_por_regra, _ = carregar_motoristas_cidade_detalhado(cidade_map, "anjun", cep=cep_pacote, bairro=bairro_pacote)
+        if not mots_esperados and cidade_map != cidade_pacote:
+            mots_esperados, foi_por_regra, _ = carregar_motoristas_cidade_detalhado(cidade_pacote, "anjun", cep=cep_pacote, bairro=bairro_pacote)
+
+        if not mots_esperados:
+            detalhe_loc = f"Bairro {bairro_pacote}" if bairro_pacote else (f"CEP {cep_pacote}" if cep_pacote else "")
+            detalhe_info = f" ({detalhe_loc})" if detalhe_loc else ""
+            msg_alerta = f"Divergência: Nenhum motorista cadastrado para {cidade_pacote}{detalhe_info}!"
+            print(f"[!] [Anjun API] DIVERGÊNCIA MODO TRIAGEM DIRETA! {msg_alerta}")
+            return "divergente", msg_alerta, "Sem Motorista", cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
+
+        mot_clean = mots_esperados[0]
+        print(f"[+] [Anjun API] MODO TRIAGEM DIRETA: {cidade_pacote} -> Atribuindo automaticamente para {mot_clean}!")
+    elif mot_clean and mot_clean not in ["---", "Apenas Entrada (Sem Atribuição)"]:
         if cidade_pacote:
             lista_cidades = carregar_cidades()
             cidade_map = encontrar_cidade_mapeada(cidade_pacote, lista_cidades) or cidade_pacote
-            todos_mots_cidade = carregar_motoristas_cidade(cidade_map, "anjun")
+            todos_mots_cidade = carregar_motoristas_cidade(cidade_map, "anjun", cep=cep_pacote, bairro=bairro_pacote)
             if not todos_mots_cidade and cidade_map != cidade_pacote:
-                todos_mots_cidade = carregar_motoristas_cidade(cidade_pacote, "anjun")
+                todos_mots_cidade = carregar_motoristas_cidade(cidade_pacote, "anjun", cep=cep_pacote, bairro=bairro_pacote)
 
-            mots_esperados, foi_por_cep, _ = carregar_motoristas_cidade_detalhado(cidade_map, "anjun", cep=cep_pacote)
+            mots_esperados, foi_por_regra, _ = carregar_motoristas_cidade_detalhado(cidade_map, "anjun", cep=cep_pacote, bairro=bairro_pacote)
             if not mots_esperados and cidade_map != cidade_pacote:
-                mots_esperados, foi_por_cep, _ = carregar_motoristas_cidade_detalhado(cidade_pacote, "anjun", cep=cep_pacote)
-                
+                mots_esperados, foi_por_regra, _ = carregar_motoristas_cidade_detalhado(cidade_pacote, "anjun", cep=cep_pacote, bairro=bairro_pacote)
+
             if todos_mots_cidade and not mots_esperados:
-                cep_info = f" (CEP {cep_pacote})" if cep_pacote else ""
-                msg_alerta = f"Divergência de CEP: Pacote de {cidade_pacote}{cep_info} está fora da faixa de CEP permitida para {cidade_pacote}!"
+                detalhe_loc = f"Bairro {bairro_pacote}" if bairro_pacote else (f"CEP {cep_pacote}" if cep_pacote else "")
+                detalhe_info = f" ({detalhe_loc})" if detalhe_loc else ""
+                msg_alerta = f"Divergência: Pacote de {cidade_pacote}{detalhe_info} não está coberto pelas regras permitidas para {cidade_pacote}!"
                 print(f"[!] [Anjun API] DIVERGÊNCIA! {msg_alerta}")
-                return "divergente", msg_alerta, "Fora da Faixa de CEP", cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
+                return "divergente", msg_alerta, "Fora da Regra", cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
 
             if mots_esperados:
                 norm_mot = remover_acentos(mot_clean.lower()).replace('-', '').replace('_', '').replace(' ', '')
@@ -9319,7 +9640,6 @@ def bipar_pacote_anjun_api(codigo_qr, motorista):
                 
                 if norm_mot not in mots_esp_norm and da_uname_norm not in mots_esp_norm:
                     # NOVA REGRA INTELIGENTE DE AUTO-ATRIBUIÇÃO PARA GRUPO ABERTO!
-                    # 1. Verifica quais motoristas têm pacotes pendentes (grupo aberto) na Anjun atualmente
                     def _buscar_candidatos_abertos(forcar=False):
                         mots_com_lote = obter_motoristas_com_lote_aberto_anjun(forcar_sync=forcar)
                         encontrados = []
@@ -9346,22 +9666,34 @@ def bipar_pacote_anjun_api(codigo_qr, motorista):
                     if not candidatos_abertos:
                         candidatos_abertos = _buscar_candidatos_abertos(forcar=True)
                     
-                    cep_info = f" (CEP {cep_pacote})" if cep_pacote else ""
+                    bairro_info = f" ({bairro_pacote})" if bairro_pacote else ""
+                    cep_info = f" (CEP {cep_pacote})" if cep_pacote and not bairro_pacote else ""
                     if len(candidatos_abertos) == 1:
-                        # Exatamente um motorista desta cidade/CEP tem grupo aberto! Redireciona automaticamente!
                         mot_auto = candidatos_abertos[0]
-                        print(f"[+] [Anjun Auto-Atribuição] Pacote de {cidade_pacote}{cep_info} redirecionado automaticamente para o grupo aberto de {mot_auto}!")
+                        print(f"[+] [Anjun Auto-Atribuição] Pacote de {cidade_pacote}{bairro_info}{cep_info} redirecionado automaticamente para o grupo aberto de {mot_auto}!")
                         mot_clean = mot_auto
                     else:
-                        # Nenhum grupo aberto ou mais de um grupo aberto (ambiguidade). Alerta o operador!
                         esp_display = " / ".join(mots_esperados)
                         if not candidatos_abertos:
-                            msg_alerta = f"Pacote de {cidade_pacote}{cep_info} pertence a {esp_display}, mas não há grupo aberto. Selecione o motorista na tela para iniciar o lote."
+                            msg_alerta = f"Pacote de {cidade_pacote}{bairro_info}{cep_info} pertence a {esp_display}, mas não há grupo aberto. Selecione o motorista na tela para iniciar o lote."
                         else:
-                            msg_alerta = f"Pacote de {cidade_pacote}{cep_info} possui mais de um grupo aberto ({', '.join(candidatos_abertos)}). Selecione o motorista desejado na tela."
+                            msg_alerta = f"Pacote de {cidade_pacote}{bairro_info}{cep_info} possui mais de um grupo aberto ({', '.join(candidatos_abertos)}). Selecione o motorista desejado na tela."
                         print(f"[!] [Anjun API] DIVERGÊNCIA! {msg_alerta}")
-                        mot_retorno = esp_display if foi_por_cep else ""
+                        mot_retorno = esp_display if foi_por_regra else ""
                         return "divergente", msg_alerta, mot_retorno, cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
+            else:
+                # BLINDAGEM ANTI-DIVERGÊNCIA: Se a cidade do pacote não possui motorista mapeado na Anjun,
+                # verifica se o motorista ativo possui cidades mapeadas especificamente para ele nesta plataforma.
+                cidades_mot = obter_cidades_motorista(mot_clean, "anjun", da_uname_norm if 'da_uname_norm' in locals() else None)
+                if cidades_mot:
+                    cids_mot_norm = [normalizar_cidade_estrita(c) for c in cidades_mot]
+                    cid_teste_norm = normalizar_cidade_estrita(cidade_map or cidade_pacote)
+                    if cid_teste_norm not in cids_mot_norm:
+                        cidades_display = " / ".join(cidades_mot)
+                        cep_info = f" (CEP {cep_pacote})" if cep_pacote else ""
+                        msg_alerta = f"Divergência: Pacote de {cidade_pacote}{cep_info} não pertence ao motorista {mot_clean} (Cidades vinculadas: {cidades_display})!"
+                        print(f"[!] [Anjun API] DIVERGÊNCIA BLINDADA! {msg_alerta}")
+                        return "divergente", msg_alerta, "", cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
 
     # 4. ATRIBUIÇÃO AO ENTREGADOR (Aba 3)
     mot_nome_final = motorista
@@ -9425,7 +9757,8 @@ def finalizar_lote_anjun_api(motorista, reload_tab=True):
     Chama printList -> sortByAddrList -> printListTaskNumber -> page.
     Nunca clica no botão físico da tela web (pois a tabela web mistura todos os motoristas do galpão).
     """
-    global driver, aba_atribuicao_anjun, mapa_motorista_sessao_anjun
+    global driver, aba_atribuicao_anjun, mapa_motorista_sessao_anjun, ultimo_erro_finalizacao_anjun
+    ultimo_erro_finalizacao_anjun = ""
     mot_clean = str(motorista).strip() if motorista else ""
     if not mot_clean:
         return False, 0
@@ -9519,6 +9852,12 @@ def finalizar_lote_anjun_api(motorista, reload_tab=True):
     print(f"[*] [Anjun API] Finalizando lote de {da_username} (ID: {da_id}, {len(pacotes_lote)} pacotes)...")
 
     if not token_usado or not pacotes_lote or not da_username or not da_id:
+        if not token_usado:
+            ultimo_erro_finalizacao_anjun = "Sessão/conta Anjun não conectada no navegador."
+        elif not da_id:
+            ultimo_erro_finalizacao_anjun = f"Entregador '{da_username}' não localizado na Anjun."
+        elif not pacotes_lote:
+            ultimo_erro_finalizacao_anjun = "Nenhum pacote em aberto para este motorista."
         print(f"[!] [Anjun API] Dados insuficientes para finalizar lote de {da_username}: token={bool(token_usado)}, pacotes={len(pacotes_lote)}, da_id={da_id}")
         return False, 0
 
@@ -9601,8 +9940,10 @@ def finalizar_lote_anjun_api(motorista, reload_tab=True):
             sucesso_api = True
             print(f"[+] [Anjun API] Lote de {len(pacotes_lote)} pacotes finalizado com sucesso via API para {da_username}!")
         else:
+            ultimo_erro_finalizacao_anjun = msg_tn or "Servidor Anjun recusou a finalização do lote."
             print(f"[!] [Anjun API] printListTaskNumber falhou para {da_username}: {msg_tn}")
     except Exception as e_fin:
+        ultimo_erro_finalizacao_anjun = str(e_fin)
         print(f"[!] [Anjun API] Erro na finalização via API: {e_fin}")
 
     if not sucesso_api:
@@ -10464,9 +10805,10 @@ def atribuicao_finalizar():
             print(f"[+] [Anjun API] Lote finalizado com sucesso via API para {motorista} (Qtd: {contagem_lote})!")
             return jsonify({"status": "sucesso", "quantidade": contagem_lote})
         else:
+            motivo = ultimo_erro_finalizacao_anjun or "Verifique se a conta Anjun correspondente está logada."
             return jsonify({
                 "status": "erro",
-                "mensagem": f"Não foi possível finalizar o lote de '{motorista}' na Anjun. Verifique se a conta Anjun correspondente está logada."
+                "mensagem": f"Não foi possível finalizar o lote de '{motorista}' na Anjun: {motivo}"
             }), 400
 
     return jsonify({"status": "erro", "mensagem": "Plataforma não reconhecida."}), 400
@@ -10809,6 +11151,7 @@ def salvar_motoristas():
             cid_alvo = (dados.get("cidade") or "").strip()
             mot_alvo = (dados.get("motorista") or "").strip()
             faixa_cep_alvo = normalizar_faixa_cep(dados.get("faixa_cep") or "")
+            bairros_alvo = (dados.get("bairros") or "").strip()
             cid_antiga = (dados.get("cidade_antiga") or "").strip()
             mot_antigo = (dados.get("motorista_antigo") or "").strip()
 
@@ -10837,8 +11180,8 @@ def salvar_motoristas():
                 if _eh_cidade_valida(cid_alvo) and mot_alvo:
                     cursor.execute("INSERT OR IGNORE INTO cidades (cidade) VALUES (?)", (cid_alvo,))
                     cursor.execute(
-                        "INSERT OR REPLACE INTO motoristas_plataforma (cidade, plataforma, motorista, faixa_cep) VALUES (?, ?, ?, ?)",
-                        (cid_alvo, plat_id, mot_alvo, faixa_cep_alvo)
+                        "INSERT OR REPLACE INTO motoristas_plataforma (cidade, plataforma, motorista, faixa_cep, bairros) VALUES (?, ?, ?, ?, ?)",
+                        (cid_alvo, plat_id, mot_alvo, faixa_cep_alvo, bairros_alvo)
                     )
                     if plat_id == 'anjun':
                         cursor.execute(
@@ -10862,8 +11205,9 @@ def salvar_motoristas():
                         c = (item.get("cidade") or "").strip()
                         m = (item.get("motorista") or "").strip()
                         f_cep = normalizar_faixa_cep(item.get("faixa_cep") or "")
+                        b_val = (item.get("bairros") or "").strip()
                         if _eh_cidade_valida(c) and m:
-                            lista_mapeamentos.append((c, m, f_cep))
+                            lista_mapeamentos.append((c, m, f_cep, b_val))
             elif isinstance(motoristas, dict):
                 for c, m in motoristas.items():
                     c_clean = str(c).strip()
@@ -10883,28 +11227,38 @@ def salvar_motoristas():
                 return jsonify({"status": "erro", "mensagem": "Formato de motoristas inválido."}), 400
 
             # Preserva mapeamentos que pertencem a outras bases (e preserva faixa_cep existente se não veio no payload)
-            cursor.execute("SELECT cidade, motorista, COALESCE(faixa_cep, '') FROM motoristas_plataforma WHERE LOWER(plataforma) = LOWER(?)", (plat_id,))
+            cursor.execute("SELECT cidade, motorista, COALESCE(faixa_cep, ''), COALESCE(bairros, '') FROM motoristas_plataforma WHERE LOWER(plataforma) = LOWER(?)", (plat_id,))
             existentes = cursor.fetchall()
             preservados_outras_bases = []
-            cep_existente_map = {(c_ex.strip().lower(), m_ex.strip().lower()): (f_ex or "").strip() for c_ex, m_ex, f_ex in existentes if c_ex and m_ex}
+            cep_existente_map = {(c_ex.strip().lower(), m_ex.strip().lower()): ((f_ex or "").strip(), (b_ex or "").strip()) for c_ex, m_ex, f_ex, b_ex in existentes if c_ex and m_ex}
             if plat_id in ('anjun', 'imile') and (nomes_base_oficiais or nomes_outras_bases):
-                for c_ex, m_ex, f_ex in existentes:
+                for c_ex, m_ex, f_ex, b_ex in existentes:
                     if _eh_cidade_valida(c_ex) and m_ex and not motorista_pertence_a_base_ativa(m_ex, nomes_base_oficiais, nomes_outras_bases, plat_id):
-                        preservados_outras_bases.append((c_ex, m_ex, (f_ex or "").strip()))
+                        preservados_outras_bases.append((c_ex, m_ex, (f_ex or "").strip(), (b_ex or "").strip()))
 
             lista_mapeamentos_final = []
-            for cid_i, mot_i, f_cep_i in lista_mapeamentos:
-                if not f_cep_i:
-                    f_cep_i = cep_existente_map.get((cid_i.strip().lower(), mot_i.strip().lower()), "")
-                lista_mapeamentos_final.append((cid_i, mot_i, f_cep_i))
+            for item_m in lista_mapeamentos:
+                cid_i = item_m[0]
+                mot_i = item_m[1]
+                f_cep_i = item_m[2] if len(item_m) > 2 else ""
+                b_val_i = item_m[3] if len(item_m) > 3 else ""
+                if not f_cep_i or not b_val_i:
+                    f_old, b_old = cep_existente_map.get((cid_i.strip().lower(), mot_i.strip().lower()), ("", ""))
+                    if not f_cep_i: f_cep_i = f_old
+                    if not b_val_i: b_val_i = b_old
+                lista_mapeamentos_final.append((cid_i, mot_i, f_cep_i, b_val_i))
 
             todos_para_salvar = lista_mapeamentos_final + preservados_outras_bases
 
             cursor.execute("DELETE FROM motoristas_plataforma WHERE LOWER(plataforma) = LOWER(?)", (plat_id,))
-            for cid, mot, f_cep in todos_para_salvar:
+            for item_save in todos_para_salvar:
+                cid = item_save[0]
+                mot = item_save[1]
+                f_cep = item_save[2] if len(item_save) > 2 else ""
+                b_val = item_save[3] if len(item_save) > 3 else ""
                 if _eh_cidade_valida(cid):
                     cursor.execute("INSERT OR IGNORE INTO cidades (cidade) VALUES (?)", (cid,))
-                cursor.execute("INSERT OR REPLACE INTO motoristas_plataforma (cidade, plataforma, motorista, faixa_cep) VALUES (?, ?, ?, ?)", (cid, plat_id, mot, f_cep))
+                cursor.execute("INSERT OR REPLACE INTO motoristas_plataforma (cidade, plataforma, motorista, faixa_cep, bairros) VALUES (?, ?, ?, ?, ?)", (cid, plat_id, mot, f_cep, b_val))
 
             if plat_id == 'anjun':
                 cursor.execute("DELETE FROM motoristas")
@@ -10930,7 +11284,7 @@ def salvar_motoristas():
             conn_json = conectar_banco()
             cursor_json = conn_json.cursor()
             cursor_json.execute("""
-                SELECT cidade, plataforma, motorista, COALESCE(faixa_cep, '')
+                SELECT cidade, plataforma, motorista, COALESCE(faixa_cep, ''), COALESCE(bairros, '')
                 FROM motoristas_plataforma
                 WHERE LOWER(cidade) NOT IN ('sem cidade', 'geral', 'imile', 'anjun', '')
                 ORDER BY plataforma, cidade, motorista
@@ -10944,11 +11298,14 @@ def salvar_motoristas():
                 plat = r_json[1]
                 mot = r_json[2]
                 f_cep = (r_json[3] or "").strip() if len(r_json) > 3 else ""
+                b_val = (r_json[4] or "").strip() if len(r_json) > 4 else ""
                 if plat not in mapeamento_completo:
                     mapeamento_completo[plat] = []
                 item_json = {"cidade": cid, "motorista": mot}
                 if f_cep:
                     item_json["faixa_cep"] = f_cep
+                if b_val:
+                    item_json["bairros"] = b_val
                 mapeamento_completo[plat].append(item_json)
                 
             with open(CONFIG_MOTORISTAS, 'w', encoding='utf-8') as f:
@@ -11290,9 +11647,10 @@ def loggi_definir_grupo_route():
 def loggi_criar_grupo_route():
     dados = request.get_json(silent=True) or {}
     cidade = dados.get("cidade", "Geral")
+    motorista = dados.get("motorista")
     forcar = dados.get("forcar", True)
     try:
-        nova_placa, tag_nome = loggi_criar_novo_grupo_api(cidade, forcar_novo=forcar)
+        nova_placa, tag_nome = loggi_criar_novo_grupo_api(cidade, motorista=motorista, forcar_novo=forcar)
         return jsonify({
             "status": "sucesso",
             "licensePlate": nova_placa,
@@ -11414,6 +11772,9 @@ def processar_bip():
     if not motorista_lote and cidades_selecionadas:
         motorista_lote = cidades_selecionadas[0]
     pacote_solto = bool(dados.get("pacote_solto", False))
+    triagem_direta = bool(dados.get("triagem_direta", False))
+    if triagem_direta:
+        tem_motorista = True
     
     # Inicializa variáveis auxiliares de logs para evitar UnboundLocalError nos tratamentos de exceções
     recebedor = "---"
@@ -11559,7 +11920,7 @@ def processar_bip():
             # --- MOTOR DE BIPAGEM DIRETA VIA API LOGGI (SUB-150MS) ---
             print("[*] [Loggi] Disparando bipagem direta via API Ultra-Rápida...")
             sucesso_api, msg_api, mot_final, cid_api, cep_api, rec_api, end_api = bipar_pacote_loggi_api(
-                codigo_qr, cidades_selecionadas, motorista_lote
+                codigo_qr, cidades_selecionadas, motorista_lote, modo_triagem_direta=triagem_direta
             )
             
             if sucesso_api is True or (sucesso_api and sucesso_api != "divergente"):
@@ -11606,6 +11967,7 @@ def processar_bip():
                     "status": "sucesso",
                     "cidade": cidade_detectada,
                     "motorista": motorista,
+                    "triagem_direta": triagem_direta,
                     "recebedor": recebedor,
                     "cep": cep,
                     "endereco": endereco,
@@ -11673,7 +12035,7 @@ def processar_bip():
         elif (p_id == 'imile' or 'imile' in config['recebimento_url'].lower()):
             # --- MOTOR DE BIPAGEM DIRETA VIA API IMILE (SUB-100MS) ---
             print("[*] [iMile] Disparando bipagem direta via API Ultra-Rápida...")
-            sucesso_api, msg_api, mot_final, cid_api, cep_api, rec_api, end_api = bipar_pacote_imile_api(codigo_qr, motorista_lote, pacote_solto)
+            sucesso_api, msg_api, mot_final, cid_api, cep_api, rec_api, end_api = bipar_pacote_imile_api(codigo_qr, motorista_lote, pacote_solto, modo_triagem_direta=triagem_direta)
             
             if sucesso_api is True:
                 cidade_detectada = cid_api if cid_api else "iMile"
@@ -11685,6 +12047,8 @@ def processar_bip():
                 # Incrementa contagem local
                 if motorista_lote:
                     contagem_motoristas[motorista_lote] = contagem_motoristas.get(motorista_lote, 0) + 1
+                elif motorista:
+                    contagem_motoristas[motorista] = contagem_motoristas.get(motorista, 0) + 1
                 
                 # Se for duplicado, anula a atribuição anterior para corrigir a contagem
                 if pacote_duplicado:
@@ -11719,7 +12083,8 @@ def processar_bip():
                 return jsonify({
                     "status": "sucesso",
                     "cidade": cidade_detectada,
-                    "motorista": motorista_lote,
+                    "motorista": motorista or motorista_lote,
+                    "triagem_direta": triagem_direta,
                     "recebedor": recebedor,
                     "cep": cep,
                     "endereco": endereco,
@@ -11884,7 +12249,7 @@ def processar_bip():
         elif (p_id == 'anjun' or 'anjun' in config.get('recebimento_url', '').lower() or 'anjun' in str(plataforma_ativa or '').lower()):
             # --- MOTOR DE BIPAGEM DIRETA VIA API ANJUN EXPRESS (SUB-100MS) ---
             print("[*] [Anjun] Disparando bipagem direta via API Ultra-Rápida...")
-            sucesso_api, msg_api, mot_final, cid_api, cep_api, rec_api, end_api = bipar_pacote_anjun_api(codigo_qr, motorista_lote)
+            sucesso_api, msg_api, mot_final, cid_api, cep_api, rec_api, end_api = bipar_pacote_anjun_api(codigo_qr, motorista_lote, modo_triagem_direta=triagem_direta)
             
             if sucesso_api is True:
                 cidade_detectada = cid_api if cid_api else "Anjun"
@@ -13808,6 +14173,114 @@ def _tarefas_boot_background():
     threading.Thread(target=_loop_heartbeat_periodico, daemon=True).start()
     threading.Thread(target=monitor_auto_finalizacao_anjun, daemon=True).start()
 
+# ==============================================================================
+# MÓDULO COLETOR MOBILE (TURBOSCAN COLETOR ANDROID / PDA WI-FI)
+# ==============================================================================
+
+def obter_ip_rede_local():
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+    except Exception:
+        try:
+            ip = socket.gethostbyname(socket.gethostname())
+        except Exception:
+            ip = '127.0.0.1'
+    finally:
+        s.close()
+    return ip
+
+def gerar_qr_code_base64(texto):
+    try:
+        import qrcode
+        import io, base64
+        qr = qrcode.QRCode(box_size=6, border=2)
+        qr.add_data(texto)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode('utf-8')
+    except Exception as e:
+        print(f"[!] Erro ao gerar QR Code: {e}")
+        return ""
+
+@app.route('/coletor')
+def rota_coletor_mobile():
+    caminho = os.path.join(BASE_DIR, 'coletor.html')
+    if os.path.exists(caminho):
+        with open(caminho, 'r', encoding='utf-8') as f:
+            return f.read(), 200, {'Content-Type': 'text/html; charset=utf-8'}
+    return "Arquivo coletor.html não encontrado no servidor.", 404
+
+@app.route('/api/coletor/info', methods=['GET'])
+def rota_coletor_info():
+    ip = obter_ip_rede_local()
+    porta = 5055
+    url = f"http://{ip}:{porta}/coletor"
+    qr = gerar_qr_code_base64(url)
+    return jsonify({
+        "status": "sucesso",
+        "ip": ip,
+        "porta": porta,
+        "url": url,
+        "qrcode": qr
+    })
+
+@app.route('/api/coletor/status', methods=['GET'])
+def rota_coletor_status():
+    global plataforma_ativa, motorista_atribuicao_ativa, contagem_motoristas
+    try:
+        plat = (plataforma_ativa or "anjun").lower()
+        conn = conectar_banco()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT DISTINCT motorista FROM motoristas_plataforma WHERE LOWER(plataforma) = LOWER(?) AND motorista NOT IN ('Sem Motorista', 'Geral', '---', '') ORDER BY motorista ASC",
+            (plat,)
+        )
+        mots = [r[0] for r in cursor.fetchall() if r[0]]
+        conn.close()
+
+        if not mots:
+            mots_salvos = obter_motoristas_da_base_salvos(plat, conta_ativa)
+            if mots_salvos:
+                mots = mots_salvos
+
+        return jsonify({
+            "status": "sucesso",
+            "plataforma": plat,
+            "motorista_ativo": motorista_atribuicao_ativa or "",
+            "contagem": contagem_motoristas.get(motorista_atribuicao_ativa, 0) if motorista_atribuicao_ativa else 0,
+            "motoristas": sorted(list(set(mots))),
+            "contagem_total_hoje": sum(contagem_motoristas.values()) if contagem_motoristas else 0
+        })
+    except Exception as e:
+        return jsonify({"status": "erro", "mensagem": str(e)}), 500
+
+@app.route('/api/coletor/trocar-plataforma', methods=['POST'])
+def rota_coletor_trocar_plataforma():
+    global plataforma_ativa, motorista_atribuicao_ativa
+    dados = request.get_json(force=True) or {}
+    nova_plat = str(dados.get("plataforma") or "").strip().lower()
+    if nova_plat in ['anjun', 'imile', 'loggi']:
+        plataforma_ativa = nova_plat
+        motorista_atribuicao_ativa = None
+        print(f"[Coletor Mobile] Plataforma alterada para: {nova_plat.upper()}")
+        return jsonify({"status": "sucesso", "plataforma": nova_plat})
+    return jsonify({"status": "erro", "mensagem": "Plataforma inválida"}), 400
+
+@app.route('/api/coletor/trocar-motorista', methods=['POST'])
+def rota_coletor_trocar_motorista():
+    global motorista_atribuicao_ativa
+    dados = request.get_json(force=True) or {}
+    novo_mot = str(dados.get("motorista") or "").strip()
+    motorista_atribuicao_ativa = novo_mot if novo_mot not in ["", "---", "Sem Motorista"] else None
+    print(f"[Coletor Mobile] Motorista ativo alterado para: {motorista_atribuicao_ativa or 'Nenhum'}")
+    return jsonify({"status": "sucesso", "motorista": motorista_atribuicao_ativa or ""})
+
+
 if __name__ == '__main__':
     # Inicializa o banco de dados SQLite e realiza migração dos JSONs legados
     inicializar_db()
@@ -13822,5 +14295,5 @@ if __name__ == '__main__':
     print(" SERVIDOR MULTI-PLATAFORMA DA TRIAGEM LOGÍSTICA INICIADO")
     print(" Porta: 5055 | CORS Habilitado")
     print("=" * 60)
-    app.run(host='127.0.0.1', port=5055, threaded=True)
+    app.run(host='0.0.0.0', port=5055, threaded=True)
 
