@@ -1,8 +1,8 @@
 {
-    "versao": "2.4.4",
+    "versao": "2.4.5",
     "data": "2026-10-24",
-    "titulo": "TurboScan v2.4.4 - Topo Responsivo, Loggi Multi-Base e Coletor Mobile",
-    "descricao": "Correção do corte de botões no topo em qualquer resolução, suporte a grupos por motorista na Loggi e integração do Coletor Mobile.",
+    "titulo": "TurboScan v2.4.5 - Atribuição Garantida em Pacotes Divergentes",
+    "descricao": "Atribuição garantida para o motorista/lote selecionado mesmo em pacotes divergentes na Loggi, iMile e Anjun, mantendo alertas de voz e sirene ativos.",
     "arquivos": [
         "app.py",
         "app.js",
