@@ -1,8 +1,8 @@
 {
-    "versao": "2.4.5",
-    "data": "2026-10-24",
-    "titulo": "TurboScan v2.4.5 - Atribuição Garantida em Pacotes Divergentes",
-    "descricao": "Atribuição garantida para o motorista/lote selecionado mesmo em pacotes divergentes na Loggi, iMile e Anjun, mantendo alertas de voz e sirene ativos.",
+    "versao": "2.4.6",
+    "data": "2026-10-27",
+    "titulo": "TurboScan v2.4.6 - Correção Anti-Divergência Multi-Cidades Loggi",
+    "descricao": "Bloqueio e alerta sonoro/visual rigoroso de divergência entre cidades de grupos e motoristas na Loggi.",
     "arquivos": [
         "app.py",
         "app.js",
