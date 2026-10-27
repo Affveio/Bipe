@@ -115,6 +115,9 @@
             gap: 6px;
             cursor: pointer;
             transition: all 0.15s ease;
+            touch-action: manipulation;
+            -webkit-user-select: none;
+            user-select: none;
         }
 
         .btn-control:active {
@@ -399,7 +402,7 @@
             right: 0;
             bottom: 0;
             background: rgba(0,0,0,0.7);
-            z-index: 90;
+            z-index: 200;
             align-items: flex-end;
             justify-content: center;
         }
@@ -442,6 +445,9 @@
             align-items: center;
             justify-content: space-between;
             cursor: pointer;
+            touch-action: manipulation;
+            -webkit-user-select: none;
+            user-select: none;
         }
 
         .sheet-opt:active {
@@ -557,8 +563,11 @@
         <!-- Scan Input Field -->
         <div class="input-card">
             <div class="input-row">
-                <input type="text" id="barcode-input" class="barcode-input" placeholder="Aponte o leitor laser aqui..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" autofocus>
+                <input type="text" id="barcode-input" class="barcode-input" placeholder="Aponte o leitor laser aqui..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" inputmode="none">
                 <button type="button" id="btn-open-cam" class="btn-cam" title="Abrir câmera">📷</button>
+            </div>
+            <div id="fila-indicator" style="display:none; font-size:0.8rem; color:#38bdf8; font-weight:700; text-align:center; padding: 4px 8px; background: rgba(56, 189, 248, 0.1); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 6px;">
+                ⚡ Fila ativa: <span id="fila-count">0</span> pacote(s) pendente(s)
             </div>
         </div>
 
@@ -594,34 +603,83 @@
     <!-- Platform Selection Sheet -->
     <div id="sheet-plataforma">
         <div class="sheet-content">
-            <div class="sheet-title">Trocar Transportadora</div>
-            <div class="sheet-opt" data-plat="anjun">
-                <span>🚚 Anjun Express</span>
-                <span class="check-mark">✓</span>
-            </div>
-            <div class="sheet-opt" data-plat="imile">
-                <span>📦 iMile Delivery</span>
-                <span class="check-mark"></span>
-            </div>
-            <div class="sheet-opt" data-plat="loggi">
-                <span>⚡ Loggi</span>
-                <span class="check-mark"></span>
+            <div class="sheet-title">Selecionar Transportadora / Base</div>
+            <div id="container-opcoes-contas" style="display: flex; flex-direction: column; gap: 8px; max-height: 60vh; overflow-y: auto;">
+                <div class="sheet-opt" data-plat="anjun" data-conta="padrao" onclick="selecionarContaEPlataforma('anjun', 'padrao', 'Anjun Express', '🚚')">
+                    <span>🚚 Anjun Express</span>
+                    <span class="check-mark">✓</span>
+                </div>
+                <div class="sheet-opt" data-plat="imile" data-conta="padrao" onclick="selecionarContaEPlataforma('imile', 'padrao', 'iMile Delivery', '📦')">
+                    <span>📦 iMile Delivery</span>
+                    <span class="check-mark"></span>
+                </div>
+                <div class="sheet-opt" data-plat="loggi" data-conta="padrao" onclick="selecionarContaEPlataforma('loggi', 'padrao', 'Loggi', '⚡')">
+                    <span>⚡ Loggi</span>
+                    <span class="check-mark"></span>
+                </div>
             </div>
             <button id="btn-close-sheet" style="background: #334155; color: #fff; border: none; padding: 12px; border-radius: 8px; font-weight: 700; margin-top: 6px; cursor: pointer;">Cancelar</button>
         </div>
     </div>
 
-    <!-- Camera Scanner Modal -->
+    <!-- Camera Scanner Modal (Modo Contínuo) -->
     <div id="camera-modal">
+        <div style="font-size:0.95rem; font-weight:800; color:#38bdf8; margin-bottom:8px; display:flex; align-items:center; gap:6px;">
+            <span>📷 Modo Contínuo Ativo</span>
+            <span style="font-size:0.75rem; color:#94a3b8; font-weight:normal;">(Aponte para os pacotes)</span>
+        </div>
         <video id="camera-video" playsinline></video>
+        <div id="cam-result-pill" style="display:none; padding:10px 14px; border-radius:10px; font-weight:800; font-size:1rem; margin-top:10px; text-align:center; max-width:400px; width:100%; box-shadow:0 4px 14px rgba(0,0,0,0.5);">
+            <div id="cam-pill-mot" style="font-size:1.35rem; font-weight:900;"></div>
+            <div id="cam-pill-det" style="font-size:0.85rem; opacity:0.9; margin-top:2px;"></div>
+        </div>
         <div class="cam-controls">
             <button id="btn-close-cam" class="btn-close-cam">Fechar Câmera</button>
+        </div>
+    </div>
+
+    <!-- Hidden Native Camera Photo Input -->
+    <input type="file" id="input-foto-cam" accept="image/*" capture="environment" style="display: none;">
+
+    <!-- Modal Ajuda Câmera (HTTP / Wi-Fi) -->
+    <div id="modal-ajuda-camera" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.88); z-index:110; align-items:center; justify-content:center; padding:18px;">
+        <div style="background:#111827; border:1px solid #38bdf8; border-radius:14px; max-width:420px; width:100%; padding:20px; color:#f8fafc; font-size:0.88rem; line-height:1.45; box-shadow:0 10px 30px rgba(0,0,0,0.8);">
+            <div style="font-size:1.1rem; font-weight:900; color:#38bdf8; margin-bottom:10px; display:flex; align-items:center; gap:8px;">
+                📷 Câmera do Celular
+            </div>
+            
+            <button id="btn-tirar-foto-direta" style="width:100%; background:#0284c7; color:#fff; border:none; padding:12px; border-radius:8px; font-weight:800; font-size:0.95rem; cursor:pointer; margin-bottom:14px; display:flex; align-items:center; justify-content:center; gap:8px;">
+                📸 Abrir Câmera e Tirar Foto
+            </button>
+
+            <div style="background:#1e293b; border-left:3px solid #38bdf8; padding:10px 12px; border-radius:6px; margin-bottom:14px; font-size:0.82rem;">
+                <strong style="color:#38bdf8;">Ou ative o Leitor Contínuo no Chrome (30s):</strong><br>
+                1. No Chrome do celular, abra: <code style="color:#fde047; font-weight:bold;">chrome://flags</code><br>
+                2. Na busca, digite: <code style="color:#fde047;">insecure</code><br>
+                3. Em <em>"Insecure origins treated as secure"</em>, cole o endereço:<br>
+                <div style="display:flex; align-items:center; gap:6px; margin:6px 0;">
+                    <input id="input-origem-segura" type="text" readonly style="flex:1; background:#0f172a; border:1px solid #334155; color:#38bdf8; font-size:0.75rem; padding:6px; border-radius:4px; font-weight:bold;" />
+                    <button id="btn-copiar-origem" style="background:#0284c7; color:#fff; border:none; padding:6px 10px; border-radius:4px; font-weight:bold; font-size:0.75rem; cursor:pointer;">Copiar</button>
+                </div>
+                4. Selecione <strong>Enabled</strong> e toque em <strong>Relaunch</strong>.
+            </div>
+            <p style="color:#94a3b8; font-size:0.76rem; margin-bottom:14px; background:#0f172a; padding:8px; border-radius:6px;">
+                💡 <strong>Dica Galpão:</strong> Em coletores/PDAs com leitor laser físico ou leitor bluetooth, ele lê direto no campo sem usar câmera!
+            </p>
+            <button id="btn-fechar-ajuda-cam" style="width:100%; background:#1e293b; border:1px solid #334155; color:#fff; padding:10px; border-radius:8px; font-weight:bold; cursor:pointer;">Fechar Janela</button>
         </div>
     </div>
 
     <script>
         // State
         let plataformaAtiva = 'anjun';
+        let contaAtiva = 'padrao';
+        let nomeContaExibicao = 'Anjun Express';
+        try {
+            plataformaAtiva = localStorage.getItem('turboscan_coletor_plat') || 'anjun';
+            contaAtiva = localStorage.getItem('turboscan_coletor_conta') || 'padrao';
+            nomeContaExibicao = localStorage.getItem('turboscan_coletor_nome') || 'Anjun Express';
+        } catch (_) {}
         let modoTriagemDireta = true;
         let motoristaAtivo = '';
         let contagemSessao = 0;
@@ -658,6 +716,79 @@
         const cameraModal = document.getElementById('camera-modal');
         const cameraVideo = document.getElementById('camera-video');
         const btnCloseCam = document.getElementById('btn-close-cam');
+
+        const modalAjudaCamera = document.getElementById('modal-ajuda-camera');
+        const inputOrigemSegura = document.getElementById('input-origem-segura');
+        const btnCopiarOrigem = document.getElementById('btn-copiar-origem');
+        const btnFecharAjudaCam = document.getElementById('btn-fechar-ajuda-cam');
+        const btnTirarFotoDireta = document.getElementById('btn-tirar-foto-direta');
+        const inputFotoCam = document.getElementById('input-foto-cam');
+
+        if (inputOrigemSegura) {
+            inputOrigemSegura.value = window.location.origin;
+        }
+
+        if (btnCopiarOrigem) {
+            btnCopiarOrigem.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(window.location.origin);
+                } else if (inputOrigemSegura) {
+                    inputOrigemSegura.select();
+                    document.execCommand('copy');
+                }
+                btnCopiarOrigem.innerText = 'Copiado!';
+                setTimeout(() => { btnCopiarOrigem.innerText = 'Copiar'; }, 2000);
+            });
+        }
+
+        if (btnFecharAjudaCam) {
+            btnFecharAjudaCam.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (modalAjudaCamera) modalAjudaCamera.style.display = 'none';
+                manterFocoInput(false);
+            });
+        }
+
+        if (modalAjudaCamera) {
+            modalAjudaCamera.addEventListener('click', (e) => {
+                if (e.target === modalAjudaCamera) {
+                    modalAjudaCamera.style.display = 'none';
+                    manterFocoInput(false);
+                }
+            });
+        }
+
+        if (btnTirarFotoDireta && inputFotoCam) {
+            btnTirarFotoDireta.addEventListener('click', (e) => {
+                e.stopPropagation();
+                inputFotoCam.click();
+            });
+        }
+
+        if (inputFotoCam) {
+            inputFotoCam.addEventListener('change', async (e) => {
+                const file = e.target.files && e.target.files[0];
+                if (!file) return;
+                try {
+                    if (modalAjudaCamera) modalAjudaCamera.style.display = 'none';
+                    if ('BarcodeDetector' in window) {
+                        const bmp = await createImageBitmap(file);
+                        const det = new BarcodeDetector({ formats: ['code_128', 'code_39', 'qr_code', 'ean_13', 'itf'] });
+                        const codes = await det.detect(bmp);
+                        if (codes && codes.length > 0 && codes[0].rawValue) {
+                            processarCodigo(codes[0].rawValue);
+                            return;
+                        }
+                    }
+                    alert("Foto capturada! Caso a câmera de foto não decodifique a etiqueta, digite o código ou use leitor PDA.");
+                } catch (err) {
+                    console.warn("Erro ao ler foto:", err);
+                } finally {
+                    inputFotoCam.value = '';
+                }
+            });
+        }
 
         // Web Audio Synthesizer Beeps
         let audioCtx = null;
@@ -728,23 +859,61 @@
             } catch (_) {}
         }
 
-        // Auto Focus Input Management
-        function manterFocoInput() {
+        // Polyfill Element.prototype.closest para WebViews legadas em PDAs
+        if (!Element.prototype.closest) {
+            Element.prototype.closest = function(s) {
+                var el = this;
+                do {
+                    if (el.matches && el.matches(s)) return el;
+                    el = el.parentElement || el.parentNode;
+                } while (el !== null && el.nodeType === 1);
+                return null;
+            };
+        }
+
+        // Auto Focus Input Management (Suprime teclado virtual no PDA/Celular a menos que toque no input)
+        function manterFocoInput(forcarTeclado) {
             if (cameraModal.style.display !== 'flex' && sheetPlataforma.style.display !== 'flex') {
+                if (!forcarTeclado && barcodeInput.inputMode !== 'none') {
+                    barcodeInput.inputMode = 'none';
+                }
                 if (document.activeElement !== barcodeInput) {
-                    barcodeInput.focus();
+                    try {
+                        barcodeInput.focus({ preventScroll: true });
+                    } catch (_) {
+                        barcodeInput.focus();
+                    }
                 }
             }
         }
-        document.addEventListener('click', (e) => {
+        barcodeInput.addEventListener('click', function(e) {
+            barcodeInput.inputMode = 'text';
+            barcodeInput.focus();
+        });
+        barcodeInput.addEventListener('touchend', function(e) {
+            barcodeInput.inputMode = 'text';
+        });
+
+        document.addEventListener('click', function(e) {
             if (sheetPlataforma.style.display === 'flex' || cameraModal.style.display === 'flex') return;
-            if (!['BUTTON', 'SELECT', 'INPUT'].includes(e.target.tagName)) {
-                manterFocoInput();
+            if (e.target !== barcodeInput) {
+                barcodeInput.inputMode = 'none';
+            }
+            var interativo = e.target && e.target.closest ? e.target.closest('button, select, input, a, .btn-control, .sheet-opt, #sheet-plataforma') : null;
+            if (!interativo && e.target) {
+                var tag = (e.target.tagName || '').toUpperCase();
+                if (['BUTTON', 'SELECT', 'INPUT', 'A'].indexOf(tag) === -1) {
+                    manterFocoInput(false);
+                }
             }
         });
 
         // Toggle Modo Triagem Direta vs Pilha
-        btnModoTriagem.addEventListener('click', () => {
+        function toggleModoTriagem(e) {
+            if (e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
             modoTriagemDireta = !modoTriagemDireta;
             if (modoTriagemDireta) {
                 btnModoTriagem.className = 'btn-control active-triagem';
@@ -755,116 +924,313 @@
                 btnModoTriagem.innerHTML = '<span>📦 Modo Pilha</span>';
                 driverBar.style.display = 'flex';
             }
-            manterFocoInput();
-        });
+            manterFocoInput(false);
+        }
+        btnModoTriagem.addEventListener('click', toggleModoTriagem);
+        btnModoTriagem.addEventListener('touchend', toggleModoTriagem);
 
-        // Platform Selector Sheet
-        btnPlatSelector.addEventListener('click', (e) => {
-            e.stopPropagation();
+        // Platform Selector Sheet (compatível com Toque e Clique em PDAs)
+        function abrirSheetPlataforma(e) {
+            if (e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
             sheetPlataforma.style.display = 'flex';
-        });
+        }
+        btnPlatSelector.addEventListener('click', abrirSheetPlataforma);
+        btnPlatSelector.addEventListener('touchend', abrirSheetPlataforma);
 
-        btnCloseSheet.addEventListener('click', (e) => {
-            e.stopPropagation();
+        function fecharSheetPlataforma(e) {
+            if (e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
             sheetPlataforma.style.display = 'none';
-            manterFocoInput();
-        });
+            manterFocoInput(false);
+        }
+        btnCloseSheet.addEventListener('click', fecharSheetPlataforma);
+        btnCloseSheet.addEventListener('touchend', fecharSheetPlataforma);
 
-        sheetPlataforma.addEventListener('click', (e) => {
+        sheetPlataforma.addEventListener('click', function(e) {
             if (e.target === sheetPlataforma) {
-                e.stopPropagation();
-                sheetPlataforma.style.display = 'none';
-                manterFocoInput();
+                fecharSheetPlataforma(e);
             }
         });
 
-        document.querySelectorAll('.sheet-opt').forEach(opt => {
-            opt.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                const plat = opt.getAttribute('data-plat');
-                sheetPlataforma.style.display = 'none';
-                await trocarPlataforma(plat);
-                manterFocoInput();
-            });
-        });
-
-        async function trocarPlataforma(plat) {
-            try {
-                plataformaAtiva = plat;
-                atualizarUiPlataforma(plat);
-                const res = await fetch('/api/coletor/trocar-plataforma', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ plataforma: plat })
-                });
-                if (res.ok) {
-                    await carregarStatus();
-                    falarTexto(plat === 'imile' ? 'iMile Delivery' : (plat === 'loggi' ? 'Loggi' : 'Anjun Express'));
+        function tratarAcaoSheetOpt(e) {
+            var el = e.target;
+            var opt = el && el.closest ? el.closest('.sheet-opt') : null;
+            if (opt) {
+                if (e) {
+                    e.preventDefault();
+                    e.stopPropagation();
                 }
-            } catch (e) {
-                console.error("Erro ao trocar plataforma:", e);
+                var plat = opt.getAttribute('data-plat');
+                var cId = opt.getAttribute('data-conta') || 'padrao';
+                var elNome = opt.querySelector('strong, span');
+                var nome = (elNome && elNome.innerText) ? elNome.innerText.trim() : plat;
+                var elIcone = opt.querySelector('span');
+                var icone = (elIcone && elIcone.innerText) ? elIcone.innerText.trim() : '';
+                selecionarContaEPlataforma(plat, cId, nome, icone);
             }
         }
+        document.addEventListener('click', tratarAcaoSheetOpt);
+        document.addEventListener('touchend', tratarAcaoSheetOpt);
 
-        function atualizarUiPlataforma(plat) {
-            document.querySelectorAll('.sheet-opt').forEach(opt => {
-                const isSel = opt.getAttribute('data-plat') === plat;
-                opt.className = 'sheet-opt' + (isSel ? ' selected' : '');
-                opt.querySelector('.check-mark').innerText = isSel ? '✓' : '';
+        function renderizarOpcoesContas(opcoes) {
+            const container = document.getElementById('container-opcoes-contas');
+            if (!container || !Array.isArray(opcoes)) return;
+            // Se o menu estiver aberto na tela sendo tocado pelo operador, não limpa para não abortar o clique
+            if (sheetPlataforma && sheetPlataforma.style.display === 'flex') return;
+            container.innerHTML = '';
+            opcoes.forEach(opt => {
+                const isSel = (opt.plataforma === plataformaAtiva) && 
+                              (opt.conta_id === contaAtiva || (!contaAtiva && opt.conta_id === 'padrao') || (contaAtiva === 'padrao' && !opt.conta_id));
+                const div = document.createElement('div');
+                div.className = 'sheet-opt' + (isSel ? ' selected' : '');
+                div.setAttribute('data-plat', opt.plataforma);
+                div.setAttribute('data-conta', opt.conta_id || 'padrao');
+                div.setAttribute('role', 'button');
+                div.style.touchAction = 'manipulation';
+                div.style.cursor = 'pointer';
+                div.innerHTML = `
+                    <div style="display: flex; align-items: center; gap: 10px; pointer-events: none;">
+                        <span style="font-size: 1.25rem;">${opt.icone || '📦'}</span>
+                        <div style="text-align: left;">
+                            <strong style="display: block; font-size: 0.92rem; color: #f8fafc;">${opt.nome}</strong>
+                            ${opt.apelido && opt.apelido !== opt.nome ? `<span style="font-size: 0.74rem; color: #94a3b8;">${opt.apelido}</span>` : ''}
+                        </div>
+                    </div>
+                    <span class="check-mark" style="font-weight: 900; color: #38bdf8; font-size: 1.1rem; pointer-events: none;">${isSel ? '✓' : ''}</span>
+                `;
+                function tocarOpcao(e) {
+                    if (e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                    }
+                    selecionarContaEPlataforma(opt.plataforma, opt.conta_id, opt.nome, opt.icone);
+                }
+                div.addEventListener('click', tocarOpcao);
+                div.addEventListener('touchend', tocarOpcao);
+                container.appendChild(div);
+            });
+        }
+
+        function selecionarContaEPlataforma(plat, contaId, nomeExibicao, icone) {
+            plataformaAtiva = plat;
+            contaAtiva = contaId || 'padrao';
+            nomeContaExibicao = nomeExibicao;
+            if (driverSelect) {
+                driverSelect.innerHTML = '<option value="">Carregando...</option>';
+                driverSelect.value = '';
+            }
+            motoristaAtivo = '';
+
+            try {
+                localStorage.setItem('turboscan_coletor_plat', plat);
+                localStorage.setItem('turboscan_coletor_conta', contaId || 'padrao');
+                localStorage.setItem('turboscan_coletor_nome', nomeExibicao);
+            } catch (_) {}
+
+            if (platLabel) platLabel.innerText = nomeExibicao;
+            if (platIcon) platIcon.innerText = icone || (plat === 'anjun' ? '🚚' : (plat === 'imile' ? '📦' : '⚡'));
+
+            document.querySelectorAll('.sheet-opt').forEach(el => {
+                const p = el.getAttribute('data-plat');
+                const c = el.getAttribute('data-conta') || 'padrao';
+                const sel = (p === plat) && (c === contaAtiva || (!contaAtiva && c === 'padrao'));
+                el.className = 'sheet-opt' + (sel ? ' selected' : '');
+                const ck = el.querySelector('.check-mark');
+                if (ck) ck.innerText = sel ? '✓' : '';
             });
 
-            if (plat === 'anjun') {
-                platLabel.innerText = 'Anjun Express';
-                platIcon.innerText = '🚚';
-            } else if (plat === 'imile') {
-                platLabel.innerText = 'iMile Delivery';
-                platIcon.innerText = '📦';
-            } else if (plat === 'loggi') {
-                platLabel.innerText = 'Loggi';
-                platIcon.innerText = '⚡';
-            }
-        }
-
-        // Driver Selection Change
-        driverSelect.addEventListener('change', async () => {
-            motoristaAtivo = driverSelect.value;
+            if (sheetPlataforma) sheetPlataforma.style.display = 'none';
+            falarTexto(nomeExibicao);
             try {
-                await fetch('/api/coletor/trocar-motorista', {
+                fetch('/api/coletor/trocar-plataforma', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ motorista: motoristaAtivo })
-                });
+                    body: JSON.stringify({ plataforma: plat, conta_id: contaId || 'padrao' })
+                }).catch(() => {});
             } catch (_) {}
-            manterFocoInput();
+            carregarStatus();
+        recuperarFilaColetor();
+            manterFocoInput(false);
+        }
+
+        // Driver / Grupo Selection Change
+        driverSelect.addEventListener('change', async () => {
+            const val = driverSelect.value;
+            motoristaAtivo = val;
+            if (plataformaAtiva === 'loggi') {
+                if (val.startsWith('grp:')) {
+                    const partes = val.substring(4).split('|');
+                    const plate = partes[0];
+                    const tag = partes[1] || partes[0];
+                    try {
+                        await fetch('/loggi/definir-grupo', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ modo: 'existente', licensePlate: plate, tags: [tag], cidade: tag })
+                        });
+                        await fetch('/api/coletor/trocar-motorista', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ motorista: tag })
+                        });
+                    } catch (_) {}
+                } else if (val.startsWith('cid:')) {
+                    const cid = val.substring(4);
+                    try {
+                        await fetch('/loggi/definir-grupo', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ modo: 'novo', cidade: cid })
+                        });
+                        await fetch('/api/coletor/trocar-motorista', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ motorista: cid })
+                        });
+                    } catch (_) {}
+                } else if (val) {
+                    const mot = val.startsWith('mot:') ? val.substring(4) : val;
+                    try {
+                        await fetch('/loggi/definir-grupo', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ modo: 'novo', motorista: mot })
+                        });
+                        await fetch('/api/coletor/trocar-motorista', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ motorista: mot })
+                        });
+                    } catch (_) {}
+                }
+            } else {
+                try {
+                    await fetch('/api/coletor/trocar-motorista', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ motorista: val })
+                    });
+                } catch (_) {}
+            }
+            manterFocoInput(false);
         });
 
         // Load Status from Server
         async function carregarStatus() {
             try {
-                const res = await fetch('/api/coletor/status?_=' + Date.now());
+                const res = await fetch(`/api/coletor/status?plataforma=${plataformaAtiva}&conta=${contaAtiva}&_=${Date.now()}`);
                 if (res.ok) {
                     const data = await res.json();
                     statusDot.className = 'status-dot';
                     statusText.innerText = 'Online';
 
-                    plataformaAtiva = data.plataforma || plataformaAtiva;
-                    atualizarUiPlataforma(plataformaAtiva);
+                    if (data.opcoes_contas && Array.isArray(data.opcoes_contas)) {
+                        renderizarOpcoesContas(data.opcoes_contas);
+                    }
 
                     statMotorista.innerText = data.contagem || 0;
                     statTotal.innerText = data.contagem_total_hoje || 0;
 
-                    // Atualiza opções de motoristas
+                    // Atualiza opções de motoristas da base selecionada
+                    if (driverBar) {
+                        const lbl = driverBar.querySelector('span');
+                        if (lbl) lbl.innerText = (plataformaAtiva === 'loggi' ? 'Grupo / Cidade:' : 'Motorista:');
+                    }
                     const selVal = driverSelect.value;
-                    driverSelect.innerHTML = '<option value="">Selecione o motorista...</option>';
-                    (data.motoristas || []).forEach(m => {
-                        const opt = document.createElement('option');
-                        opt.value = m;
-                        opt.innerText = m;
-                        if (m === data.motorista_ativo || m === selVal) {
-                            opt.selected = true;
+                    
+                    if (plataformaAtiva === 'loggi') {
+                        let gruposLoggi = data.grupos_loggi || [];
+                        let cidadesLoggi = data.cidades || [];
+
+                        // Fallback se a API de status não trouxe ainda
+                        if (!cidadesLoggi || cidadesLoggi.length === 0) {
+                            try {
+                                const rCid = await fetch('/configuracoes?plataforma=loggi');
+                                if (rCid.ok) {
+                                    const dCid = await rCid.json();
+                                    cidadesLoggi = dCid.cidades || [];
+                                }
+                            } catch (_) {}
                         }
-                        driverSelect.appendChild(opt);
-                    });
+                        if (!gruposLoggi || gruposLoggi.length === 0) {
+                            try {
+                                const rGrp = await fetch('/loggi/grupos');
+                                if (rGrp.ok) {
+                                    const dGrp = await rGrp.json();
+                                    gruposLoggi = dGrp.grupos || [];
+                                }
+                            } catch (_) {}
+                        }
+
+                        driverSelect.innerHTML = `<option value="">Selecione o Grupo ou Cidade...</option>`;
+
+                        if (gruposLoggi && gruposLoggi.length > 0) {
+                            const grpGroup = document.createElement('optgroup');
+                            grpGroup.label = "📂 GRUPOS EXISTENTES (ABERTOS)";
+                            gruposLoggi.forEach(g => {
+                                const opt = document.createElement('option');
+                                const tagTxt = g.tag_display || g.licensePlate;
+                                const val = `grp:${g.licensePlate}|${tagTxt}`;
+                                opt.value = val;
+                                opt.innerText = `📂 ${tagTxt} (${g.quantity || 0} pcts)`;
+                                if (val === selVal || (selVal && (selVal.includes(g.licensePlate) || selVal.includes(tagTxt)))) {
+                                    opt.selected = true;
+                                }
+                                grpGroup.appendChild(opt);
+                            });
+                            driverSelect.appendChild(grpGroup);
+                        }
+
+                        if (cidadesLoggi && cidadesLoggi.length > 0) {
+                            const cidGroup = document.createElement('optgroup');
+                            cidGroup.label = "🏙️ CIDADES DA BASE";
+                            cidadesLoggi.forEach(c => {
+                                const opt = document.createElement('option');
+                                const val = `cid:${c}`;
+                                opt.value = val;
+                                opt.innerText = `🏙️ ${c}`;
+                                if (val === selVal || selVal === c) {
+                                    opt.selected = true;
+                                }
+                                cidGroup.appendChild(opt);
+                            });
+                            driverSelect.appendChild(cidGroup);
+                        }
+
+                        const motoristasPuros = (data.motoristas || []).filter(m => !cidadesLoggi.includes(m));
+                        if (motoristasPuros.length > 0) {
+                            const motGroup = document.createElement('optgroup');
+                            motGroup.label = "👤 MOTORISTAS";
+                            motoristasPuros.forEach(m => {
+                                const opt = document.createElement('option');
+                                const val = `mot:${m}`;
+                                opt.value = val;
+                                opt.innerText = `👤 ${m}`;
+                                if (val === selVal || selVal === m) {
+                                    opt.selected = true;
+                                }
+                                motGroup.appendChild(opt);
+                            });
+                            driverSelect.appendChild(motGroup);
+                        }
+                    } else {
+                        // Anjun ou iMile
+                        driverSelect.innerHTML = `<option value="">Selecione o motorista...</option>`;
+                        (data.motoristas || []).forEach(m => {
+                            const opt = document.createElement('option');
+                            opt.value = m;
+                            opt.innerText = m;
+                            if (m === selVal || m === data.motorista_ativo) {
+                                opt.selected = true;
+                            }
+                            driverSelect.appendChild(opt);
+                        });
+                    }
                 } else {
                     statusDot.className = 'status-dot offline';
                     statusText.innerText = 'Offline';
@@ -875,26 +1241,121 @@
             }
         }
 
-        // Process Scan
-        async function processarCodigo(codigo) {
+        // Fila de Bipagem Assíncrona do Coletor Mobile (Zero Perda de Bipes)
+        const filaColetor = [];
+        let processandoFilaColetor = false;
+
+        function salvarFilaColetor() {
+            try {
+                localStorage.setItem('turboscan_coletor_fila', JSON.stringify(filaColetor));
+            } catch (_) {}
+        }
+
+        function recuperarFilaColetor() {
+            try {
+                const salva = JSON.parse(localStorage.getItem('turboscan_coletor_fila') || '[]');
+                if (Array.isArray(salva) && salva.length > 0) {
+                    filaColetor.length = 0;
+                    filaColetor.push(...salva);
+                    atualizarIndicadorFila();
+                    if (!processandoFilaColetor) {
+                        processarProximoFilaColetor();
+                    }
+                }
+            } catch (_) {}
+        }
+
+        function atualizarIndicadorFila() {
+            const ind = document.getElementById('fila-indicator');
+            const cnt = document.getElementById('fila-count');
+            const total = filaColetor.length;
+            if (ind && cnt) {
+                if (total > 0) {
+                    ind.style.display = 'block';
+                    cnt.innerText = total;
+                } else {
+                    ind.style.display = 'none';
+                }
+            }
+        }
+
+        function enfileirarCodigo(codigo) {
             const codLimpo = String(codigo || '').trim();
             if (!codLimpo) return;
 
-            // Feedback imediato
+            // Suporta bipes sequenciais ou múltiplas linhas
+            const partes = codLimpo.split(/[\r\n]+/).map(p => p.trim()).filter(Boolean);
+            if (partes.length === 0) return;
+
+            for (const p of partes) {
+                filaColetor.push(p);
+            }
+            salvarFilaColetor();
+            atualizarIndicadorFila();
+
+            // Vibrate curto de confirmação imediata da captura
+            vibrar([40]);
+
+            if (!processandoFilaColetor) {
+                processarProximoFilaColetor();
+            } else {
+                if (resCidade && filaColetor.length > 1) {
+                    resCidade.innerText = `⚡ Fila: +${filaColetor.length - 1} pacote(s) pendente(s)`;
+                }
+            }
+        }
+
+        function processarCodigo(codigo) {
+            enfileirarCodigo(codigo);
+        }
+
+        async function processarProximoFilaColetor() {
+            if (filaColetor.length === 0) {
+                processandoFilaColetor = false;
+                salvarFilaColetor();
+                atualizarIndicadorFila();
+                return;
+            }
+
+            processandoFilaColetor = true;
+            const codAtual = filaColetor[0];
+            atualizarIndicadorFila();
+
+            // Feedback visual no visor do PDA
             resultCard.className = 'result-card';
             resTag.innerText = 'PROCESSANDO...';
-            resMot.innerText = codLimpo;
-            resCidade.innerText = 'Consultando transportadora...';
+            resMot.innerText = codAtual;
+            resCidade.innerText = filaColetor.length > 1 ? `⚡ Na fila: ${filaColetor.length - 1} restante(s)` : 'Consultando transportadora...';
             resDetail.innerText = '';
             resMsg.innerText = '';
 
             try {
+                let motEnvio = null;
+                let cidsEnvio = [];
+                if (!modoTriagemDireta && driverSelect.value) {
+                    const rawVal = driverSelect.value;
+                    if (rawVal.startsWith('grp:')) {
+                        const partes = rawVal.substring(4).split('|');
+                        motEnvio = partes[1] || partes[0];
+                    } else if (rawVal.startsWith('cid:')) {
+                        const cid = rawVal.substring(4);
+                        motEnvio = cid;
+                        cidsEnvio = [cid];
+                    } else if (rawVal.startsWith('mot:')) {
+                        motEnvio = rawVal.substring(4);
+                    } else {
+                        motEnvio = rawVal;
+                    }
+                }
+
                 const payload = {
-                    codigo: codLimpo,
+                    codigo: codAtual,
                     plataforma: plataformaAtiva,
-                    motorista: modoTriagemDireta ? null : (driverSelect.value || null),
-                    cidades_selecionadas: [],
-                    triagem_direta: Boolean(modoTriagemDireta)
+                    conta_id: contaAtiva,
+                    motorista: motEnvio,
+                    cidades_selecionadas: cidsEnvio,
+                    triagem_direta: Boolean(modoTriagemDireta),
+                    origem: 'coletor'
                 };
 
                 const res = await fetch('/bip', {
@@ -904,18 +1365,46 @@
                 });
 
                 const data = await res.json();
-                exibirResultado(codLimpo, data);
+                exibirResultado(codAtual, data);
             } catch (e) {
                 resultCard.className = 'result-card divergente';
                 resTag.innerText = 'ERRO DE CONEXÃO';
                 resMot.innerText = 'FALHA DE REDE';
                 resCidade.innerText = 'Verifique o Wi-Fi do galpão';
                 resMsg.innerText = e.message;
+
+                const camPill = document.getElementById('cam-result-pill');
+                const camPillMot = document.getElementById('cam-pill-mot');
+                const camPillDet = document.getElementById('cam-pill-det');
+                if (camPill && camPillMot && camPillDet) {
+                    camPill.style.display = 'block';
+                    camPill.style.background = '#7f1d1d';
+                    camPill.style.border = '2px solid #ef4444';
+                    camPill.style.color = '#fee2e2';
+                    camPillMot.innerText = '❌ FALHA DE REDE';
+                    camPillDet.innerText = 'Verifique a conexão Wi-Fi';
+                }
+
                 playBeep('divergente');
                 vibrar([200, 100, 200]);
             } finally {
-                barcodeInput.value = '';
-                manterFocoInput();
+                // Remove o item processado da fila
+                filaColetor.shift();
+                salvarFilaColetor();
+                atualizarIndicadorFila();
+
+                // Garante que o input continue limpo e pronto para o próximo bipe instantâneo
+                if (barcodeInput.value === codAtual) {
+                    barcodeInput.value = '';
+                }
+                manterFocoInput(false);
+
+                // Continua para o próximo da fila recursivamente
+                if (filaColetor.length > 0) {
+                    setTimeout(processarProximoFilaColetor, 15);
+                } else {
+                    processandoFilaColetor = false;
+                }
             }
         }
 
@@ -930,6 +1419,11 @@
             const bairro = data.bairro ? ` • Bairro: ${data.bairro}` : '';
             const cep = data.cep ? ` • CEP: ${data.cep}` : '';
 
+            // Atualização do Pill Flutuante na Câmera (Modo Contínuo)
+            const camPill = document.getElementById('cam-result-pill');
+            const camPillMot = document.getElementById('cam-pill-mot');
+            const camPillDet = document.getElementById('cam-pill-det');
+
             if (st === 'sucesso' || st === 'ok') {
                 resultCard.className = 'result-card ok';
                 resTag.innerText = 'SUCESSO';
@@ -937,6 +1431,15 @@
                 resCidade.innerText = (cid ? '📍 ' + cid : '') + bairro;
                 resDetail.innerText = `Pacote: ${codigo}`;
                 resMsg.innerText = '';
+
+                if (camPill && camPillMot && camPillDet) {
+                    camPill.style.display = 'block';
+                    camPill.style.background = '#065f46';
+                    camPill.style.border = '2px solid #10b981';
+                    camPill.style.color = '#ecfdf5';
+                    camPillMot.innerText = '✅ ' + mot;
+                    camPillDet.innerText = (cid ? '📍 ' + cid : '') + ' • ' + codigo;
+                }
 
                 playBeep('ok');
                 vibrar([90]);
@@ -954,6 +1457,15 @@
                 resDetail.innerText = `Pacote: ${codigo}`;
                 resMsg.innerText = msg || 'Pacote já registrado no lote!';
 
+                if (camPill && camPillMot && camPillDet) {
+                    camPill.style.display = 'block';
+                    camPill.style.background = '#78350f';
+                    camPill.style.border = '2px solid #f59e0b';
+                    camPill.style.color = '#fef3c7';
+                    camPillMot.innerText = '⚠️ JÁ BIPADO: ' + mot;
+                    camPillDet.innerText = (cid ? '📍 ' + cid : '') + ' • ' + codigo;
+                }
+
                 playBeep('duplicado');
                 vibrar([120, 80, 120]);
                 falarTexto("Duplicado! " + mot);
@@ -966,6 +1478,20 @@
                 resDetail.innerText = `Pacote: ${codigo}`;
                 resMsg.innerText = msg;
 
+                if (camPill && camPillMot && camPillDet) {
+                    camPill.style.display = 'block';
+                    camPill.style.background = '#7f1d1d';
+                    camPill.style.border = '2px solid #ef4444';
+                    camPill.style.color = '#fee2e2';
+                    camPillMot.innerText = '🚨 DIVERGÊNCIA: ' + (mot !== 'Sem Motorista' ? mot : 'ATENÇÃO');
+                    camPillDet.innerText = (cid ? '📍 ' + cid : msg || 'Não Autorizada') + ' • ' + codigo;
+                }
+
+                if (data.atribuido && data.contagem !== undefined) {
+                    statMotorista.innerText = data.contagem;
+                    statTotal.innerText = parseInt(statTotal.innerText || 0) + 1;
+                }
+
                 playBeep('divergente');
                 vibrar([250, 100, 250, 100, 250]);
                 falarTexto("Divergência! " + (cid || msg));
@@ -977,6 +1503,15 @@
                 resCidade.innerText = cid || '---';
                 resDetail.innerText = `Pacote: ${codigo}`;
                 resMsg.innerText = msg || 'Verifique o status no computador central';
+
+                if (camPill && camPillMot && camPillDet) {
+                    camPill.style.display = 'block';
+                    camPill.style.background = '#7f1d1d';
+                    camPill.style.border = '2px solid #ef4444';
+                    camPill.style.color = '#fee2e2';
+                    camPillMot.innerText = '❌ FALHA / VERIFICAR';
+                    camPillDet.innerText = (msg || 'Verificar pacote') + ' • ' + codigo;
+                }
 
                 playBeep('divergente');
                 vibrar([200]);
@@ -1008,19 +1543,41 @@
             historyList.innerHTML = '';
         });
 
-        // Barcode Input Handler
+        // Barcode Input Handler (Limpeza Instantânea do Visor + Enfileiramento Rápido)
         barcodeInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
+            if (e.key === 'Enter' || e.keyCode === 13) {
                 e.preventDefault();
                 const val = barcodeInput.value;
-                if (val.trim()) {
-                    processarCodigo(val);
+                // LIMPA O VISOR IMEDIATAMENTE (0ms) - Não trava o operador esperando o servidor
+                barcodeInput.value = '';
+                barcodeInput.inputMode = 'none';
+                manterFocoInput(false);
+                if (val && val.trim()) {
+                    enfileirarCodigo(val);
                 }
             }
         });
 
-        // Camera Scanner Feature
+        // Camera Scanner Feature (Modo Contínuo)
+        let ultimoCodigoLido = '';
+        let tempoUltimoBipe = 0;
+        let processandoFrame = false;
+
         btnOpenCam.addEventListener('click', async () => {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                if (modalAjudaCamera) {
+                    modalAjudaCamera.style.display = 'flex';
+                } else {
+                    alert("Para usar a câmera no celular via Wi-Fi:\n1. Acesse chrome://flags no Chrome do celular\n2. Pesquise por 'insecure'\n3. Adicione " + window.location.origin + " em 'Insecure origins treated as secure'\n4. Marque Enabled e clique em Relaunch.");
+                }
+                return;
+            }
+            ultimoCodigoLido = '';
+            tempoUltimoBipe = 0;
+            processandoFrame = false;
+            const camPill = document.getElementById('cam-result-pill');
+            if (camPill) camPill.style.display = 'none';
+
             cameraModal.style.display = 'flex';
             await iniciarCamera();
         });
@@ -1028,11 +1585,21 @@
         btnCloseCam.addEventListener('click', () => {
             pararCamera();
             cameraModal.style.display = 'none';
-            manterFocoInput();
+            ultimoCodigoLido = '';
+            processandoFrame = false;
+            const camPill = document.getElementById('cam-result-pill');
+            if (camPill) camPill.style.display = 'none';
+            manterFocoInput(false);
         });
 
         async function iniciarCamera() {
             try {
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    cameraModal.style.display = 'none';
+                    if (modalAjudaCamera) modalAjudaCamera.style.display = 'flex';
+                    return;
+                }
+
                 if ('BarcodeDetector' in window) {
                     barcodeDetector = new BarcodeDetector({ formats: ['code_128', 'code_39', 'qr_code', 'ean_13', 'itf'] });
                 }
@@ -1047,25 +1614,43 @@
                     cameraLoopId = requestAnimationFrame(scanVideoFrame);
                 }
             } catch (err) {
-                alert("Não foi possível acessar a câmera do aparelho: " + err.message);
                 cameraModal.style.display = 'none';
+                if (modalAjudaCamera) {
+                    modalAjudaCamera.style.display = 'flex';
+                } else {
+                    alert("Não foi possível acessar a câmera do aparelho: " + err.message);
+                }
             }
         }
 
         async function scanVideoFrame() {
             if (cameraModal.style.display === 'flex' && barcodeDetector && cameraVideo.readyState >= 2) {
-                try {
-                    const barcodes = await barcodeDetector.detect(cameraVideo);
-                    if (barcodes.length > 0) {
-                        const raw = barcodes[0].rawValue;
-                        if (raw) {
-                            pararCamera();
-                            cameraModal.style.display = 'none';
-                            processarCodigo(raw);
-                            return;
+                if (!processandoFrame) {
+                    try {
+                        const barcodes = await barcodeDetector.detect(cameraVideo);
+                        if (barcodes.length > 0) {
+                            const raw = (barcodes[0].rawValue || '').trim();
+                            const agora = Date.now();
+                            // Debounce anti-duplicação acidental na câmera: só lê se for novo código ou após 1.8 segundos
+                            if (raw && (raw !== ultimoCodigoLido || (agora - tempoUltimoBipe > 1800))) {
+                                ultimoCodigoLido = raw;
+                                tempoUltimoBipe = agora;
+                                processandoFrame = true;
+
+                                // Feedback visual verde de leitura imediata
+                                cameraVideo.style.borderColor = '#10b981';
+                                setTimeout(() => {
+                                    if (cameraVideo) cameraVideo.style.borderColor = '#38bdf8';
+                                }, 350);
+
+                                enfileirarCodigo(raw);
+                                setTimeout(() => {
+                                    processandoFrame = false;
+                                }, 400);
+                            }
                         }
-                    }
-                } catch (_) {}
+                    } catch (_) {}
+                }
                 cameraLoopId = requestAnimationFrame(scanVideoFrame);
             }
         }
@@ -1082,9 +1667,13 @@
         }
 
         // Init
+        if (nomeContaExibicao) {
+            platLabel.innerText = nomeContaExibicao;
+            platIcon.innerText = (plataformaAtiva === 'anjun' ? '🚚' : (plataformaAtiva === 'imile' ? '📦' : '⚡'));
+        }
         carregarStatus();
         setInterval(carregarStatus, 5000);
-        manterFocoInput();
+        manterFocoInput(false);
     </script>
 </body>
 </html>

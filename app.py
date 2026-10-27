@@ -3331,10 +3331,11 @@ def matar_chrome_na_porta(porta):
     if pids:
         time.sleep(0.4)
 
-def forcar_janela_chrome_visivel(porta=None):
+def forcar_janela_chrome_visivel(porta=None, plat_alvo=None):
     """
-    Garante que as janelas reais do navegador Chrome estejam visíveis, restauradas, maximizadas
-    e em primeiro plano na frente do TurboScan, escondendo qualquer console residual.
+    Garante que as janelas reais do navegador Chrome da transportadora selecionada
+    estejam visiveis, restauradas, maximizadas e em primeiro plano, minimizando
+    as janelas de outras transportadoras para evitar sobreposicao na tela.
     """
     try:
         import ctypes
@@ -3343,6 +3344,7 @@ def forcar_janela_chrome_visivel(porta=None):
         SW_HIDE = 0
         SW_MAXIMIZE = 3
         SW_SHOW = 5
+        SW_MINIMIZE = 6
         SW_RESTORE = 9
         HWND_TOPMOST = -1
         HWND_NOTOPMOST = -2
@@ -3350,12 +3352,35 @@ def forcar_janela_chrome_visivel(porta=None):
         SWP_NOMOVE = 0x0002
         SWP_SHOWWINDOW = 0x0040
 
+        p_resolvida = plat_alvo
+        if not p_resolvida:
+            if porta == 9222:
+                p_resolvida = 'imile'
+            elif porta == 9223:
+                p_resolvida = 'anjun'
+            elif porta == 9224:
+                p_resolvida = 'loggi'
+            elif plataforma_ativa:
+                p_resolvida = str(plataforma_ativa).strip().lower()
+
+        palavras_alvo = []
+        palavras_outras = []
+        if p_resolvida == 'loggi':
+            palavras_alvo = ['loggi', 'arco']
+            palavras_outras = ['anjun', 'newsupplier', 'imile', 'ds -', 'ds.imile']
+        elif p_resolvida == 'anjun':
+            palavras_alvo = ['anjun', 'newsupplier']
+            palavras_outras = ['loggi', 'arco', 'imile', 'ds -', 'ds.imile']
+        elif p_resolvida == 'imile':
+            palavras_alvo = ['imile', 'ds -', 'ds.imile']
+            palavras_outras = ['loggi', 'arco', 'anjun', 'newsupplier']
+
         pids_alvo = obter_pids_porta(porta) if porta else set()
-        if not pids_alvo and plataforma_ativa:
+        if not pids_alvo and p_resolvida:
             try:
-                _, p_ativa, _, _ = obter_perfil_e_porta_conta(plataforma_ativa, conta_ativa)
-                if p_ativa:
-                    pids_alvo = obter_pids_porta(p_ativa)
+                _, p_porta, _, _ = obter_perfil_e_porta_conta(p_resolvida, conta_ativa)
+                if p_porta:
+                    pids_alvo = obter_pids_porta(p_porta)
             except Exception:
                 pass
 
@@ -3371,30 +3396,40 @@ def forcar_janela_chrome_visivel(porta=None):
                 user32.GetWindowTextW(hwnd, buff, length + 1)
                 title = buff.value.lower()
 
-                # Se for janela de console do chromedriver ou cmd, esconde na hora
                 if 'chromedriver' in title or 'cmd.exe' in title:
                     user32.ShowWindow(hwnd, SW_HIDE)
                     return True
 
-                # Ignora a janela do próprio TurboScan Electron
                 if 'turboscan' in title:
                     return True
 
                 cls_buff = ctypes.create_unicode_buffer(64)
                 user32.GetClassNameW(hwnd, cls_buff, 64)
                 cls_name = cls_buff.value
+                if 'Chrome_WidgetWin' not in cls_name:
+                    return True
 
                 pid = ctypes.c_ulong()
                 user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
 
-                if pids_alvo and pid.value in pids_alvo and 'Chrome_WidgetWin' in cls_name:
-                    janelas_chrome.insert(0, hwnd)
+                if palavras_outras and any(k in title for k in palavras_outras):
+                    try:
+                        user32.ShowWindow(hwnd, SW_MINIMIZE)
+                    except Exception:
+                        pass
                     return True
 
-                if 'Chrome_WidgetWin' in cls_name and any(k in title for k in [
-                    'ds -', 'anjun', 'loggi', 'imile', 'google chrome', 'chrome', 'ds ',
-                    'recepcionar', 'atribuir', 'pacotes', 'arco', 'newsupplier'
+                e_janela_alvo = False
+                if pids_alvo and pid.value in pids_alvo:
+                    e_janela_alvo = True
+                elif palavras_alvo and any(k in title for k in palavras_alvo):
+                    e_janela_alvo = True
+                elif not pids_alvo and not palavras_alvo and any(k in title for k in [
+                    'ds -', 'anjun', 'loggi', 'imile', 'google chrome', 'chrome', 'arco', 'newsupplier'
                 ]):
+                    e_janela_alvo = True
+
+                if e_janela_alvo:
                     janelas_chrome.append(hwnd)
             except Exception:
                 pass
@@ -3481,7 +3516,7 @@ def conectar_chrome_existente(plataforma_id, conta_id=None):
         if verificar_tela_login_loggi(driver):
             plataformas = carregar_plataformas()
             config_loggi = plataformas.get('loggi', {})
-            fluxo_login_loggi(driver, config_loggi)
+            fluxo_login_loggi(driver, config_loggi, seq_id=_init_seq_id)
         else:
             garantir_abas_loggi(driver)
     forcar_janela_chrome_visivel(porta)
@@ -3489,6 +3524,17 @@ def conectar_chrome_existente(plataforma_id, conta_id=None):
 
 def is_driver_ativo(rapido=True):
     global driver, plataforma_ativa, conta_ativa
+    if plataforma_ativa:
+        try:
+            _, _chk_porta, _chk_cid, _ = obter_perfil_e_porta_conta(plataforma_ativa, conta_ativa)
+            if not is_chrome_debug_active(_chk_porta) or not chrome_tem_janela_visivel_na_tela(_chk_porta):
+                driver = None
+                return False
+            if not driver:
+                conectar_chrome_existente(plataforma_ativa, _chk_cid)
+                return True
+        except Exception:
+            pass
     if not driver:
         # Se não há driver em memória, mas o Chrome está aberto e visível na porta de debug da plataforma/conta ativa:
         if plataforma_ativa:
@@ -3844,7 +3890,7 @@ def garantir_abas_loggi(driver):
     except Exception as e:
         print(f"[Aviso] Falha ao mapear abas da Loggi: {str(e)}")
 
-def fluxo_login_loggi(driver, config):
+def fluxo_login_loggi(driver, config, seq_id=None):
     """
     Executa o fluxo de inicialização e autenticação da Loggi:
     1. Mantém estritamente apenas 1 aba aberta durante o login
@@ -3882,7 +3928,9 @@ def fluxo_login_loggi(driver, config):
         print("[*] Aguardando o login ser concluído no navegador para Loggi...")
         login_concluido = False
         inicio_login = time.time()
-        while time.time() - inicio_login < 180.0:
+        while time.time() - inicio_login < 20.0:
+            if seq_id and _init_seq_id != seq_id:
+                return
             try:
                 if not driver or not driver.window_handles:
                     break
@@ -3899,7 +3947,8 @@ def fluxo_login_loggi(driver, config):
             time.sleep(1.0)
             
         if not login_concluido:
-            raise Exception("Tempo limite esgotado para o login na Loggi.")
+            print("[Aviso] Login da Loggi ainda não concluído. Janela aberta para o operador.")
+            return
             
     # 3. Detecta a base da unidade (ex: ERE, AV3, etc.)
     base_code = extrair_codigo_base_loggi(driver) or 'AV3'
@@ -4154,7 +4203,7 @@ def inicializar_selenium(plataforma_id, conta_id=None):
                         driver.execute_cdp_cmd("Page.bringToFront", {})
                     except Exception:
                         pass
-                    forcar_janela_chrome_visivel(porta)
+                    forcar_janela_chrome_visivel(porta, plat_alvo=p)
                     salvar_sessao_ativa(plataforma_id, motorista_atribuicao_ativa, contagem_atribuicao_ativa, conta_id_resolvido)
                     return
             except Exception as e_att:
@@ -4247,8 +4296,8 @@ def inicializar_selenium(plataforma_id, conta_id=None):
     
     if plataforma_id == 'loggi':
         forcar_janela_chrome_visivel(porta)
-        fluxo_login_loggi(driver, config)
-        forcar_janela_chrome_visivel(porta)
+        fluxo_login_loggi(driver, config, seq_id=meu_seq_id)
+        forcar_janela_chrome_visivel(porta, plat_alvo='loggi')
         plataforma_ativa = plataforma_id
         conta_ativa = conta_id_resolvido
             
@@ -4326,7 +4375,8 @@ def inicializar_selenium(plataforma_id, conta_id=None):
         print("[*] Aguardando o login ser concluído no navegador...")
         login_concluido = False
         inicio_login = time.time()
-        while time.time() - inicio_login < 180.0:  # Limite de 3 minutos para logar
+        while time.time() - inicio_login < 20.0:
+            # Limite de espera de login
             if _init_seq_id != meu_seq_id:
                 return
             try:
@@ -4653,7 +4703,7 @@ def inicializar_selenium(plataforma_id, conta_id=None):
             
             login_concluido = False
             inicio_login = time.time()
-            while time.time() - inicio_login < 180.0:  # Limite de 3 minutos
+            while time.time() - inicio_login < 20.0:
                 if _init_seq_id != meu_seq_id:
                     return
                 try:
@@ -7101,6 +7151,7 @@ def salvar_token_imile_conta(sess_dict, conta_id=None):
             "userCode": ucode,
             "orgId": sess_dict.get("orgId", 10),
             "stationName": sess_dict.get("stationName", ""),
+            "cookie_str": sess_dict.get("cookie_str", ""),
             "timestamp": time.time()
         }
         with open(CONFIG_IMILE_TOKENS, 'w', encoding='utf-8') as f:
@@ -7182,6 +7233,7 @@ def atualizar_sessao_imile(drv=None, forcar=False, conta_id=None):
                     uc_capturado = (user_info.get("userCode") if isinstance(user_info, dict) else None) or login_esperado or cache_sessao_imile.get("userCode")
                     if not login_esperado or not uc_capturado or str(uc_capturado).strip().lower() == login_esperado.lower():
                         cache_sessao_imile["token"] = token
+                        cache_sessao_imile["cookie_str"] = "; ".join([f"{c['name']}={c['value']}" for c in cookies if c.get('name') and c.get('value')])
                         cache_sessao_imile["timestamp"] = time.time()
                         if current_oc:
                             cache_sessao_imile["currentStationCode"] = current_oc
@@ -7256,8 +7308,10 @@ def carregar_motoristas_imile_api(forcar=False, conta_id=None):
         "sys-portal": "DS",
         "timezone": "-3",
         "front-sec": json.dumps({"orgId": sessao.get("orgId", 10), "entId": 10, "userCode": sessao.get("userCode", "2106085001"), "moduleId": 10007, "client": "pc"}),
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
     }
+    if sessao.get("cookie_str"):
+        headers["cookie"] = sessao["cookie_str"]
     data = json.dumps({"ocCodeList": [station_code], "isDriver": 1, "status": "ACTIVE"}).encode('utf-8')
 
     try:
@@ -7265,6 +7319,24 @@ def carregar_motoristas_imile_api(forcar=False, conta_id=None):
         with urllib.request.urlopen(req, timeout=4.0) as resp:
             res = json.loads(resp.read().decode('utf-8'))
             drivers_raw = res.get("resultObject", [])
+            
+            # Se atingiu o limite de 50 da iMile, complementa com busca por letras para capturar 100% dos motoristas cadastrados
+            if len(drivers_raw) >= 50:
+                vistos_codes = {d.get("userCode") for d in drivers_raw if d.get("userCode")}
+                letras = ['a', 'e', 'i', 'o', 'u', 'b', 'c', 'd', 'f', 'g', 'j', 'l', 'm', 'p', 'r', 's', 't', 'v']
+                for let in letras:
+                    try:
+                        data_let = json.dumps({"ocCodeList": [station_code], "isDriver": 1, "status": "ACTIVE", "keyword": let}).encode('utf-8')
+                        req_let = urllib.request.Request(url, data=data_let, headers=headers)
+                        with urllib.request.urlopen(req_let, timeout=2.0) as resp_let:
+                            res_let = json.loads(resp_let.read().decode('utf-8'))
+                            for d_sub in res_let.get("resultObject", []):
+                                uc_sub = d_sub.get("userCode")
+                                if uc_sub and uc_sub not in vistos_codes:
+                                    vistos_codes.add(uc_sub)
+                                    drivers_raw.append(d_sub)
+                    except Exception:
+                        pass
             
             lista = []
             mapa = {}
@@ -7401,16 +7473,54 @@ def resolver_motorista_imile_api(mot_clean):
     if best and best_score >= 1:
         return best
 
+    # 5. Busca sob demanda direta na API iMile com keyword (para motoristas recém-adicionados ou fora do top 50)
+    try:
+        sessao = atualizar_sessao_imile()
+        token = sessao.get("token")
+        station_code = sessao.get("currentStationCode", "S210570001")
+        if token and station_code:
+            headers_busca = {
+                "accept": "application/json, text/plain, */*",
+                "authorization": f"Bearer {token}",
+                "content-type": "application/json",
+                "hubcode": station_code,
+                "lang": "pt_BR",
+                "origin": "https://ds.imile.com",
+                "referer": "https://ds.imile.com/",
+                "sys-name": "DS",
+                "sys-portal": "DS",
+                "timezone": "-3",
+                "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+            }
+            body_busca = json.dumps({"ocCodeList": [station_code], "isDriver": 1, "status": "ACTIVE", "keyword": mot_clean}).encode('utf-8')
+            req_b = urllib.request.Request("https://ds.imile.com/hrms/user/associate/list", data=body_busca, headers=headers_busca)
+            with urllib.request.urlopen(req_b, timeout=3.0) as resp_b:
+                data_b = json.loads(resp_b.read().decode('utf-8'))
+                for item_b in data_b.get("resultObject", []):
+                    nm_b = (item_b.get("userName") or "").strip()
+                    cd_b = (item_b.get("userCode") or "").strip()
+                    if nm_b and cd_b:
+                        obj_novo = {"daCode": cd_b, "daName": nm_b, "id": item_b.get("id")}
+                        lista.append(obj_novo)
+                        mapa[remover_acentos(nm_b.lower())] = obj_novo
+                        cache_motoristas_imile["lista"] = lista
+                        cache_motoristas_imile["mapa"] = mapa
+                        cid_ativo, _ = obter_conta_ativa_plataforma("imile")
+                        salvar_motoristas_da_base("imile", cid_ativo, [m["daName"] for m in lista])
+                        return obj_novo
+    except Exception as e_busca:
+        print(f"[Aviso] [iMile API] Busca sob demanda por '{mot_clean}' falhou: {e_busca}")
+
     return None
 
-def executar_post_imile(endpoint_path, payload):
+def executar_post_imile(endpoint_path, payload, sessao_override=None):
     """
     Executa POST na API da iMile em ~25ms com os headers e token de sessão.
     Retorna (sucesso: bool, mensagem: str, dados_resposta: dict)
     """
-    sessao = atualizar_sessao_imile()
+    sessao = sessao_override if sessao_override else atualizar_sessao_imile()
     token = sessao.get("token")
-    if not token:
+    if not token and not sessao_override:
         sessao = atualizar_sessao_imile(forcar=True)
         token = sessao.get("token")
     station_code = sessao.get("currentStationCode", "S210570001")
@@ -7431,8 +7541,10 @@ def executar_post_imile(endpoint_path, payload):
         "sys-portal": "DS",
         "timezone": "-3",
         "front-sec": json.dumps({"orgId": sessao.get("orgId", 10), "entId": 10, "userCode": sessao.get("userCode", "2106085001"), "moduleId": 10007, "client": "pc"}),
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
     }
+    if sessao.get("cookie_str"):
+        headers["cookie"] = sessao["cookie_str"]
     if "track/query" in endpoint_path:
         headers["resource-code"] = "dsTrackQuery"
         headers["x-page-path"] = "https://ds.imile.com/#/DSOperation/WaybillManagement/dsTrackQuery"
@@ -7509,7 +7621,7 @@ def executar_post_imile(endpoint_path, payload):
                 continue
     return False, f"Internet lenta / oscilação na iMile ({ultimo_erro})", {}
 
-def bipar_pacote_imile_api(codigo_qr, motorista, pacote_solto=False, modo_triagem_direta=False):
+def bipar_pacote_imile_api(codigo_qr, motorista, pacote_solto=False, modo_triagem_direta=False, conta_id=None):
     """
     Executa a bipagem ultra-rápida via API na iMile em ~80-150ms:
     1. Descarregamento (se modo pacote solto)
@@ -7519,10 +7631,13 @@ def bipar_pacote_imile_api(codigo_qr, motorista, pacote_solto=False, modo_triage
     5. Atribuição ao Entregador (ofdAndReturnOfd/submit)
     Retorna (sucesso: bool/str, mensagem: str, motorista_atribuido: str, cidade: str, cep: str, destinatario: str, endereco: str)
     """
-    sessao = atualizar_sessao_imile()
+    if conta_id and str(conta_id).strip() not in ["", "padrao"]:
+        sessao = atualizar_sessao_imile(conta_id=conta_id)
+    else:
+        sessao = atualizar_sessao_imile()
     token = sessao.get("token")
     if not token:
-        sessao = atualizar_sessao_imile(forcar=True)
+        sessao = atualizar_sessao_imile(forcar=True, conta_id=conta_id if (conta_id and str(conta_id).strip() not in ["", "padrao"]) else None)
         token = sessao.get("token")
     if not token:
         return "aguardando_login", "Sessão da iMile desconectada. Faça o login na iMile no Chrome.", "", "", "", "", ""
@@ -7675,12 +7790,18 @@ def bipar_pacote_imile_api(codigo_qr, motorista, pacote_solto=False, modo_triage
         if not mots_esperados and cidade_map != cidade_pacote:
             mots_esperados, foi_por_regra, _ = carregar_motoristas_cidade_detalhado(cidade_pacote, "imile", cep=cep_pacote, bairro=bairro_pacote)
             
+        eh_divergente = False
+        msg_divergente = ""
+        mot_retorno_div = ""
+
         if todos_mots_cidade and not mots_esperados:
             detalhe_loc = f"Bairro {bairro_pacote}" if bairro_pacote else (f"CEP {cep_pacote}" if cep_pacote else "")
             detalhe_info = f" ({detalhe_loc})" if detalhe_loc else ""
             msg_alerta = f"Divergência: Pacote de {cidade_pacote}{detalhe_info} não está coberto pelas regras permitidas para {cidade_pacote}!"
-            print(f"[!] [iMile API] DIVERGÊNCIA! {msg_alerta}")
-            return "divergente", msg_alerta, "Fora da Regra", cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
+            print(f"[!] [iMile API] DIVERGÊNCIA (Atribuindo a {mot_clean})! {msg_alerta}")
+            eh_divergente = True
+            msg_divergente = msg_alerta
+            mot_retorno_div = "Fora da Regra"
 
         norm_mot = remover_acentos(mot_clean.lower()).replace('-', '').replace('_', '').replace(' ', '')
         da_obj_check = resolver_motorista_imile_api(mot_clean)
@@ -7693,10 +7814,11 @@ def bipar_pacote_imile_api(codigo_qr, motorista, pacote_solto=False, modo_triage
                 esp_display = " / ".join(mots_esperados)
                 bairro_info = f" ({bairro_pacote})" if bairro_pacote else ""
                 cep_info = f" (CEP {cep_pacote})" if cep_pacote and not bairro_pacote else ""
-                print(f"[!] [iMile API] DIVERGÊNCIA! Pacote de {cidade_pacote}{bairro_info}{cep_info} pertence a {esp_display}, mas lote ativo é de {mot_clean}!")
-                mot_retorno = esp_display if foi_por_regra else ""
-                return "divergente", f"Pacote de {cidade_pacote}{cep_info} pertence a {esp_display}, mas você está bipando a pilha de {mot_clean}!", mot_retorno, cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
-        else:
+                print(f"[!] [iMile API] DIVERGÊNCIA (Atribuindo a {mot_clean})! Pacote de {cidade_pacote}{bairro_info}{cep_info} pertence a {esp_display}, mas lote ativo é de {mot_clean}!")
+                mot_retorno_div = esp_display if foi_por_regra else ""
+                msg_divergente = f"Pacote de {cidade_pacote}{cep_info} pertence a {esp_display}, mas você está bipando a pilha de {mot_clean}!"
+                eh_divergente = True
+        elif not eh_divergente:
             # BLINDAGEM ANTI-DIVERGÊNCIA: Se a cidade do pacote não possui motorista mapeado na iMile,
             # verifica se o motorista ativo possui cidades mapeadas especificamente para ele nesta plataforma.
             cidades_mot = obter_cidades_motorista(mot_clean, "imile", da_uname_norm)
@@ -7707,8 +7829,10 @@ def bipar_pacote_imile_api(codigo_qr, motorista, pacote_solto=False, modo_triage
                     cidades_display = " / ".join(cidades_mot)
                     cep_info = f" (CEP {cep_pacote})" if cep_pacote else ""
                     msg_alerta = f"Divergência: Pacote de {cidade_pacote}{cep_info} não pertence ao motorista {mot_clean} (Cidades vinculadas: {cidades_display})!"
-                    print(f"[!] [iMile API] DIVERGÊNCIA BLINDADA! {msg_alerta}")
-                    return "divergente", msg_alerta, "", cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
+                    print(f"[!] [iMile API] DIVERGÊNCIA BLINDADA (Atribuindo a {mot_clean})! {msg_alerta}")
+                    eh_divergente = True
+                    msg_divergente = msg_alerta
+                    mot_retorno_div = cidades_display
 
     # 5. Atribuição ao Entregador (assignDA)
     mot_nome_final = motorista
@@ -7753,6 +7877,8 @@ def bipar_pacote_imile_api(codigo_qr, motorista, pacote_solto=False, modo_triage
                     return False, f"Atribuição ({da_name}): {msg_da}", da_name, cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
 
     cidade_retorno = cidade_pacote if cidade_pacote else "Cidade Não Informada (Conferir)"
+    if 'eh_divergente' in locals() and eh_divergente:
+        return "divergente", msg_divergente, mot_retorno_div, cidade_retorno, cep_pacote, destinatario_pacote, endereco_pacote
     return True, "Pacote bipado com sucesso na iMile (API Ultra-Rápida)!", mot_nome_final, cidade_retorno, cep_pacote, destinatario_pacote, endereco_pacote
 
 # ==============================================================================
@@ -8011,25 +8137,52 @@ def loggi_listar_grupos_api():
 def obter_cidades_do_motorista(motorista, plataforma="loggi"):
     """
     Retorna a lista de cidades vinculadas ao motorista no banco de dados.
+    Suporta motoristas simples ou tags compostas de grupos da Loggi (ex: 'CENTRO 1, Fernanda...').
     """
     if not motorista or str(motorista).strip() in ["", "---", "Apenas Entrada (Sem Atribuição)"]:
         return []
-    cidades = []
+    
+    candidatos_nomes = []
+    str_mot = str(motorista).strip()
+    candidatos_nomes.append(str_mot)
+    if "," in str_mot:
+        for parte in str_mot.split(","):
+            p_limpa = parte.strip()
+            if p_limpa:
+                candidatos_nomes.append(p_limpa)
+                p_sem_data = re.sub(r'\s*\d{1,2}[-\/]\d{1,2}.*$', '', p_limpa).strip()
+                if p_sem_data and p_sem_data != p_limpa:
+                    candidatos_nomes.append(p_sem_data)
+    else:
+        p_sem_data = re.sub(r'\s*\d{1,2}[-\/]\d{1,2}.*$', '', str_mot).strip()
+        if p_sem_data and p_sem_data != str_mot:
+            candidatos_nomes.append(p_sem_data)
+
+    cidades = set()
     try:
         conn = conectar_banco()
         c = conn.cursor()
-        c.execute("SELECT DISTINCT cidade FROM motoristas_plataforma WHERE LOWER(motorista) = LOWER(?) AND (LOWER(plataforma) = LOWER(?) OR LOWER(plataforma) = 'todas')", (str(motorista).strip(), plataforma))
-        cidades = [r[0] for r in c.fetchall() if r[0]]
-        if not cidades:
-            c.execute("SELECT DISTINCT cidade FROM motoristas_plataforma WHERE LOWER(motorista) = LOWER(?)", (str(motorista).strip(),))
-            cidades = [r[0] for r in c.fetchall() if r[0]]
-        if not cidades:
-            c.execute("SELECT DISTINCT cidade FROM motoristas WHERE LOWER(motorista) = LOWER(?)", (str(motorista).strip(),))
-            cidades = [r[0] for r in c.fetchall() if r[0]]
+        for cand in candidatos_nomes:
+            if not cand:
+                continue
+            c.execute("SELECT DISTINCT cidade FROM motoristas_plataforma WHERE LOWER(motorista) = LOWER(?) AND (LOWER(plataforma) = LOWER(?) OR LOWER(plataforma) = 'todas')", (cand, plataforma))
+            for r in c.fetchall():
+                if r[0] and r[0].strip() and r[0].strip().lower() not in ('sem cidade', 'geral', 'loggi', 'anjun', 'imile'):
+                    cidades.add(r[0].strip())
+            
+            c.execute("SELECT DISTINCT cidade FROM motoristas_plataforma WHERE LOWER(motorista) = LOWER(?)", (cand,))
+            for r in c.fetchall():
+                if r[0] and r[0].strip() and r[0].strip().lower() not in ('sem cidade', 'geral', 'loggi', 'anjun', 'imile'):
+                    cidades.add(r[0].strip())
+            
+            c.execute("SELECT DISTINCT cidade FROM motoristas WHERE LOWER(motorista) = LOWER(?)", (cand,))
+            for r in c.fetchall():
+                if r[0] and r[0].strip() and r[0].strip().lower() not in ('sem cidade', 'geral', 'loggi', 'anjun', 'imile'):
+                    cidades.add(r[0].strip())
         conn.close()
     except Exception as e:
         print(f"[Aviso] Erro ao buscar cidades do motorista {motorista}: {e}")
-    return cidades
+    return list(cidades)
 
 def loggi_criar_novo_grupo_api(cidade=None, motorista=None, forcar_novo=False):
     global grupo_loggi_ativo, aba_atribuicao_anjun, driver
@@ -8423,33 +8576,84 @@ def bipar_pacote_loggi_api(codigo_qr, cidades_selecionadas=None, motorista_lote=
         endereco=endereco
     )
     
-    # 3. Anti-Divergência
+    # 3. Anti-Divergência Multi-Cidades Inteligente para Loggi
+    eh_divergente = False
+    msg_alerta_div = ""
+    mot_esperado_div = ""
     tem_motorista_lote = bool(motorista_lote and str(motorista_lote).strip() not in ["", "---", "Apenas Entrada (Sem Atribuição)"])
     
+    # Coleta todas as cidades autorizadas para o grupo/lote ativo da Loggi:
+    cidades_autorizadas_loggi = set()
+    todas_cidades_cadastradas = carregar_cidades() or []
+
+    candidatos_brutos = []
     if tem_motorista_lote:
-        # REGRA SOLICITADA: Quando o motorista é selecionado (ex: Joao), busca no banco quais cidades ele atende
-        # e valida se o pacote bipado pertence a uma das cidades dele!
-        cidades_motorista = obter_cidades_do_motorista(motorista_lote, "loggi")
-        if cidades_motorista and cidade_destino:
-            bateu_mot_cidade = any(cidades_sao_iguais(cidade_destino, c) for c in cidades_motorista)
-            if not bateu_mot_cidade:
-                cids_display = ", ".join(cidades_motorista)
-                msg_alerta = f"Divergência: Pacote é de {cidade_destino}, mas o motorista {motorista_lote} atende: {cids_display}!"
-                print(f"[!] [Loggi API] DIVERGÊNCIA MOTORISTA! {msg_alerta}")
-                return "divergente", msg_alerta, motorista_lote, cidade_destino, cep, empresa, endereco
+        candidatos_brutos.append(str(motorista_lote).strip())
+    tags_grp = grupo_loggi_ativo.get("tags") or []
+    for t in tags_grp:
+        if t:
+            candidatos_brutos.append(str(t).strip())
+    if cidades_selecionadas:
+        for cs in cidades_selecionadas:
+            if cs:
+                candidatos_brutos.append(str(cs).strip())
+    cid_grp_base = grupo_loggi_ativo.get("cidade")
+    if cid_grp_base:
+        candidatos_brutos.append(str(cid_grp_base).strip())
+
+    partes_individuais = []
+    for cb in candidatos_brutos:
+        if "," in cb:
+            for p in cb.split(","):
+                if p.strip():
+                    partes_individuais.append(p.strip())
+        elif cb:
+            partes_individuais.append(cb)
+
+    for parte in partes_individuais:
+        if not parte or parte.lower() in ["---", "sem motorista", "apenas entrada (sem atribuição)", "geral", "loggi"]:
+            continue
+            
+        # 1. Cidades vinculadas ao motorista/tag no banco de dados (ex: 'CENTRO 1', 'Fernanda...')
+        for c_m in obter_cidades_do_motorista(parte, "loggi"):
+            cidades_autorizadas_loggi.add(c_m)
+            
+        # 2. Remove datas (ex: 'Barao De Antonina 26-10' -> 'Barao De Antonina')
+        parte_sem_data = re.sub(r'\s*\d{1,2}[-\/]\d{1,2}.*$', '', parte).strip()
+        if parte_sem_data and parte_sem_data != parte:
+            for c_m2 in obter_cidades_do_motorista(parte_sem_data, "loggi"):
+                cidades_autorizadas_loggi.add(c_m2)
+                
+        # 3. Se a própria parte (ou sem data) for o nome de uma cidade cadastrada:
+        candidata_cid = parte_sem_data if parte_sem_data else parte
+        if candidata_cid:
+            bateu_com_cadastrada = False
+            for c_cad in todas_cidades_cadastradas:
+                if cidades_sao_iguais(candidata_cid, c_cad):
+                    cidades_autorizadas_loggi.add(c_cad)
+                    bateu_com_cadastrada = True
+                    break
+            if not bateu_com_cadastrada and not obter_cidades_do_motorista(parte, "loggi"):
+                norm_c = candidata_cid.lower()
+                if not any(k in norm_c for k in ["centro ", "rota ", "galpao", "base ", "hub ", "motorista"]) and len(candidata_cid) > 2:
+                    cidades_autorizadas_loggi.add(candidata_cid)
+
+    if cidades_autorizadas_loggi:
+        if cidade_destino:
+            bateu_cidade = any(cidades_sao_iguais(cidade_destino, ca) for ca in cidades_autorizadas_loggi)
+            if not bateu_cidade:
+                cids_display = ", ".join(sorted(cidades_autorizadas_loggi))
+                alvo_nome = motorista_lote or ", ".join(tags_grp) or "Grupo Loggi"
+                msg_alerta_div = f"Divergência: Pacote é de {cidade_destino}, mas o grupo {alvo_nome} atende: {cids_display}!"
+                print(f"[!] [Loggi API] DIVERGÊNCIA: {msg_alerta_div}")
+                eh_divergente = True
+                mot_esperado_div = cids_display
     elif modo_triagem_direta:
         if not cidade_destino:
             return "divergente", "Divergência: Pacote sem cidade de destino informada pela Loggi!", "Sem Cidade", cidade_destino, cep, empresa, endereco
         mots_esperados, foi_por_regra, _ = carregar_motoristas_cidade_detalhado(cidade_destino, "loggi", cep=cep, bairro=bairro)
         if not mots_esperados:
-            msg_alerta = f"Divergência: Nenhum motorista/rota cadastrada para {cidade_destino}!"
-            print(f"[!] [Loggi API] DIVERGÊNCIA MODO TRIAGEM DIRETA! {msg_alerta}")
-            return "divergente", msg_alerta, "Sem Rota", cidade_destino, cep, empresa, endereco
-    elif cidades_selecionadas:
-        cidades_permitidas = [str(c).strip() for c in cidades_selecionadas if c]
-        if cidade_destino and not any(cidades_sao_iguais(cidade_destino, p) for p in cidades_permitidas):
-            esperado_display = ", ".join(cidades_permitidas)
-            return "divergente", f"Pacote é de {cidade_destino}, mas o grupo é de {esperado_display}", esperado_display, cidade_destino, cep, empresa, endereco
+            return "divergente", f"Divergência: Nenhum motorista/rota cadastrada para {cidade_destino}!", "Sem Rota", cidade_destino, cep, empresa, endereco
 
     # 4. Atribuição ao Grupo Ativo (Motorista + Data ou Cidade + Data)
     if tem_motorista_lote:
@@ -8539,6 +8743,8 @@ def bipar_pacote_loggi_api(codigo_qr, cidades_selecionadas=None, motorista_lote=
         
     tag_atual = ", ".join(grupo_loggi_ativo.get("tags", [])) or placa_grupo
     cidade_retorno_loggi = cidade_destino if cidade_destino else "Cidade Não Informada (Conferir)"
+    if 'eh_divergente' in locals() and eh_divergente:
+        return "divergente", msg_alerta_div, mot_esperado_div, cidade_retorno_loggi, cep, empresa, endereco
     return True, "OK", tag_atual, cidade_retorno_loggi, cep, empresa, endereco
 
 ultimo_bipe_motorista_anjun = {}
@@ -9311,19 +9517,60 @@ def resolver_motorista_anjun_api(mot_clean):
     if best and best_score >= 1:
         return best
 
+    # 5. Busca sob demanda direta na API iMile com keyword (para motoristas recém-adicionados ou fora do top 50)
+    try:
+        sessao = atualizar_sessao_imile()
+        token = sessao.get("token")
+        station_code = sessao.get("currentStationCode", "S210570001")
+        if token and station_code:
+            headers_busca = {
+                "accept": "application/json, text/plain, */*",
+                "authorization": f"Bearer {token}",
+                "content-type": "application/json",
+                "hubcode": station_code,
+                "lang": "pt_BR",
+                "origin": "https://ds.imile.com",
+                "referer": "https://ds.imile.com/",
+                "sys-name": "DS",
+                "sys-portal": "DS",
+                "timezone": "-3",
+                "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+            }
+            body_busca = json.dumps({"ocCodeList": [station_code], "isDriver": 1, "status": "ACTIVE", "keyword": mot_clean}).encode('utf-8')
+            req_b = urllib.request.Request("https://ds.imile.com/hrms/user/associate/list", data=body_busca, headers=headers_busca)
+            with urllib.request.urlopen(req_b, timeout=3.0) as resp_b:
+                data_b = json.loads(resp_b.read().decode('utf-8'))
+                for item_b in data_b.get("resultObject", []):
+                    nm_b = (item_b.get("userName") or "").strip()
+                    cd_b = (item_b.get("userCode") or "").strip()
+                    if nm_b and cd_b:
+                        obj_novo = {"daCode": cd_b, "daName": nm_b, "id": item_b.get("id")}
+                        lista.append(obj_novo)
+                        mapa[remover_acentos(nm_b.lower())] = obj_novo
+                        cache_motoristas_imile["lista"] = lista
+                        cache_motoristas_imile["mapa"] = mapa
+                        cid_ativo, _ = obter_conta_ativa_plataforma("imile")
+                        salvar_motoristas_da_base("imile", cid_ativo, [m["daName"] for m in lista])
+                        return obj_novo
+    except Exception as e_busca:
+        print(f"[Aviso] [iMile API] Busca sob demanda por '{mot_clean}' falhou: {e_busca}")
+
     return None
 
-def bipar_pacote_anjun_api(codigo_qr, motorista, modo_triagem_direta=False):
+def bipar_pacote_anjun_api(codigo_qr, motorista, modo_triagem_direta=False, conta_id=None):
     """
     Executa a bipagem ultra-rápida via API na Anjun Express em ~60-100ms:
     1. Entrada na Base (warehousingScan + queryList + warehousingUpload)
     2. Atribuição ao Entregador (taskAllocation)
     Retorna (sucesso: bool, mensagem: str, motorista_atribuido: str, cidade: str, cep: str, destinatario: str, endereco: str)
     """
-    sessao = atualizar_sessao_anjun()
+    if conta_id and str(conta_id).strip() not in ["", "padrao"]:
+        sessao = obter_sessao_anjun_da_conta(conta_id)
+    else:
+        sessao = atualizar_sessao_anjun()
     token = sessao.get("token")
     if not token:
-        sessao = atualizar_sessao_anjun(forcar=True)
+        sessao = obter_sessao_anjun_da_conta(conta_id, forcar=True) if (conta_id and str(conta_id).strip() not in ["", "padrao"]) else atualizar_sessao_anjun(forcar=True)
         token = sessao.get("token")
     if not token:
         return "aguardando_login", "Sessão da Anjun ausente no navegador", "", "", "", "", ""
@@ -9674,13 +9921,11 @@ def bipar_pacote_anjun_api(codigo_qr, motorista, modo_triagem_direta=False):
                         mot_clean = mot_auto
                     else:
                         esp_display = " / ".join(mots_esperados)
-                        if not candidatos_abertos:
-                            msg_alerta = f"Pacote de {cidade_pacote}{bairro_info}{cep_info} pertence a {esp_display}, mas não há grupo aberto. Selecione o motorista na tela para iniciar o lote."
-                        else:
-                            msg_alerta = f"Pacote de {cidade_pacote}{bairro_info}{cep_info} possui mais de um grupo aberto ({', '.join(candidatos_abertos)}). Selecione o motorista desejado na tela."
-                        print(f"[!] [Anjun API] DIVERGÊNCIA! {msg_alerta}")
-                        mot_retorno = esp_display if foi_por_regra else ""
-                        return "divergente", msg_alerta, mot_retorno, cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
+                        msg_alerta = f"Pacote de {cidade_pacote}{bairro_info}{cep_info} pertence a {esp_display}, mas você está bipando o lote de {mot_clean}!"
+                        print(f"[!] [Anjun API] DIVERGÊNCIA (Atribuindo a {mot_clean})! {msg_alerta}")
+                        mot_retorno_div = esp_display if foi_por_regra else ""
+                        msg_divergente = msg_alerta
+                        eh_divergente = True
             else:
                 # BLINDAGEM ANTI-DIVERGÊNCIA: Se a cidade do pacote não possui motorista mapeado na Anjun,
                 # verifica se o motorista ativo possui cidades mapeadas especificamente para ele nesta plataforma.
@@ -9692,8 +9937,10 @@ def bipar_pacote_anjun_api(codigo_qr, motorista, modo_triagem_direta=False):
                         cidades_display = " / ".join(cidades_mot)
                         cep_info = f" (CEP {cep_pacote})" if cep_pacote else ""
                         msg_alerta = f"Divergência: Pacote de {cidade_pacote}{cep_info} não pertence ao motorista {mot_clean} (Cidades vinculadas: {cidades_display})!"
-                        print(f"[!] [Anjun API] DIVERGÊNCIA BLINDADA! {msg_alerta}")
-                        return "divergente", msg_alerta, "", cidade_pacote, cep_pacote, destinatario_pacote, endereco_pacote
+                        print(f"[!] [Anjun API] DIVERGÊNCIA BLINDADA (Atribuindo a {mot_clean})! {msg_alerta}")
+                        mot_retorno_div = cidades_display
+                        msg_divergente = msg_alerta
+                        eh_divergente = True
 
     # 4. ATRIBUIÇÃO AO ENTREGADOR (Aba 3)
     mot_nome_final = motorista
@@ -9748,6 +9995,8 @@ def bipar_pacote_anjun_api(codigo_qr, motorista, modo_triagem_direta=False):
                 pass
         
     cidade_retorno_anjun = cidade_pacote if cidade_pacote else "Cidade Não Informada (Conferir)"
+    if 'eh_divergente' in locals() and eh_divergente:
+        return "divergente", msg_divergente, mot_retorno_div, cidade_retorno_anjun, cep_pacote, destinatario_pacote, endereco_pacote
     return True, "Pacote processado com sucesso!", mot_nome_final, cidade_retorno_anjun, cep_pacote, destinatario_pacote, endereco_pacote
 
 def finalizar_lote_anjun_api(motorista, reload_tab=True):
@@ -11762,6 +12011,7 @@ def processar_bip():
     dados = request.json
     codigo_qr = dados.get("codigo", "").strip()
     p_id = dados.get("plataforma", "").strip().lower()
+    c_id = str(dados.get("conta_id") or dados.get("conta") or "").strip()
     motorista_lote = dados.get("motorista")
     cidades_selecionadas = dados.get("cidades_selecionadas") or []
     if not isinstance(cidades_selecionadas, list):
@@ -11892,7 +12142,7 @@ def processar_bip():
             porta_p = PORTAS_DEBUG.get(p_id, 9222)
             chrome_ja_aberto = is_chrome_debug_active(porta_p)
 
-            if not chrome_ja_aberto and (p_id in ['anjun', 'imile', 'loggi']) and tem_motorista and not confirmado_reabertura:
+            if not chrome_ja_aberto and (p_id in ['anjun', 'imile', 'loggi']) and tem_motorista and not confirmado_reabertura and (p_id == plataforma_ativa) and (str(dados.get("origem") or "").lower() != "coletor"):
                 print(f"[!] Chrome fechado detectado com motorista/destino ({motorista_lote}) para {p_id}. Solicitando confirmação do operador...")
                 return jsonify({
                     "status": "chrome_fechado",
@@ -11902,9 +12152,14 @@ def processar_bip():
                 }), 200
 
             try:
-                inicializar_selenium(p_id)
+                if chrome_ja_aberto and chrome_tem_janela_visivel_na_tela(porta_p):
+                    conectar_chrome_existente(p_id, c_id or None)
+                else:
+                    inicializar_selenium(p_id, c_id or None)
+                plataforma_ativa = p_id
             except Exception as e:
-                return jsonify({"status": "erro", "mensagem": f"Erro ao iniciar navegador: {str(e)}"}), 500
+                if True:
+                    return jsonify({"status": "erro", "mensagem": f"Erro ao iniciar navegador: {str(e)}"}), 500
                 
         # Carrega configurações do Xpath do arquivo
         plataformas = carregar_plataformas()
@@ -11985,13 +12240,18 @@ def processar_bip():
                 cep = cep_api if cep_api else ""
                 endereco = end_api if end_api else ""
                 
+                # Incrementa contagem local sempre no grupo ativo principal (pois o pacote foi atribuído com sucesso)
+                chave_cont = motorista_lote or grupo_loggi_ativo.get("cidade") or cidade_detectada
+                contagem_motoristas[chave_cont] = contagem_motoristas.get(chave_cont, 0) + 1
+                contagem_atribuicao_ativa = contagem_motoristas.get(chave_cont, 0)
+                
                 try:
                     conn_div = conectar_banco()
                     cursor_div = conn_div.cursor()
                     cursor_div.execute("""
                         INSERT OR REPLACE INTO divergencias_pendentes (codigo, motorista_lote, motorista_esperado, status)
                         VALUES (?, ?, ?, 'pendente')
-                    """, (codigo_qr, motorista_lote or grupo_loggi_ativo.get("cidade"), motorista_esperado_display))
+                    """, (codigo_qr, chave_cont, motorista_esperado_display))
                     conn_div.commit()
                     conn_div.close()
                 except Exception:
@@ -11999,13 +12259,17 @@ def processar_bip():
                 
                 salvar_entrada_historico(codigo_qr, p_id, cidade_detectada, motorista_esperado_display, "DIVERGENTE", recebedor=recebedor, cep=cep, endereco=endereco)
                 
+                total_bipes_processados += 1
                 return jsonify({
                     "status": "divergente",
                     "mensagem": msg_api,
                     "cidade": cidade_detectada,
                     "recebedor": recebedor,
-                    "motorista_esperado": motorista_esperado_display
-                }), 400
+                    "motorista_esperado": motorista_esperado_display,
+                    "motorista": chave_cont,
+                    "atribuido": True,
+                    "contagem": contagem_atribuicao_ativa
+                })
             else:
                 msg_low = (msg_api or "").lower()
                 eh_falha_rede = any(k in msg_low for k in ["internet lenta", "oscilação", "oscilacao", "timeout", "timed out", "urlopen error", "connection reset", "falha na comunicação", "network error"])
@@ -12034,8 +12298,8 @@ def processar_bip():
             
         elif (p_id == 'imile' or 'imile' in config['recebimento_url'].lower()):
             # --- MOTOR DE BIPAGEM DIRETA VIA API IMILE (SUB-100MS) ---
-            print("[*] [iMile] Disparando bipagem direta via API Ultra-Rápida...")
-            sucesso_api, msg_api, mot_final, cid_api, cep_api, rec_api, end_api = bipar_pacote_imile_api(codigo_qr, motorista_lote, pacote_solto, modo_triagem_direta=triagem_direta)
+            print(f"[*] [iMile] Disparando bipagem direta via API Ultra-Rápida (Base: {c_id or 'Padrão'})...")
+            sucesso_api, msg_api, mot_final, cid_api, cep_api, rec_api, end_api = bipar_pacote_imile_api(codigo_qr, motorista_lote, pacote_solto, modo_triagem_direta=triagem_direta, conta_id=c_id)
             
             if sucesso_api is True:
                 cidade_detectada = cid_api if cid_api else "iMile"
@@ -12108,6 +12372,11 @@ def processar_bip():
                 cep = cep_api if cep_api else ""
                 endereco = end_api if end_api else ""
                 
+                # Incrementa contagem local do motorista ativo (pois o pacote foi atribuído com sucesso a ele)
+                if motorista_lote:
+                    contagem_motoristas[motorista_lote] = contagem_motoristas.get(motorista_lote, 0) + 1
+                contagem_atribuicao_ativa = contagem_motoristas.get(motorista_lote, 0) if motorista_lote else 0
+
                 try:
                     conn_div = conectar_banco()
                     cursor_div = conn_div.cursor()
@@ -12122,13 +12391,17 @@ def processar_bip():
                 
                 salvar_entrada_historico(codigo_qr, p_id, cidade_detectada, motorista_esperado_display, "DIVERGENTE", recebedor=recebedor, cep=cep, endereco=endereco)
                 
+                total_bipes_processados += 1
                 return jsonify({
                     "status": "divergente",
                     "mensagem": msg_api,
                     "cidade": cidade_detectada,
                     "recebedor": recebedor,
-                    "motorista_esperado": motorista_esperado_display
-                }), 400
+                    "motorista_esperado": motorista_esperado_display,
+                    "motorista": motorista_lote,
+                    "atribuido": True,
+                    "contagem": contagem_atribuicao_ativa
+                })
             else:
                 # Verifica se foi um erro impeditivo / regra de negócio retornado pela iMile
                 msg_low = (msg_api or "").lower()
@@ -12248,8 +12521,8 @@ def processar_bip():
                 bipar_entrada_imile()
         elif (p_id == 'anjun' or 'anjun' in config.get('recebimento_url', '').lower() or 'anjun' in str(plataforma_ativa or '').lower()):
             # --- MOTOR DE BIPAGEM DIRETA VIA API ANJUN EXPRESS (SUB-100MS) ---
-            print("[*] [Anjun] Disparando bipagem direta via API Ultra-Rápida...")
-            sucesso_api, msg_api, mot_final, cid_api, cep_api, rec_api, end_api = bipar_pacote_anjun_api(codigo_qr, motorista_lote, modo_triagem_direta=triagem_direta)
+            print(f"[*] [Anjun] Disparando bipagem direta via API Ultra-Rápida (Base: {c_id or 'Padrão'})...")
+            sucesso_api, msg_api, mot_final, cid_api, cep_api, rec_api, end_api = bipar_pacote_anjun_api(codigo_qr, motorista_lote, modo_triagem_direta=triagem_direta, conta_id=c_id)
             
             if sucesso_api is True:
                 cidade_detectada = cid_api if cid_api else "Anjun"
@@ -12383,6 +12656,11 @@ def processar_bip():
                 cep = cep_api if cep_api else ""
                 endereco = end_api if end_api else ""
                 
+                # Incrementa contagem local do motorista ativo (pois o pacote foi atribuído com sucesso a ele)
+                if motorista_lote:
+                    contagem_motoristas[motorista_lote] = contagem_motoristas.get(motorista_lote, 0) + 1
+                contagem_atribuicao_ativa = contagem_motoristas.get(motorista_lote, 0) if motorista_lote else 0
+
                 try:
                     conn_div = conectar_banco()
                     cursor_div = conn_div.cursor()
@@ -12397,13 +12675,17 @@ def processar_bip():
                 
                 salvar_entrada_historico(codigo_qr, p_id, cidade_detectada, motorista_esperado_display, "DIVERGENTE", recebedor=recebedor, cep=cep, endereco=endereco)
                 
+                total_bipes_processados += 1
                 return jsonify({
                     "status": "divergente",
                     "mensagem": msg_api,
                     "cidade": cidade_detectada,
                     "recebedor": recebedor,
-                    "motorista_esperado": motorista_esperado_display
-                }), 400
+                    "motorista_esperado": motorista_esperado_display,
+                    "motorista": motorista_lote,
+                    "atribuido": True,
+                    "contagem": contagem_atribuicao_ativa
+                })
             else:
                 msg_low = (msg_api or "").lower()
                 eh_falha_rede = any(k in msg_low for k in ["internet lenta", "oscilação", "oscilacao", "timeout", "timed out", "urlopen error", "connection reset", "falha na comunicação", "network error"])
@@ -14116,7 +14398,7 @@ def processar_bip():
         driver_lock.release()
 
 def restaurar_sessao_inicial():
-    global plataforma_ativa, motorista_atribuicao_ativa, contagem_atribuicao_ativa, conta_ativa
+    global plataforma_ativa, motorista_atribuicao_ativa, conta_ativa, contagem_atribuicao_ativa, conta_ativa
     try:
         sessao = carregar_sessao_ativa()
         p_id = sessao.get("plataforma")
@@ -14195,24 +14477,42 @@ def obter_ip_rede_local():
 def gerar_qr_code_base64(texto):
     try:
         import qrcode
+        import qrcode.image.svg
         import io, base64
-        qr = qrcode.QRCode(box_size=6, border=2)
-        qr.add_data(texto)
-        qr.make(fit=True)
-        img = qr.make_image(fill_color="black", back_color="white")
+        factory = qrcode.image.svg.SvgPathImage
+        img = qrcode.make(texto, image_factory=factory)
         buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode('utf-8')
+        img.save(buf)
+        svg_b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+        return "data:image/svg+xml;base64," + svg_b64
     except Exception as e:
-        print(f"[!] Erro ao gerar QR Code: {e}")
-        return ""
+        print(f"[!] Erro ao gerar QR Code SVG: {e}")
+        try:
+            import qrcode
+            import io, base64
+            qr = qrcode.QRCode(box_size=6, border=2)
+            qr.add_data(texto)
+            qr.make(fit=True)
+            img = qr.make_image(fill_color="black", back_color="white")
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode('utf-8')
+        except Exception as e2:
+            print(f"[!] Erro no fallback QR Code: {e2}")
+            return ""
 
 @app.route('/coletor')
 def rota_coletor_mobile():
     caminho = os.path.join(BASE_DIR, 'coletor.html')
     if os.path.exists(caminho):
         with open(caminho, 'r', encoding='utf-8') as f:
-            return f.read(), 200, {'Content-Type': 'text/html; charset=utf-8'}
+            headers = {
+                'Content-Type': 'text/html; charset=utf-8',
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0'
+            }
+            return f.read(), 200, headers
     return "Arquivo coletor.html não encontrado no servidor.", 404
 
 @app.route('/api/coletor/info', methods=['GET'])
@@ -14231,9 +14531,22 @@ def rota_coletor_info():
 
 @app.route('/api/coletor/status', methods=['GET'])
 def rota_coletor_status():
-    global plataforma_ativa, motorista_atribuicao_ativa, contagem_motoristas
+    global plataforma_ativa, motorista_atribuicao_ativa, conta_ativa, contagem_motoristas
     try:
-        plat = (plataforma_ativa or "anjun").lower()
+        plat_req = str(request.args.get("plataforma") or "").strip().lower()
+        conta_req = str(request.args.get("conta") or "").strip()
+
+        todas_contas = carregar_contas_plataformas()
+        plat = plat_req if plat_req in ['anjun', 'imile', 'loggi'] else (plataforma_ativa or "anjun").lower()
+
+        info_plat = todas_contas.get(plat, {})
+        contas_plat = info_plat.get("contas", [])
+
+        # Identifica a conta/base alvo
+        cid = conta_req
+        if not cid or cid == "padrao":
+            cid = info_plat.get("conta_ativa") or (contas_plat[0]["id"] if contas_plat else "padrao")
+
         conn = conectar_banco()
         cursor = conn.cursor()
         cursor.execute(
@@ -14241,34 +14554,107 @@ def rota_coletor_status():
             (plat,)
         )
         mots = [r[0] for r in cursor.fetchall() if r[0]]
+        if plat == 'loggi':
+            pass
+            cids_loggi = carregar_cidades()
+            for c in cids_loggi:
+                if c not in mots:
+                    mots.append(c)
         conn.close()
 
         if not mots:
-            mots_salvos = obter_motoristas_da_base_salvos(plat, conta_ativa)
+            mots_salvos = obter_motoristas_da_base_salvos(plat, cid)
             if mots_salvos:
                 mots = mots_salvos
+
+        # Monta a lista completa de contas/bases disponíveis para a tela do coletor
+        opcoes_contas = []
+        for p_key in ['anjun', 'imile', 'loggi']:
+            p_info = todas_contas.get(p_key, {})
+            c_list = p_info.get("contas", [])
+            c_ativa_p = p_info.get("conta_ativa") or (c_list[0]["id"] if c_list else "padrao")
+
+            p_icon = "🚚" if p_key == "anjun" else ("📦" if p_key == "imile" else "⚡")
+            p_nome_base = "Anjun Express" if p_key == "anjun" else ("iMile Delivery" if p_key == "imile" else "Loggi")
+
+            if not c_list:
+                opcoes_contas.append({
+                    "plataforma": p_key,
+                    "conta_id": "padrao",
+                    "nome": p_nome_base,
+                    "apelido": "Principal",
+                    "icone": p_icon,
+                    "selecionada": bool(p_key == plat and cid in ["padrao", "", c_ativa_p])
+                })
+            else:
+                for c in c_list:
+                    c_apelido = c.get("apelido") or c.get("login_usuario") or c.get("id")
+                    nome_completo = f"{p_nome_base} ({c_apelido})"
+                    opcoes_contas.append({
+                        "plataforma": p_key,
+                        "conta_id": c.get("id"),
+                        "nome": nome_completo,
+                        "apelido": c_apelido,
+                        "icone": p_icon,
+                        "selecionada": bool(p_key == plat and c.get("id") == cid)
+                    })
+
+        contagem_mot = contagem_motoristas.get(motorista_atribuicao_ativa, 0) if motorista_atribuicao_ativa else 0
+        total_hoje = sum(contagem_motoristas.values()) if contagem_motoristas else 0
 
         return jsonify({
             "status": "sucesso",
             "plataforma": plat,
+            "conta_id": cid,
+            "opcoes_contas": opcoes_contas,
             "motorista_ativo": motorista_atribuicao_ativa or "",
-            "contagem": contagem_motoristas.get(motorista_atribuicao_ativa, 0) if motorista_atribuicao_ativa else 0,
+            "contagem": contagem_mot,
             "motoristas": sorted(list(set(mots))),
-            "contagem_total_hoje": sum(contagem_motoristas.values()) if contagem_motoristas else 0
+            "contagem_total_hoje": total_hoje, "cidades": carregar_cidades(), "grupo_loggi_ativo": (grupo_loggi_ativo if plat == "loggi" else None)
         })
     except Exception as e:
         return jsonify({"status": "erro", "mensagem": str(e)}), 500
 
 @app.route('/api/coletor/trocar-plataforma', methods=['POST'])
 def rota_coletor_trocar_plataforma():
-    global plataforma_ativa, motorista_atribuicao_ativa
+    global plataforma_ativa, motorista_atribuicao_ativa, conta_ativa
     dados = request.get_json(force=True) or {}
     nova_plat = str(dados.get("plataforma") or "").strip().lower()
+    nova_conta = str(dados.get("conta_id") or dados.get("conta") or "").strip() or None
     if nova_plat in ['anjun', 'imile', 'loggi']:
+        global _init_seq_id
+        _init_seq_id += 1
         plataforma_ativa = nova_plat
         motorista_atribuicao_ativa = None
-        print(f"[Coletor Mobile] Plataforma alterada para: {nova_plat.upper()}")
-        return jsonify({"status": "sucesso", "plataforma": nova_plat})
+        if nova_conta:
+            conta_ativa = nova_conta
+        print(f"[Coletor Mobile] Plataforma alterada para: {nova_plat.upper()} (Conta: {nova_conta or 'padrao'})")
+
+        def _abrir_chrome_coletor_bg(p, c):
+            try:
+                time.sleep(0.1)
+                with driver_lock:
+                    _, porta, cid_resolvido, _ = obter_perfil_e_porta_conta(p, c)
+                    if not is_chrome_debug_active(porta) or not chrome_tem_janela_visivel_na_tela(porta):
+                        print(f"[Coletor Mobile] Abrindo Chrome para {p.upper()} (porta {porta})...")
+                        inicializar_selenium(p, cid_resolvido)
+                    else:
+                        if not driver or plataforma_ativa != p or (cid_resolvido and conta_ativa != cid_resolvido):
+                            conectar_chrome_existente(p, cid_resolvido)
+                        forcar_janela_chrome_visivel(porta)
+                    salvar_sessao_ativa(p, None, 0, cid_resolvido)
+                    if p == 'anjun':
+                        try:
+                            fechar_avisos_todas_abas_anjun(driver)
+                        except Exception:
+                            pass
+                    print(f"[Coletor Mobile] Chrome para {p.upper()} pronto e focado no computador central!")
+            except Exception as e_ch:
+                print(f"[Coletor Mobile] Aviso ao focar/iniciar Chrome para {p}: {e_ch}")
+
+        import threading
+        threading.Thread(target=_abrir_chrome_coletor_bg, args=(nova_plat, nova_conta), daemon=True).start()
+        return jsonify({"status": "sucesso", "plataforma": nova_plat, "conta_id": nova_conta})
     return jsonify({"status": "erro", "mensagem": "Plataforma inválida"}), 400
 
 @app.route('/api/coletor/trocar-motorista', methods=['POST'])

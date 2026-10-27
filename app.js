@@ -7939,15 +7939,14 @@ async function processarProximoDaFila() {
 
 
 
-            } else if (plataformaAtiva === 'loggi' && cidadePacote && (motEsp.toLowerCase() !== cidadePacote.toLowerCase())) {
-
-
-
-                subStatusLabel.innerText = `⚠️ Pacote de: ${cidadePacote} | Grupo ativo: ${motEsp}${textoFila}`;
-
-
-
-                textoVoz = `Divergente! Pertence a cidade ${cidadePacote}`;
+            } else if (plataformaAtiva === 'loggi') {
+                if (resultado.mensagem && resultado.mensagem.includes('Divergência')) {
+                    subStatusLabel.innerText = `⚠️ ${resultado.mensagem}${textoFila}`;
+                    textoVoz = `Divergente! Pacote de ${cidadePacote || 'outra cidade'}`;
+                } else {
+                    subStatusLabel.innerText = `⚠️ Pacote de: ${cidadePacote || 'Outra Cidade'} | Permitido: ${motEsp}${textoFila}`;
+                    textoVoz = `Divergente! Pertence a cidade ${cidadePacote || ''}`;
+                }
 
 
 
@@ -8039,18 +8038,26 @@ async function processarProximoDaFila() {
 
 
 
-            if (motorista) {
-
-
-
+            if (resultado.atribuido) {
+                if (resultado.contagem !== undefined && atribuicaoCounter) {
+                    atribuicaoCounter.innerText = `${resultado.contagem} PACOTES BIPADOS`;
+                }
+                const nomeAlvo = resultado.motorista || motorista || "lote";
+                atribuicaoFeedback.innerText = `⚠️ Atribuído para ${nomeAlvo} (PACOTE DIVERGENTE)`;
+                atribuicaoFeedback.style.color = "#f59e0b";
+                if (!jaBipadoHoje) {
+                    contagemSucesso++;
+                    if (totalContador) totalContador.innerText = contagemSucesso;
+                    const platAtual = (platformSelector ? platformSelector.value : "") || plataformaAtiva;
+                    const kPlat = normalizarChavePlataforma(platAtual);
+                    if (kPlat) {
+                        contagemPorEmpresaHoje[kPlat] = (contagemPorEmpresaHoje[kPlat] || 0) + 1;
+                        atualizarCardsKpiEmpresas();
+                    }
+                }
+            } else if (motorista) {
                 atribuicaoFeedback.innerText = `Falha: ${resultado.mensagem}`;
-
-
-
                 atribuicaoFeedback.style.color = "#f87171";
-
-
-
             }
 
 
@@ -9339,13 +9346,8 @@ input.addEventListener('keydown', (e) => {
 
 
 
-        if (modoGrupoLoggi === 'motorista') {
-            motoristaLote = (driverSelect && driverSelect.value) ? driverSelect.value : null;
-            cidadesParaEnviar = [];
-        } else {
-            cidadesParaEnviar = [...cidadesLoggiSelecionadas];
-            motoristaLote = cidadesParaEnviar.length > 0 ? cidadesParaEnviar[0] : null;
-        }
+        motoristaLote = (driverSelect && driverSelect.value) ? driverSelect.value : null;
+        cidadesParaEnviar = [...cidadesLoggiSelecionadas];
 
 
 
@@ -24546,13 +24548,8 @@ function processarCodigoManual(codigo) {
 
 
 
-        if (modoGrupoLoggi === 'motorista') {
-            motoristaLote = (driverSelect && driverSelect.value) ? driverSelect.value : null;
-            cidadesParaEnviar = [];
-        } else {
-            cidadesParaEnviar = [...cidadesLoggiSelecionadas];
-            motoristaLote = cidadesParaEnviar.length > 0 ? cidadesParaEnviar[0] : null;
-        }
+        motoristaLote = (driverSelect && driverSelect.value) ? driverSelect.value : null;
+        cidadesParaEnviar = [...cidadesLoggiSelecionadas];
 
 
 

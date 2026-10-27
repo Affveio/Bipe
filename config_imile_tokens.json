@@ -1,0 +1,22 @@
+{
+  "conta_1791206904": {
+    "conta_id": "conta_1791206904",
+    "token": "5803b3fb-eb3b-43e0-8bcb-ad38a0db98c7",
+    "currentStationCode": "S210570001",
+    "userCode": "2106085001",
+    "orgId": 10,
+    "stationName": "DS AVR",
+    "timestamp": 1792925529.0,
+    "cookie_str": "IMILE_ACCESS_TOKEN=5803b3fb-eb3b-43e0-8bcb-ad38a0db98c7; currentOcCode=S210570001; i_g=Y; UserInfo={%22password%22:null%2C%22username%22:%22FERNANDA%20GOMEZ%22%2C%22authorities%22:[]%2C%22accountNonExpired%22:true%2C%22accountNonLocked%22:true%2C%22credentialsNonExpired%22:true%2C%22enabled%22:true%2C%22id%22:1444965311870140400%2C%22mobile%22:%221496944996%22%2C%22userCode%22:%222106085001%22%2C%22userName%22:%22FERNANDA%20GOMEZ%22%2C%22orgId%22:10%2C%22ocId%22:1390568251670552600%2C%22userType%22:%22OWN%22%2C%22firstLogin%22:false%2C%22ownOrgId%22:null%2C%22clientCode%22:%22%22%2C%22clientType%22:null%2C%22country%22:%22BRA%22%2C%22isGuide%22:null%2C%22acctId%22:null%2C%22userToken%22:null%2C%22deviceId%22:null%2C%22ocCode%22:%22S210570001%22%2C%22secondType%22:%22%22%2C%22vendorCode%22:%22SRM2503869%22%2C%22status%22:%22ACTIVE%22%2C%22isDelete%22:false%2C%22isOmsAdmin%22:-1%2C%22email%22:%22dsavr@gmail.com%22%2C%22deleteStatus%22:null%2C%22deleteRequestDate%22:null%2C%22wechatId%22:null%2C%22feishuId%22:null%2C%22userMfaInfoDTO%22:{%22checkMfa%22:false%2C%22checkSuccess%22:false%2C%22mobile%22:null%2C%22email%22:null%2C%22wechatId%22:null%2C%22feishuId%22:null%2C%22totpSecret%22:null%2C%22bindToken%22:null%2C%22mfaMethod%22:%22none%22%2C%22mfaVerified%22:true%2C%22mfaVerifiedAt%22:null%2C%22needGuideBind%22:false}}; _ga=GA1.1.1291251574.1791222649; ACCESS_TOKEN=Bearer%205803b3fb-eb3b-43e0-8bcb-ad38a0db98c7; LANG=pt_BR; _ga_2YVLE0XS0P=GS2.1.s1792352362$o4$g1$t1792354977$j43$l0$h0; TIMEZONE=-3; _ga_L5GHQ1947N=GS2.1.s1792932890$o60$g1$t1792934155$j60$l0$h0; _ga_MTPDGX60Z3=GS2.1.s1792932904$o59$g1$t1792934155$j55$l0$h0; acw_tc=1feeb1c5-fb43-913c-9479-76f61b190f6ef5e53f102f7fcb52a573323bd331acb7; TIMEZONE_COUNTRY=BRA"
+  },
+  "conta_1791206883": {
+    "conta_id": "conta_1791206883",
+    "token": "5803b3fb-eb3b-43e0-8bcb-ad38a0db98c7",
+    "currentStationCode": "S210570001",
+    "userCode": "2106085001",
+    "orgId": 10,
+    "stationName": "DS AVR",
+    "timestamp": 1792925529.0,
+    "cookie_str": "IMILE_ACCESS_TOKEN=5803b3fb-eb3b-43e0-8bcb-ad38a0db98c7; currentOcCode=S210570001; i_g=Y; UserInfo={%22password%22:null%2C%22username%22:%22FERNANDA%20GOMEZ%22%2C%22authorities%22:[]%2C%22accountNonExpired%22:true%2C%22accountNonLocked%22:true%2C%22credentialsNonExpired%22:true%2C%22enabled%22:true%2C%22id%22:1444965311870140400%2C%22mobile%22:%221496944996%22%2C%22userCode%22:%222106085001%22%2C%22userName%22:%22FERNANDA%20GOMEZ%22%2C%22orgId%22:10%2C%22ocId%22:1390568251670552600%2C%22userType%22:%22OWN%22%2C%22firstLogin%22:false%2C%22ownOrgId%22:null%2C%22clientCode%22:%22%22%2C%22clientType%22:null%2C%22country%22:%22BRA%22%2C%22isGuide%22:null%2C%22acctId%22:null%2C%22userToken%22:null%2C%22deviceId%22:null%2C%22ocCode%22:%22S210570001%22%2C%22secondType%22:%22%22%2C%22vendorCode%22:%22SRM2503869%22%2C%22status%22:%22ACTIVE%22%2C%22isDelete%22:false%2C%22isOmsAdmin%22:-1%2C%22email%22:%22dsavr@gmail.com%22%2C%22deleteStatus%22:null%2C%22deleteRequestDate%22:null%2C%22wechatId%22:null%2C%22feishuId%22:null%2C%22userMfaInfoDTO%22:{%22checkMfa%22:false%2C%22checkSuccess%22:false%2C%22mobile%22:null%2C%22email%22:null%2C%22wechatId%22:null%2C%22feishuId%22:null%2C%22totpSecret%22:null%2C%22bindToken%22:null%2C%22mfaMethod%22:%22none%22%2C%22mfaVerified%22:true%2C%22mfaVerifiedAt%22:null%2C%22needGuideBind%22:false}}; _ga=GA1.1.1291251574.1791222649; ACCESS_TOKEN=Bearer%205803b3fb-eb3b-43e0-8bcb-ad38a0db98c7; LANG=pt_BR; _ga_2YVLE0XS0P=GS2.1.s1792352362$o4$g1$t1792354977$j43$l0$h0; TIMEZONE=-3; _ga_L5GHQ1947N=GS2.1.s1792932890$o60$g1$t1792934155$j60$l0$h0; _ga_MTPDGX60Z3=GS2.1.s1792932904$o59$g1$t1792934155$j55$l0$h0; acw_tc=1feeb1c5-fb43-913c-9479-76f61b190f6ef5e53f102f7fcb52a573323bd331acb7; TIMEZONE_COUNTRY=BRA"
+  }
+}
