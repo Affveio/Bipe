@@ -14529,6 +14529,8 @@ def rota_coletor_info():
         "qrcode": qr
     })
 
+_cache_grupos_loggi_coletor = {"ts": 0, "grupos": []}
+
 @app.route('/api/coletor/status', methods=['GET'])
 def rota_coletor_status():
     global plataforma_ativa, motorista_atribuicao_ativa, conta_ativa, contagem_motoristas
@@ -14547,25 +14549,31 @@ def rota_coletor_status():
         if not cid or cid == "padrao":
             cid = info_plat.get("conta_ativa") or (contas_plat[0]["id"] if contas_plat else "padrao")
 
-        conn = conectar_banco()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT DISTINCT motorista FROM motoristas_plataforma WHERE LOWER(plataforma) = LOWER(?) AND motorista NOT IN ('Sem Motorista', 'Geral', '---', '') ORDER BY motorista ASC",
-            (plat,)
-        )
-        mots = [r[0] for r in cursor.fetchall() if r[0]]
-        if plat == 'loggi':
+        mots = []
+        try:
+            conn = conectar_banco()
+            cursor = conn.cursor()
+            if plat == 'loggi':
+                cursor.execute(
+                    "SELECT DISTINCT motorista FROM motoristas_plataforma WHERE motorista NOT IN ('Sem Motorista', 'Geral', '---', '') ORDER BY motorista ASC"
+                )
+            else:
+                cursor.execute(
+                    "SELECT DISTINCT motorista FROM motoristas_plataforma WHERE LOWER(plataforma) = LOWER(?) AND motorista NOT IN ('Sem Motorista', 'Geral', '---', '') ORDER BY motorista ASC",
+                    (plat,)
+                )
+            mots = [r[0] for r in cursor.fetchall() if r[0]]
+            conn.close()
+        except Exception:
             pass
-            cids_loggi = carregar_cidades()
-            for c in cids_loggi:
-                if c not in mots:
-                    mots.append(c)
-        conn.close()
 
         if not mots:
-            mots_salvos = obter_motoristas_da_base_salvos(plat, cid)
-            if mots_salvos:
-                mots = mots_salvos
+            try:
+                mots_salvos = obter_motoristas_da_base_salvos(plat, cid)
+                if mots_salvos:
+                    mots = mots_salvos
+            except Exception:
+                pass
 
         # Monta a lista completa de contas/bases disponíveis para a tela do coletor
         opcoes_contas = []
@@ -14602,6 +14610,27 @@ def rota_coletor_status():
         contagem_mot = contagem_motoristas.get(motorista_atribuicao_ativa, 0) if motorista_atribuicao_ativa else 0
         total_hoje = sum(contagem_motoristas.values()) if contagem_motoristas else 0
 
+        # Carrega grupos da Loggi com cache de 10s para garantir resposta instantânea e estável ao coletor
+        grupos_loggi_coletor = []
+        if plat == 'loggi':
+            agora = time.time()
+            if agora - _cache_grupos_loggi_coletor["ts"] < 10.0 and _cache_grupos_loggi_coletor["grupos"]:
+                grupos_loggi_coletor = _cache_grupos_loggi_coletor["grupos"]
+            else:
+                try:
+                    grupos_buscados = loggi_listar_grupos_api() or []
+                    _cache_grupos_loggi_coletor["ts"] = agora
+                    _cache_grupos_loggi_coletor["grupos"] = grupos_buscados
+                    grupos_loggi_coletor = grupos_buscados
+                except Exception:
+                    grupos_loggi_coletor = _cache_grupos_loggi_coletor.get("grupos", [])
+
+        cidades_base = []
+        try:
+            cidades_base = carregar_cidades() or []
+        except Exception:
+            pass
+
         return jsonify({
             "status": "sucesso",
             "plataforma": plat,
@@ -14610,7 +14639,10 @@ def rota_coletor_status():
             "motorista_ativo": motorista_atribuicao_ativa or "",
             "contagem": contagem_mot,
             "motoristas": sorted(list(set(mots))),
-            "contagem_total_hoje": total_hoje, "cidades": carregar_cidades(), "grupo_loggi_ativo": (grupo_loggi_ativo if plat == "loggi" else None)
+            "cidades": cidades_base,
+            "grupos_loggi": grupos_loggi_coletor,
+            "contagem_total_hoje": total_hoje,
+            "grupo_loggi_ativo": (grupo_loggi_ativo if plat == "loggi" else None)
         })
     except Exception as e:
         return jsonify({"status": "erro", "mensagem": str(e)}), 500

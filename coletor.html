@@ -1,905 +1,2377 @@
 <!DOCTYPE html>
+
 <html lang="pt-BR">
+
 <head>
+
     <meta charset="UTF-8">
+
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+
     <meta name="theme-color" content="#0b0f19">
+
     <meta name="apple-mobile-web-app-capable" content="yes">
+
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
     <title>TurboScan Coletor Mobile</title>
+
     <style>
+
         * {
+
             box-sizing: border-box;
+
             margin: 0;
+
             padding: 0;
+
             -webkit-tap-highlight-color: transparent;
+
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+
         }
+
+
 
         body {
+
             background-color: #0b0f19;
+
             color: #f8fafc;
+
             min-height: 100vh;
+
             display: flex;
+
             flex-direction: column;
+
             overflow-x: hidden;
+
             padding-bottom: env(safe-area-inset-bottom);
+
         }
+
+
 
         /* Top Bar */
+
         .header {
+
             background: #111827;
+
             border-bottom: 1px solid #1f2937;
+
             padding: 12px 14px;
+
             display: flex;
+
             align-items: center;
+
             justify-content: space-between;
+
             position: sticky;
+
             top: 0;
+
             z-index: 50;
+
         }
+
+
 
         .brand-box {
+
             display: flex;
+
             align-items: center;
+
             gap: 8px;
+
         }
+
+
 
         .brand-title {
+
             font-size: 1.1rem;
+
             font-weight: 900;
+
             letter-spacing: -0.5px;
+
             color: #38bdf8;
+
             display: flex;
+
             align-items: center;
+
             gap: 4px;
+
         }
+
+
 
         .brand-badge {
+
             background: #0284c7;
+
             color: #fff;
+
             font-size: 0.65rem;
+
             font-weight: 800;
+
             padding: 2px 6px;
+
             border-radius: 4px;
+
             letter-spacing: 0.5px;
+
         }
+
+
 
         .status-pill {
+
             display: flex;
+
             align-items: center;
+
             gap: 6px;
+
             font-size: 0.75rem;
+
             background: #0f172a;
+
             border: 1px solid #334155;
+
             padding: 4px 8px;
+
             border-radius: 20px;
+
             color: #94a3b8;
+
         }
+
+
 
         .status-dot {
+
             width: 8px;
+
             height: 8px;
+
             border-radius: 50%;
+
             background: #10b981;
+
             box-shadow: 0 0 6px #10b981;
+
         }
+
+
 
         .status-dot.offline {
+
             background: #ef4444;
+
             box-shadow: 0 0 6px #ef4444;
+
         }
+
+
 
         /* Controls Bar */
+
         .controls-bar {
+
             background: #131b2e;
+
             padding: 10px 14px;
+
             border-bottom: 1px solid #1e293b;
+
             display: flex;
+
             gap: 8px;
+
             align-items: center;
+
         }
+
+
 
         .btn-control {
+
             flex: 1;
+
             background: #1e293b;
+
             border: 1px solid #334155;
+
             color: #f8fafc;
+
             padding: 10px 8px;
+
             border-radius: 8px;
+
             font-size: 0.82rem;
+
             font-weight: 700;
+
             display: flex;
+
             align-items: center;
+
             justify-content: center;
+
             gap: 6px;
+
             cursor: pointer;
+
             transition: all 0.15s ease;
+
             touch-action: manipulation;
+
             -webkit-user-select: none;
+
             user-select: none;
+
         }
+
+
 
         .btn-control:active {
+
             transform: scale(0.97);
+
             background: #334155;
+
         }
 
+
+
         .btn-control.active-triagem {
+
             background: #065f46;
+
             border-color: #059669;
+
             color: #6ee7b7;
+
+        }
+
+
+
+        .btn-control.btn-voz {
+            background: #1e293b;
+            border-color: #334155;
+            color: #94a3b8;
+            flex: 0.9;
+        }
+
+        .btn-control.btn-voz.active-voz {
+            background: #0f2744;
+            border-color: #0284c7;
+            color: #38bdf8;
         }
 
         .btn-control.plat-btn {
+
             background: #1e1b4b;
+
             border-color: #4338ca;
+
             color: #c7d2fe;
+
         }
+
+
 
         /* Driver select bar (Modo Pilha) */
+
         .driver-bar {
+
             background: #182238;
+
             padding: 8px 14px;
+
             border-bottom: 1px solid #1e293b;
+
             display: none;
+
             align-items: center;
+
             gap: 8px;
+
         }
+
+
 
         .driver-select {
+
             flex: 1;
+
             background: #0f172a;
+
             border: 1px solid #38bdf8;
+
             color: #f8fafc;
+
             padding: 8px 10px;
+
             border-radius: 6px;
+
             font-size: 0.9rem;
+
             font-weight: 600;
+
             outline: none;
+
         }
 
-        /* Main Container */
-        .main-container {
+
+
+        /* Botão estilizado do seletor de motorista/destino (Touch friendly no PDA) */
+
+        .driver-select-btn {
+
             flex: 1;
-            padding: 14px;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
 
-        /* Big Result Card */
-        .result-card {
-            background: #111827;
-            border: 2px solid #1f2937;
-            border-radius: 14px;
-            padding: 16px;
-            text-align: center;
-            transition: all 0.2s ease;
-            box-shadow: 0 4px 14px rgba(0,0,0,0.4);
-            min-height: 200px;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .result-card.ok {
-            border-color: #10b981;
-            background: linear-gradient(180deg, #064e3b 0%, #062b21 100%);
-            box-shadow: 0 0 20px rgba(16, 185, 129, 0.25);
-        }
-
-        .result-card.duplicado {
-            border-color: #f59e0b;
-            background: linear-gradient(180deg, #78350f 0%, #3a1a05 100%);
-            box-shadow: 0 0 20px rgba(245, 158, 11, 0.25);
-        }
-
-        .result-card.divergente {
-            border-color: #ef4444;
-            background: linear-gradient(180deg, #7f1d1d 0%, #450a0a 100%);
-            box-shadow: 0 0 20px rgba(239, 68, 68, 0.35);
-            animation: shake 0.4s ease-in-out;
-        }
-
-        @keyframes shake {
-            0%, 100% { transform: translateX(0); }
-            20%, 60% { transform: translateX(-6px); }
-            40%, 80% { transform: translateX(6px); }
-        }
-
-        .status-tag {
-            font-size: 0.85rem;
-            font-weight: 900;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            padding: 4px 12px;
-            border-radius: 20px;
-            background: #1e293b;
-            color: #94a3b8;
-        }
-
-        .result-card.ok .status-tag {
-            background: #10b981;
-            color: #064e3b;
-        }
-
-        .result-card.duplicado .status-tag {
-            background: #f59e0b;
-            color: #78350f;
-        }
-
-        .result-card.divergente .status-tag {
-            background: #ef4444;
-            color: #ffffff;
-        }
-
-        .mot-display {
-            font-size: 1.85rem;
-            font-weight: 900;
-            line-height: 1.15;
-            color: #f8fafc;
-            word-break: break-word;
-            margin-top: 4px;
-        }
-
-        .cidade-display {
-            font-size: 1.1rem;
-            font-weight: 700;
-            color: #cbd5e1;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-
-        .detail-display {
-            font-size: 0.85rem;
-            color: #94a3b8;
-            word-break: break-all;
-        }
-
-        .msg-display {
-            font-size: 0.85rem;
-            color: #fbbf24;
-            margin-top: 4px;
-            font-weight: 600;
-        }
-
-        /* Scan Input Section */
-        .input-card {
-            background: #111827;
-            border: 1px solid #1f2937;
-            border-radius: 12px;
-            padding: 12px;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .input-row {
-            display: flex;
-            gap: 8px;
-        }
-
-        .barcode-input {
-            flex: 1;
             background: #0f172a;
-            border: 2px solid #38bdf8;
+
+            border: 1px solid #38bdf8;
+
             color: #f8fafc;
-            padding: 12px 14px;
+
+            padding: 9px 12px;
+
             border-radius: 8px;
-            font-size: 1rem;
+
+            font-size: 0.88rem;
+
             font-weight: 700;
-            outline: none;
-            letter-spacing: 0.5px;
-        }
 
-        .barcode-input:focus {
-            border-color: #0284c7;
-            box-shadow: 0 0 10px rgba(56, 189, 248, 0.3);
-        }
-
-        .btn-cam {
-            background: #0369a1;
-            color: #fff;
-            border: none;
-            border-radius: 8px;
-            padding: 0 14px;
-            font-size: 1.1rem;
-            cursor: pointer;
             display: flex;
+
             align-items: center;
-            justify-content: center;
-        }
 
-        .btn-cam:active {
-            background: #0284c7;
-        }
+            justify-content: space-between;
 
-        /* Counters Bar */
-        .stats-bar {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            cursor: pointer;
+
+            text-align: left;
+
+            touch-action: manipulation;
+
+            -webkit-user-select: none;
+
+            user-select: none;
+
+            overflow: hidden;
+
             gap: 8px;
+
         }
 
-        .stat-box {
-            background: #111827;
-            border: 1px solid #1f2937;
-            border-radius: 8px;
-            padding: 8px 10px;
-            text-align: center;
+        .driver-select-btn span:first-child {
+
+            white-space: nowrap;
+
+            overflow: hidden;
+
+            text-overflow: ellipsis;
+
+            max-width: 85%;
+
         }
 
-        .stat-val {
-            font-size: 1.25rem;
-            font-weight: 900;
-            color: #38bdf8;
+        .driver-select-btn:active {
+
+            background: #1e293b;
+
+            border-color: #0ea5e9;
+
         }
 
-        .stat-label {
-            font-size: 0.68rem;
-            color: #94a3b8;
-            text-transform: uppercase;
-            font-weight: 700;
-            margin-top: 2px;
-        }
 
-        /* Camera Scanner Modal */
-        #camera-modal {
+
+        /* Modal / Bottom Sheet de Seleção com Busca e Abas no PDA */
+
+        #sheet-motorista {
+
             display: none;
+
             position: fixed;
+
             top: 0;
+
             left: 0;
+
             right: 0;
+
             bottom: 0;
-            background: rgba(0,0,0,0.95);
-            z-index: 100;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            padding: 16px;
-        }
 
-        #camera-video {
-            width: 100%;
-            max-width: 400px;
-            height: 280px;
-            border-radius: 12px;
-            border: 2px solid #38bdf8;
-            object-fit: cover;
-            background: #000;
-        }
+            background: rgba(0,0,0,0.75);
 
-        .cam-controls {
-            margin-top: 14px;
-            display: flex;
-            gap: 12px;
-            width: 100%;
-            max-width: 400px;
-        }
+            z-index: 210;
 
-        .btn-close-cam {
-            flex: 1;
-            background: #ef4444;
-            color: #fff;
-            border: none;
-            padding: 12px;
-            border-radius: 8px;
-            font-size: 0.9rem;
-            font-weight: 800;
-            cursor: pointer;
-        }
-
-        /* Platform Selection Sheet */
-        #sheet-plataforma {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.7);
-            z-index: 200;
             align-items: flex-end;
+
             justify-content: center;
+
         }
 
-        .sheet-content {
+
+
+        .sheet-motorista-content {
             background: #111827;
-            border-top: 1px solid #374151;
-            border-radius: 16px 16px 0 0;
+            border-top: 2px solid #38bdf8;
+            border-radius: 20px 20px 0 0;
             width: 100%;
-            max-width: 500px;
-            padding: 18px 16px 28px 16px;
+            max-width: 520px;
+            height: 85vh;
+            max-height: 85vh;
+            padding: 16px 16px 20px 16px;
             display: flex;
             flex-direction: column;
             gap: 10px;
             animation: slideUp 0.2s ease-out;
+            box-sizing: border-box;
         }
 
-        @keyframes slideUp {
-            from { transform: translateY(100%); }
-            to { transform: translateY(0); }
+
+
+        .sheet-header-row {
+
+            display: flex;
+
+            align-items: center;
+
+            justify-content: space-between;
+
         }
 
-        .sheet-title {
-            font-size: 1rem;
-            font-weight: 800;
-            color: #cbd5e1;
-            margin-bottom: 6px;
-            text-align: center;
-        }
 
-        .sheet-opt {
-            background: #1e293b;
-            border: 1px solid #334155;
-            color: #f8fafc;
-            padding: 14px;
-            border-radius: 10px;
+
+        .sheet-header-row .sheet-title {
+
+            margin: 0;
+
+            text-align: left;
+
             font-size: 0.95rem;
-            font-weight: 700;
+
+            color: #cbd5e1;
+
+            font-weight: 800;
+
+        }
+
+
+
+        .btn-close-x {
+            background: #1e293b;
+            border: 1px solid #475569;
+            color: #f1f5f9;
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            font-size: 1.15rem;
+            font-weight: bold;
             display: flex;
             align-items: center;
-            justify-content: space-between;
+            justify-content: center;
             cursor: pointer;
             touch-action: manipulation;
-            -webkit-user-select: none;
-            user-select: none;
         }
 
-        .sheet-opt:active {
+        .btn-close-x:active {
+
             background: #334155;
+
+            color: #fff;
+
         }
 
-        .sheet-opt.selected {
+
+
+        .search-box-pda {
+
+            display: flex;
+
+            align-items: center;
+
+            background: #1e293b;
+
+            border: 1px solid #475569;
+
+            border-radius: 8px;
+
+            padding: 8px 10px;
+
+            gap: 8px;
+
+        }
+
+        .search-box-pda:focus-within {
+
             border-color: #38bdf8;
-            background: #0f2744;
-            color: #38bdf8;
+
+            box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+
         }
 
-        /* Recent Scans */
-        .history-card {
-            background: #111827;
-            border: 1px solid #1f2937;
-            border-radius: 10px;
-            padding: 10px 12px;
+        .search-box-pda input {
+
             flex: 1;
+
+            background: transparent;
+
+            border: none;
+
+            color: #f8fafc;
+
+            font-size: 0.92rem;
+
+            font-weight: 600;
+
+            outline: none;
+
+        }
+
+        .search-box-pda input::placeholder {
+
+            color: #64748b;
+
+        }
+
+        .btn-clear-pda {
+
+            background: transparent;
+
+            border: none;
+
+            color: #94a3b8;
+
+            font-size: 1.1rem;
+
+            cursor: pointer;
+
+            padding: 0 4px;
+
+            touch-action: manipulation;
+
+        }
+
+
+
+        .sheet-tabs {
+
+            display: flex;
+
+            gap: 6px;
+
+            overflow-x: auto;
+
+            padding-bottom: 2px;
+
+            -webkit-overflow-scrolling: touch;
+
+        }
+
+        .sheet-tab-btn {
+
+            background: #1e293b;
+
+            border: 1px solid #334155;
+
+            color: #94a3b8;
+
+            padding: 6px 12px;
+
+            border-radius: 6px;
+
+            font-size: 0.78rem;
+
+            font-weight: 700;
+
+            white-space: nowrap;
+
+            cursor: pointer;
+
+            touch-action: manipulation;
+
+        }
+
+        .sheet-tab-btn.active {
+
+            background: #0284c7;
+
+            border-color: #38bdf8;
+
+            color: #ffffff;
+
+        }
+
+
+
+        .btn-recarregar-pda {
+            margin-top: 10px;
+            padding: 8px 16px;
+            background: #0284c7;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.82rem;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .btn-recarregar-pda:active {
+            background: #0369a1;
+        }
+
+        .sheet-options-container {
             display: flex;
             flex-direction: column;
-            overflow: hidden;
-        }
-
-        .history-title {
-            font-size: 0.75rem;
-            font-weight: 800;
-            color: #94a3b8;
-            text-transform: uppercase;
-            margin-bottom: 6px;
-            display: flex;
-            justify-content: space-between;
-        }
-
-        .history-list {
-            list-style: none;
+            gap: 6px;
             overflow-y: auto;
             flex: 1;
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
+            min-height: 0;
+            padding-right: 2px;
+            -webkit-overflow-scrolling: touch;
         }
+
+
+
+        .sheet-opt-group-header {
+
+            font-size: 0.7rem;
+
+            font-weight: 800;
+
+            color: #38bdf8;
+
+            text-transform: uppercase;
+
+            letter-spacing: 0.5px;
+
+            padding: 8px 4px 3px 4px;
+
+        }
+
+
+
+        /* Main Container */
+
+        .main-container {
+
+            flex: 1;
+
+            padding: 14px;
+
+            display: flex;
+
+            flex-direction: column;
+
+            gap: 12px;
+
+        }
+
+
+
+        /* Big Result Card */
+
+        .result-card {
+
+            background: #111827;
+
+            border: 2px solid #1f2937;
+
+            border-radius: 14px;
+
+            padding: 16px;
+
+            text-align: center;
+
+            transition: all 0.2s ease;
+
+            box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+
+            min-height: 200px;
+
+            display: flex;
+
+            flex-direction: column;
+
+            justify-content: center;
+
+            align-items: center;
+
+            gap: 8px;
+
+        }
+
+
+
+        .result-card.ok {
+
+            border-color: #10b981;
+
+            background: linear-gradient(180deg, #064e3b 0%, #062b21 100%);
+
+            box-shadow: 0 0 20px rgba(16, 185, 129, 0.25);
+
+        }
+
+
+
+        .result-card.duplicado {
+
+            border-color: #f59e0b;
+
+            background: linear-gradient(180deg, #78350f 0%, #3a1a05 100%);
+
+            box-shadow: 0 0 20px rgba(245, 158, 11, 0.25);
+
+        }
+
+
+
+        .result-card.divergente {
+
+            border-color: #ef4444;
+
+            background: linear-gradient(180deg, #7f1d1d 0%, #450a0a 100%);
+
+            box-shadow: 0 0 20px rgba(239, 68, 68, 0.35);
+
+            animation: shake 0.4s ease-in-out;
+
+        }
+
+
+
+        @keyframes shake {
+
+            0%, 100% { transform: translateX(0); }
+
+            20%, 60% { transform: translateX(-6px); }
+
+            40%, 80% { transform: translateX(6px); }
+
+        }
+
+
+
+        .status-tag {
+
+            font-size: 0.85rem;
+
+            font-weight: 900;
+
+            text-transform: uppercase;
+
+            letter-spacing: 1px;
+
+            padding: 4px 12px;
+
+            border-radius: 20px;
+
+            background: #1e293b;
+
+            color: #94a3b8;
+
+        }
+
+
+
+        .result-card.ok .status-tag {
+
+            background: #10b981;
+
+            color: #064e3b;
+
+        }
+
+
+
+        .result-card.duplicado .status-tag {
+
+            background: #f59e0b;
+
+            color: #78350f;
+
+        }
+
+
+
+        .result-card.divergente .status-tag {
+
+            background: #ef4444;
+
+            color: #ffffff;
+
+        }
+
+
+
+        .mot-display {
+
+            font-size: 1.85rem;
+
+            font-weight: 900;
+
+            line-height: 1.15;
+
+            color: #f8fafc;
+
+            word-break: break-word;
+
+            margin-top: 4px;
+
+        }
+
+
+
+        .cidade-display {
+
+            font-size: 1.1rem;
+
+            font-weight: 700;
+
+            color: #cbd5e1;
+
+            display: flex;
+
+            align-items: center;
+
+            gap: 6px;
+
+        }
+
+
+
+        .detail-display {
+
+            font-size: 0.85rem;
+
+            color: #94a3b8;
+
+            word-break: break-all;
+
+        }
+
+
+
+        .msg-display {
+
+            font-size: 0.85rem;
+
+            color: #fbbf24;
+
+            margin-top: 4px;
+
+            font-weight: 600;
+
+        }
+
+
+
+        /* Scan Input Section */
+
+        .input-card {
+
+            background: #111827;
+
+            border: 1px solid #1f2937;
+
+            border-radius: 12px;
+
+            padding: 12px;
+
+            display: flex;
+
+            flex-direction: column;
+
+            gap: 10px;
+
+        }
+
+
+
+        .input-row {
+
+            display: flex;
+
+            gap: 8px;
+
+        }
+
+
+
+        .barcode-input {
+
+            flex: 1;
+
+            background: #0f172a;
+
+            border: 2px solid #38bdf8;
+
+            color: #f8fafc;
+
+            padding: 12px 14px;
+
+            border-radius: 8px;
+
+            font-size: 1rem;
+
+            font-weight: 700;
+
+            outline: none;
+
+            letter-spacing: 0.5px;
+
+        }
+
+
+
+        .barcode-input:focus {
+
+            border-color: #0284c7;
+
+            box-shadow: 0 0 10px rgba(56, 189, 248, 0.3);
+
+        }
+
+
+
+        .btn-cam {
+
+            background: #0369a1;
+
+            color: #fff;
+
+            border: none;
+
+            border-radius: 8px;
+
+            padding: 0 14px;
+
+            font-size: 1.1rem;
+
+            cursor: pointer;
+
+            display: flex;
+
+            align-items: center;
+
+            justify-content: center;
+
+        }
+
+
+
+        .btn-cam:active {
+
+            background: #0284c7;
+
+        }
+
+
+
+        /* Counters Bar */
+
+        .stats-bar {
+
+            display: grid;
+
+            grid-template-columns: repeat(3, 1fr);
+
+            gap: 8px;
+
+        }
+
+
+
+        .stat-box {
+
+            background: #111827;
+
+            border: 1px solid #1f2937;
+
+            border-radius: 8px;
+
+            padding: 8px 10px;
+
+            text-align: center;
+
+        }
+
+
+
+        .stat-val {
+
+            font-size: 1.25rem;
+
+            font-weight: 900;
+
+            color: #38bdf8;
+
+        }
+
+
+
+        .stat-label {
+
+            font-size: 0.68rem;
+
+            color: #94a3b8;
+
+            text-transform: uppercase;
+
+            font-weight: 700;
+
+            margin-top: 2px;
+
+        }
+
+
+
+        /* Camera Scanner Modal */
+
+        #camera-modal {
+
+            display: none;
+
+            position: fixed;
+
+            top: 0;
+
+            left: 0;
+
+            right: 0;
+
+            bottom: 0;
+
+            background: rgba(0,0,0,0.95);
+
+            z-index: 100;
+
+            flex-direction: column;
+
+            align-items: center;
+
+            justify-content: center;
+
+            padding: 16px;
+
+        }
+
+
+
+                .camera-scanner-wrapper {
+            position: relative;
+            width: 100%;
+            max-width: 400px;
+            height: 280px;
+            border-radius: 12px;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+            border: 2px solid #38bdf8;
+            transition: border-color 0.25s ease;
+        }
+
+        #camera-video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            background: #000;
+        }
+
+        /* Flash de Leitura Imediata (Verde) */
+        #cam-flash-overlay {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(16, 185, 129, 0.65);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.12s ease;
+            z-index: 20;
+        }
+
+        /* Mira Laser Animada */
+        .scanner-laser {
+            position: absolute;
+            top: 15%;
+            left: 5%;
+            width: 90%;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #ef4444, #38bdf8, #ef4444, transparent);
+            box-shadow: 0 0 10px #ef4444;
+            animation: laserScan 2s infinite ease-in-out;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        @keyframes laserScan {
+            0% { top: 15%; opacity: 0.7; }
+            50% { top: 85%; opacity: 1; }
+            100% { top: 15%; opacity: 0.7; }
+        }
+
+        /* Cantoneiras da Mira do Scanner */
+        .scanner-corner {
+            position: absolute;
+            width: 24px;
+            height: 24px;
+            pointer-events: none;
+            z-index: 10;
+        }
+        .scanner-corner.top-left { top: 12px; left: 12px; border-top: 3px solid #38bdf8; border-left: 3px solid #38bdf8; border-top-left-radius: 6px; }
+        .scanner-corner.top-right { top: 12px; right: 12px; border-top: 3px solid #38bdf8; border-right: 3px solid #38bdf8; border-top-right-radius: 6px; }
+        .scanner-corner.bottom-left { bottom: 12px; left: 12px; border-bottom: 3px solid #38bdf8; border-left: 3px solid #38bdf8; border-bottom-left-radius: 6px; }
+        .scanner-corner.bottom-right { bottom: 12px; right: 12px; border-bottom: 3px solid #38bdf8; border-right: 3px solid #38bdf8; border-bottom-right-radius: 6px; }
+
+
+
+        .cam-controls {
+
+            margin-top: 14px;
+
+            display: flex;
+
+            gap: 12px;
+
+            width: 100%;
+
+            max-width: 400px;
+
+        }
+
+
+
+        .btn-close-cam {
+
+            flex: 1;
+
+            background: #ef4444;
+
+            color: #fff;
+
+            border: none;
+
+            padding: 12px;
+
+            border-radius: 8px;
+
+            font-size: 0.9rem;
+
+            font-weight: 800;
+
+            cursor: pointer;
+
+        }
+
+
+
+        /* Platform Selection Sheet */
+
+        #sheet-plataforma {
+
+            display: none;
+
+            position: fixed;
+
+            top: 0;
+
+            left: 0;
+
+            right: 0;
+
+            bottom: 0;
+
+            background: rgba(0,0,0,0.7);
+
+            z-index: 200;
+
+            align-items: flex-end;
+
+            justify-content: center;
+
+        }
+
+
+
+        .sheet-content {
+
+            background: #111827;
+
+            border-top: 1px solid #374151;
+
+            border-radius: 16px 16px 0 0;
+
+            width: 100%;
+
+            max-width: 500px;
+
+            padding: 18px 16px 28px 16px;
+
+            display: flex;
+
+            flex-direction: column;
+
+            gap: 10px;
+
+            animation: slideUp 0.2s ease-out;
+
+        }
+
+
+
+        @keyframes slideUp {
+
+            from { transform: translateY(100%); }
+
+            to { transform: translateY(0); }
+
+        }
+
+
+
+        .sheet-title {
+
+            font-size: 1rem;
+
+            font-weight: 800;
+
+            color: #cbd5e1;
+
+            margin-bottom: 6px;
+
+            text-align: center;
+
+        }
+
+
+
+        .sheet-opt {
+
+            background: #1e293b;
+
+            border: 1px solid #334155;
+
+            color: #f8fafc;
+
+            padding: 14px;
+
+            border-radius: 10px;
+
+            font-size: 0.95rem;
+
+            font-weight: 700;
+
+            display: flex;
+
+            align-items: center;
+
+            justify-content: space-between;
+
+            cursor: pointer;
+
+            touch-action: manipulation;
+
+            -webkit-user-select: none;
+
+            user-select: none;
+
+        }
+
+
+
+        .sheet-opt:active {
+
+            background: #334155;
+
+        }
+
+
+
+        .sheet-opt.selected {
+
+            border-color: #38bdf8;
+
+            background: #0f2744;
+
+            color: #38bdf8;
+
+        }
+
+
+
+        /* Recent Scans */
+
+        .history-card {
+
+            background: #111827;
+
+            border: 1px solid #1f2937;
+
+            border-radius: 10px;
+
+            padding: 10px 12px;
+
+            flex: 1;
+
+            display: flex;
+
+            flex-direction: column;
+
+            overflow: hidden;
+
+        }
+
+
+
+        .history-title {
+
+            font-size: 0.75rem;
+
+            font-weight: 800;
+
+            color: #94a3b8;
+
+            text-transform: uppercase;
+
+            margin-bottom: 6px;
+
+            display: flex;
+
+            justify-content: space-between;
+
+        }
+
+
+
+        .history-list {
+
+            list-style: none;
+
+            overflow-y: auto;
+
+            flex: 1;
+
+            display: flex;
+
+            flex-direction: column;
+
+            gap: 4px;
+
+        }
+
+
 
         .history-item {
+
             background: #182238;
+
             border-radius: 6px;
+
             padding: 6px 8px;
+
             font-size: 0.78rem;
+
             display: flex;
+
             justify-content: space-between;
+
             align-items: center;
+
         }
+
+
 
         .history-item.divergente {
+
             border-left: 3px solid #ef4444;
+
         }
+
+
 
         .history-item.ok {
+
             border-left: 3px solid #10b981;
+
         }
+
+
 
         .history-item.duplicado {
+
             border-left: 3px solid #f59e0b;
+
         }
+
     </style>
+
 </head>
+
 <body>
 
+
+
     <!-- Top Bar -->
+
     <header class="header">
+
         <div class="brand-box">
+
             <span class="brand-title">⚡ TurboScan</span>
+
             <span class="brand-badge">COLETOR</span>
+
         </div>
+
         <div class="status-pill">
+
             <div id="status-dot" class="status-dot"></div>
+
             <span id="status-text">Online</span>
+
         </div>
+
     </header>
 
+
+
     <!-- Controls Bar -->
+
     <div class="controls-bar">
+
         <button id="btn-plat-selector" class="btn-control plat-btn">
+
             <span id="plat-icon">🚚</span>
+
             <span id="plat-label">Anjun Express</span>
+
             <span>▾</span>
+
         </button>
+
         <button id="btn-modo-triagem" class="btn-control active-triagem">
+
             <span>🎯 Triagem Direta</span>
+
+        </button>
+
+    
+        <button id="btn-falar-voz" type="button" class="btn-control btn-voz active-voz" title="Alternar Fala: Falar Cidade e Alertas">
+            <span id="voz-icon">🗣️</span>
+            <span id="voz-label">Falar: SIM</span>
         </button>
     </div>
+
+
 
     <!-- Driver Selector Bar (Pilha Mode) -->
+
     <div id="driver-bar" class="driver-bar">
-        <span style="font-size: 0.8rem; font-weight: 700; color: #94a3b8;">Motorista:</span>
-        <select id="driver-select" class="driver-select">
+
+        <span id="driver-bar-label" style="font-size: 0.8rem; font-weight: 700; color: #94a3b8; white-space: nowrap;">Motorista:</span>
+
+        <button id="btn-abrir-sheet-motorista" type="button" class="driver-select-btn">
+
+            <span id="txt-motorista-selecionado">Selecione o motorista...</span>
+
+            <span style="font-size: 0.75rem; opacity: 0.8;">🔍 ▾</span>
+
+        </button>
+
+        <!-- Select nativo oculto para manter 100% de retrocompatibilidade com eventos -->
+
+        <select id="driver-select" class="driver-select" style="display: none;">
+
             <option value="">Selecione o motorista...</option>
+
         </select>
+
     </div>
 
+
+
     <!-- Main Container -->
+
     <main class="main-container">
 
+
+
         <!-- Big Result Card -->
+
         <div id="result-card" class="result-card">
+
             <span id="res-tag" class="status-tag">PRONTO PARA BIPAR</span>
+
             <div id="res-mot" class="mot-display">Aponte o leitor</div>
+
             <div id="res-cidade" class="cidade-display">Aguardando pacote...</div>
+
             <div id="res-detail" class="detail-display"></div>
+
             <div id="res-msg" class="msg-display"></div>
+
         </div>
+
+
 
         <!-- Scan Input Field -->
+
         <div class="input-card">
+
             <div class="input-row">
+
                 <input type="text" id="barcode-input" class="barcode-input" placeholder="Aponte o leitor laser aqui..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" inputmode="none">
+
                 <button type="button" id="btn-open-cam" class="btn-cam" title="Abrir câmera">📷</button>
+
             </div>
+
             <div id="fila-indicator" style="display:none; font-size:0.8rem; color:#38bdf8; font-weight:700; text-align:center; padding: 4px 8px; background: rgba(56, 189, 248, 0.1); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 6px;">
+
                 ⚡ Fila ativa: <span id="fila-count">0</span> pacote(s) pendente(s)
+
             </div>
+
         </div>
+
+
 
         <!-- Stats Bar -->
+
         <div class="stats-bar">
+
             <div class="stat-box">
+
                 <div id="stat-sessao" class="stat-val">0</div>
+
                 <div class="stat-label">Nesta Sessão</div>
+
             </div>
+
             <div class="stat-box">
+
                 <div id="stat-motorista" class="stat-val">0</div>
+
                 <div class="stat-label">Motorista</div>
+
             </div>
+
             <div class="stat-box">
+
                 <div id="stat-total" class="stat-val">0</div>
+
                 <div class="stat-label">Total Hoje</div>
+
             </div>
+
         </div>
 
+
+
         <!-- Recent Scans History -->
+
         <div class="history-card">
+
             <div class="history-title">
+
                 <span>Últimos Bipes</span>
+
                 <span id="clear-hist-btn" style="cursor: pointer; color: #38bdf8;">Limpar</span>
+
             </div>
+
             <ul id="history-list" class="history-list">
+
                 <!-- Inserido dinamicamente -->
+
             </ul>
+
         </div>
+
+
 
     </main>
 
+
+
     <!-- Platform Selection Sheet -->
+
     <div id="sheet-plataforma">
+
         <div class="sheet-content">
+
             <div class="sheet-title">Selecionar Transportadora / Base</div>
+
             <div id="container-opcoes-contas" style="display: flex; flex-direction: column; gap: 8px; max-height: 60vh; overflow-y: auto;">
+
                 <div class="sheet-opt" data-plat="anjun" data-conta="padrao" onclick="selecionarContaEPlataforma('anjun', 'padrao', 'Anjun Express', '🚚')">
+
                     <span>🚚 Anjun Express</span>
+
                     <span class="check-mark">✓</span>
+
                 </div>
+
                 <div class="sheet-opt" data-plat="imile" data-conta="padrao" onclick="selecionarContaEPlataforma('imile', 'padrao', 'iMile Delivery', '📦')">
+
                     <span>📦 iMile Delivery</span>
+
                     <span class="check-mark"></span>
+
                 </div>
+
                 <div class="sheet-opt" data-plat="loggi" data-conta="padrao" onclick="selecionarContaEPlataforma('loggi', 'padrao', 'Loggi', '⚡')">
+
                     <span>⚡ Loggi</span>
+
                     <span class="check-mark"></span>
+
                 </div>
+
             </div>
+
             <button id="btn-close-sheet" style="background: #334155; color: #fff; border: none; padding: 12px; border-radius: 8px; font-weight: 700; margin-top: 6px; cursor: pointer;">Cancelar</button>
+
         </div>
+
+    </div>
+
+
+
+    <!-- Driver / Destination Selection Sheet (Busca Rápida + Abas no PDA) -->
+
+    <div id="sheet-motorista">
+
+        <div class="sheet-motorista-content">
+
+            <div class="sheet-header-row">
+
+                <div id="sheet-motorista-titulo" class="sheet-title">Selecionar Destino / Motorista</div>
+
+                <button id="btn-close-sheet-motorista" type="button" class="btn-close-x">✕</button>
+
+            </div>
+
+
+
+            <!-- Campo de Busca Rápida -->
+
+            <div class="search-box-pda">
+
+                <span style="opacity: 0.7;">🔍</span>
+
+                <input type="text" id="filtro-motorista-input" placeholder="Filtrar por nome, cidade ou grupo..." autocomplete="off">
+
+                <button id="btn-limpar-filtro-mot" type="button" class="btn-clear-pda" style="display: none;">✕</button>
+
+            </div>
+
+
+
+            <!-- Abas de Categoria (Loggi) -->
+
+            <div id="sheet-motorista-tabs" class="sheet-tabs" style="display: none;">
+
+                <button type="button" class="sheet-tab-btn active" data-tab="todos">Todos</button>
+
+                <button type="button" class="sheet-tab-btn" data-tab="cidades">🏙️ Cidades</button>
+
+                <button type="button" class="sheet-tab-btn" data-tab="motoristas">👤 Motoristas</button>
+
+                <button type="button" class="sheet-tab-btn" data-tab="grupos">📂 Grupos</button>
+
+            </div>
+
+
+
+            <!-- Lista de Opções Rolável e Filtrável -->
+
+            <div id="container-opcoes-motoristas" class="sheet-options-container">
+
+                <div style="text-align: center; color: #94a3b8; padding: 20px; font-size: 0.85rem;">Carregando opções...</div>
+
+            </div>
+
+        </div>
+
     </div>
 
     <!-- Camera Scanner Modal (Modo Contínuo) -->
+
     <div id="camera-modal">
+
         <div style="font-size:0.95rem; font-weight:800; color:#38bdf8; margin-bottom:8px; display:flex; align-items:center; gap:6px;">
+
             <span>📷 Modo Contínuo Ativo</span>
+
             <span style="font-size:0.75rem; color:#94a3b8; font-weight:normal;">(Aponte para os pacotes)</span>
+
         </div>
-        <video id="camera-video" playsinline></video>
+
+                <div class="camera-scanner-wrapper">
+            <video id="camera-video" playsinline></video>
+            <div id="cam-flash-overlay"></div>
+            <div class="scanner-laser"></div>
+            <div class="scanner-corner top-left"></div>
+            <div class="scanner-corner top-right"></div>
+            <div class="scanner-corner bottom-left"></div>
+            <div class="scanner-corner bottom-right"></div>
+        </div>
+
         <div id="cam-result-pill" style="display:none; padding:10px 14px; border-radius:10px; font-weight:800; font-size:1rem; margin-top:10px; text-align:center; max-width:400px; width:100%; box-shadow:0 4px 14px rgba(0,0,0,0.5);">
+
             <div id="cam-pill-mot" style="font-size:1.35rem; font-weight:900;"></div>
+
             <div id="cam-pill-det" style="font-size:0.85rem; opacity:0.9; margin-top:2px;"></div>
+
         </div>
+
         <div class="cam-controls">
+
             <button id="btn-close-cam" class="btn-close-cam">Fechar Câmera</button>
+
         </div>
+
     </div>
+
+
 
     <!-- Hidden Native Camera Photo Input -->
+
     <input type="file" id="input-foto-cam" accept="image/*" capture="environment" style="display: none;">
 
+
+
     <!-- Modal Ajuda Câmera (HTTP / Wi-Fi) -->
+
     <div id="modal-ajuda-camera" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.88); z-index:110; align-items:center; justify-content:center; padding:18px;">
+
         <div style="background:#111827; border:1px solid #38bdf8; border-radius:14px; max-width:420px; width:100%; padding:20px; color:#f8fafc; font-size:0.88rem; line-height:1.45; box-shadow:0 10px 30px rgba(0,0,0,0.8);">
+
             <div style="font-size:1.1rem; font-weight:900; color:#38bdf8; margin-bottom:10px; display:flex; align-items:center; gap:8px;">
+
                 📷 Câmera do Celular
+
             </div>
+
             
+
             <button id="btn-tirar-foto-direta" style="width:100%; background:#0284c7; color:#fff; border:none; padding:12px; border-radius:8px; font-weight:800; font-size:0.95rem; cursor:pointer; margin-bottom:14px; display:flex; align-items:center; justify-content:center; gap:8px;">
+
                 📸 Abrir Câmera e Tirar Foto
+
             </button>
 
+
+
             <div style="background:#1e293b; border-left:3px solid #38bdf8; padding:10px 12px; border-radius:6px; margin-bottom:14px; font-size:0.82rem;">
+
                 <strong style="color:#38bdf8;">Ou ative o Leitor Contínuo no Chrome (30s):</strong><br>
+
                 1. No Chrome do celular, abra: <code style="color:#fde047; font-weight:bold;">chrome://flags</code><br>
+
                 2. Na busca, digite: <code style="color:#fde047;">insecure</code><br>
+
                 3. Em <em>"Insecure origins treated as secure"</em>, cole o endereço:<br>
+
                 <div style="display:flex; align-items:center; gap:6px; margin:6px 0;">
+
                     <input id="input-origem-segura" type="text" readonly style="flex:1; background:#0f172a; border:1px solid #334155; color:#38bdf8; font-size:0.75rem; padding:6px; border-radius:4px; font-weight:bold;" />
+
                     <button id="btn-copiar-origem" style="background:#0284c7; color:#fff; border:none; padding:6px 10px; border-radius:4px; font-weight:bold; font-size:0.75rem; cursor:pointer;">Copiar</button>
+
                 </div>
+
                 4. Selecione <strong>Enabled</strong> e toque em <strong>Relaunch</strong>.
+
             </div>
+
             <p style="color:#94a3b8; font-size:0.76rem; margin-bottom:14px; background:#0f172a; padding:8px; border-radius:6px;">
+
                 💡 <strong>Dica Galpão:</strong> Em coletores/PDAs com leitor laser físico ou leitor bluetooth, ele lê direto no campo sem usar câmera!
+
             </p>
+
             <button id="btn-fechar-ajuda-cam" style="width:100%; background:#1e293b; border:1px solid #334155; color:#fff; padding:10px; border-radius:8px; font-weight:bold; cursor:pointer;">Fechar Janela</button>
+
         </div>
+
     </div>
 
+
+
     <script>
+        // State Globals
+        let sheetMotoristaAberta = false;
+        let abaAtivaMotorista = 'todos';
+        let listaOpcoesMotorista = [];
+        let ultimoHashOpcoesMotoristas = '';
+        let falarCidadeAtivo = (localStorage.getItem('turboscan_coletor_falar') !== 'false');
+
+
         // State
+
         let plataformaAtiva = 'anjun';
+
         let contaAtiva = 'padrao';
+
         let nomeContaExibicao = 'Anjun Express';
+
         try {
+
             plataformaAtiva = localStorage.getItem('turboscan_coletor_plat') || 'anjun';
+
             contaAtiva = localStorage.getItem('turboscan_coletor_conta') || 'padrao';
+
             nomeContaExibicao = localStorage.getItem('turboscan_coletor_nome') || 'Anjun Express';
+
         } catch (_) {}
+
         let modoTriagemDireta = true;
+
         let motoristaAtivo = '';
+        
         let contagemSessao = 0;
+
         let cameraStream = null;
+
         let barcodeDetector = null;
+
         let cameraLoopId = null;
 
+
+
         // Elements
+
         const barcodeInput = document.getElementById('barcode-input');
+
         const resultCard = document.getElementById('result-card');
+
         const resTag = document.getElementById('res-tag');
+
         const resMot = document.getElementById('res-mot');
+
         const resCidade = document.getElementById('res-cidade');
+
         const resDetail = document.getElementById('res-detail');
+
         const resMsg = document.getElementById('res-msg');
+
         const statSessao = document.getElementById('stat-sessao');
+
         const statMotorista = document.getElementById('stat-motorista');
+
         const statTotal = document.getElementById('stat-total');
+
         const historyList = document.getElementById('history-list');
+
         const clearHistBtn = document.getElementById('clear-hist-btn');
+
         const statusDot = document.getElementById('status-dot');
+
         const statusText = document.getElementById('status-text');
 
+
+
         const btnModoTriagem = document.getElementById('btn-modo-triagem');
+        const btnFalarVoz = document.getElementById('btn-falar-voz');
+        const vozIcon = document.getElementById('voz-icon');
+        const vozLabel = document.getElementById('voz-label');
+
         const driverBar = document.getElementById('driver-bar');
+
         const driverSelect = document.getElementById('driver-select');
+
+        const driverBarLabel = document.getElementById('driver-bar-label');
+
+        const btnAbrirSheetMotorista = document.getElementById('btn-abrir-sheet-motorista');
+
+        const txtMotoristaSelecionado = document.getElementById('txt-motorista-selecionado');
+
+        const sheetMotorista = document.getElementById('sheet-motorista');
+
+        const btnCloseSheetMotorista = document.getElementById('btn-close-sheet-motorista');
+
+        const filtroMotoristaInput = document.getElementById('filtro-motorista-input');
+
+        const btnLimparFiltroMot = document.getElementById('btn-limpar-filtro-mot');
+
+        const sheetMotoristaTabs = document.getElementById('sheet-motorista-tabs');
+
+        const containerOpcoesMotoristas = document.getElementById('container-opcoes-motoristas');
+
+
+
+
+
         const btnPlatSelector = document.getElementById('btn-plat-selector');
+
         const platLabel = document.getElementById('plat-label');
+
         const platIcon = document.getElementById('plat-icon');
+
         const sheetPlataforma = document.getElementById('sheet-plataforma');
+
         const btnCloseSheet = document.getElementById('btn-close-sheet');
 
+
+
         const btnOpenCam = document.getElementById('btn-open-cam');
+
         const cameraModal = document.getElementById('camera-modal');
+
         const cameraVideo = document.getElementById('camera-video');
+
         const btnCloseCam = document.getElementById('btn-close-cam');
 
+
+
         const modalAjudaCamera = document.getElementById('modal-ajuda-camera');
+
         const inputOrigemSegura = document.getElementById('input-origem-segura');
+
         const btnCopiarOrigem = document.getElementById('btn-copiar-origem');
+
         const btnFecharAjudaCam = document.getElementById('btn-fechar-ajuda-cam');
+
         const btnTirarFotoDireta = document.getElementById('btn-tirar-foto-direta');
+
         const inputFotoCam = document.getElementById('input-foto-cam');
 
+
+
         if (inputOrigemSegura) {
+
             inputOrigemSegura.value = window.location.origin;
+
         }
+
+
 
         if (btnCopiarOrigem) {
+
             btnCopiarOrigem.addEventListener('click', (e) => {
+
                 e.stopPropagation();
+
                 if (navigator.clipboard && navigator.clipboard.writeText) {
+
                     navigator.clipboard.writeText(window.location.origin);
+
                 } else if (inputOrigemSegura) {
+
                     inputOrigemSegura.select();
+
                     document.execCommand('copy');
+
                 }
+
                 btnCopiarOrigem.innerText = 'Copiado!';
+
                 setTimeout(() => { btnCopiarOrigem.innerText = 'Copiar'; }, 2000);
+
             });
+
         }
+
+
 
         if (btnFecharAjudaCam) {
+
             btnFecharAjudaCam.addEventListener('click', (e) => {
+
                 e.stopPropagation();
+
                 if (modalAjudaCamera) modalAjudaCamera.style.display = 'none';
+
                 manterFocoInput(false);
+
             });
+
         }
+
+
 
         if (modalAjudaCamera) {
+
             modalAjudaCamera.addEventListener('click', (e) => {
+
                 if (e.target === modalAjudaCamera) {
+
                     modalAjudaCamera.style.display = 'none';
+
                     manterFocoInput(false);
+
                 }
+
             });
+
         }
+
+
 
         if (btnTirarFotoDireta && inputFotoCam) {
+
             btnTirarFotoDireta.addEventListener('click', (e) => {
+
                 e.stopPropagation();
+
                 inputFotoCam.click();
+
             });
+
         }
+
+
 
         if (inputFotoCam) {
+
             inputFotoCam.addEventListener('change', async (e) => {
+
                 const file = e.target.files && e.target.files[0];
+
                 if (!file) return;
+
                 try {
+
                     if (modalAjudaCamera) modalAjudaCamera.style.display = 'none';
+
                     if ('BarcodeDetector' in window) {
+
                         const bmp = await createImageBitmap(file);
+
                         const det = new BarcodeDetector({ formats: ['code_128', 'code_39', 'qr_code', 'ean_13', 'itf'] });
+
                         const codes = await det.detect(bmp);
+
                         if (codes && codes.length > 0 && codes[0].rawValue) {
+
                             processarCodigo(codes[0].rawValue);
+
                             return;
+
                         }
+
                     }
+
                     alert("Foto capturada! Caso a câmera de foto não decodifique a etiqueta, digite o código ou use leitor PDA.");
+
                 } catch (err) {
+
                     console.warn("Erro ao ler foto:", err);
+
                 } finally {
+
                     inputFotoCam.value = '';
+
                 }
+
             });
+
         }
+
+
 
         // Web Audio Synthesizer Beeps
+
         let audioCtx = null;
+
         function getAudioContext() {
+
             if (!audioCtx) {
+
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
             }
+
             if (audioCtx.state === 'suspended') {
+
                 audioCtx.resume();
+
             }
+
             return audioCtx;
+
         }
+
+
 
         function playBeep(type = 'ok') {
+
             try {
+
                 const ctx = getAudioContext();
+
                 const osc = ctx.createOscillator();
+
                 const gain = ctx.createGain();
+
                 osc.connect(gain);
+
                 gain.connect(ctx.destination);
 
+
+
                 if (type === 'ok') {
+
                     osc.type = 'sine';
+
                     osc.frequency.setValueAtTime(1200, ctx.currentTime);
+
                     gain.gain.setValueAtTime(0.3, ctx.currentTime);
+
                     gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.12);
+
                     osc.start(ctx.currentTime);
+
                     osc.stop(ctx.currentTime + 0.12);
+
                 } else if (type === 'duplicado') {
+
                     osc.type = 'square';
+
                     osc.frequency.setValueAtTime(800, ctx.currentTime);
+
                     gain.gain.setValueAtTime(0.2, ctx.currentTime);
+
                     gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.25);
+
                     osc.start(ctx.currentTime);
+
                     osc.stop(ctx.currentTime + 0.25);
+
                 } else if (type === 'divergente') {
+
                     osc.type = 'sawtooth';
+
                     osc.frequency.setValueAtTime(350, ctx.currentTime);
+
                     gain.gain.setValueAtTime(0.4, ctx.currentTime);
+
                     gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.45);
+
                     osc.start(ctx.currentTime);
+
                     osc.stop(ctx.currentTime + 0.45);
+
                 }
+
             } catch (e) {
+
                 console.warn("Audio erro:", e);
+
+            }
+
+        }
+
+
+
+        let audioUnlocked = false;
+
+        function unlockAudio() {
+            try {
+                const ctx = getAudioContext();
+                if (ctx && ctx.state === 'suspended') {
+                    ctx.resume().catch(() => {});
+                }
+                if (window.speechSynthesis) {
+                    if (window.speechSynthesis.paused) {
+                        window.speechSynthesis.resume();
+                    }
+                    if (!audioUnlocked) {
+                        audioUnlocked = true;
+                        const dummy = new SpeechSynthesisUtterance('');
+                        dummy.volume = 0;
+                        window.speechSynthesis.speak(dummy);
+                    }
+                }
+            } catch (_) {}
+        }
+
+        window.addEventListener('click', unlockAudio, { passive: true });
+        window.addEventListener('touchstart', unlockAudio, { passive: true });
+        window.addEventListener('touchend', unlockAudio, { passive: true });
+
+        if ('speechSynthesis' in window) {
+            window.speechSynthesis.onvoiceschanged = () => {
+                try { window.speechSynthesis.getVoices(); } catch (_) {}
+            };
+        }
+
+        function renderizarBotaoVoz() {
+            if (!btnFalarVoz || !vozLabel) return;
+            if (falarCidadeAtivo) {
+                btnFalarVoz.className = 'btn-control btn-voz active-voz';
+                if (vozIcon) vozIcon.innerText = '🗣️';
+                vozLabel.innerText = 'Falar: SIM';
+            } else {
+                btnFalarVoz.className = 'btn-control btn-voz';
+                if (vozIcon) vozIcon.innerText = '🔇';
+                vozLabel.innerText = 'Falar: NÃO';
             }
         }
 
-        function falarTexto(texto) {
+        function alternarFalarVoz(e) {
+            if (e) { e.preventDefault(); e.stopPropagation(); }
+            falarCidadeAtivo = !falarCidadeAtivo;
             try {
-                if ('speechSynthesis' in window && texto) {
-                    window.speechSynthesis.cancel();
-                    const utt = new SpeechSynthesisUtterance(texto);
-                    utt.lang = 'pt-BR';
-                    utt.rate = 1.15;
-                    window.speechSynthesis.speak(utt);
-                }
+                localStorage.setItem('turboscan_coletor_falar', falarCidadeAtivo ? 'true' : 'false');
+            } catch (_) {}
+            renderizarBotaoVoz();
+            unlockAudio();
+            if (falarCidadeAtivo) {
+                falarTexto("Voz ativada", true);
+            }
+        }
+
+        if (btnFalarVoz) {
+            btnFalarVoz.addEventListener('click', alternarFalarVoz);
+        }
+
+        function falarTexto(texto, forcar = false) {
+            // Se a fala estiver desativada e não for divergência/alerta forçado, não fala
+            if (!falarCidadeAtivo && !forcar) return;
+            if (!('speechSynthesis' in window) || !texto) return;
+
+            try {
+                unlockAudio();
+                window.speechSynthesis.cancel();
+
+                setTimeout(() => {
+                    try {
+                        if (window.speechSynthesis.paused) {
+                            window.speechSynthesis.resume();
+                        }
+                        const utt = new SpeechSynthesisUtterance(texto);
+                        utt.lang = 'pt-BR';
+                        utt.rate = 1.25;
+                        utt.pitch = 1.0;
+                        utt.volume = 1.0;
+
+                        if (window.speechSynthesis.getVoices) {
+                            const vozes = window.speechSynthesis.getVoices();
+                            const vozPt = vozes.find(v => v.lang && v.lang.toLowerCase().startsWith('pt'));
+                            if (vozPt) utt.voice = vozPt;
+                        }
+
+                        window.speechSynthesis.speak(utt);
+                    } catch (errInner) {
+                        console.warn("Erro ao falar:", errInner);
+                    }
+                }, 60);
             } catch (e) {
                 console.warn("Speech erro:", e);
             }
         }
 
         function vibrar(padrao = [80]) {
+
             try {
+
                 if ('vibrate' in navigator) {
+
                     navigator.vibrate(padrao);
+
                 }
+
             } catch (_) {}
+
         }
+
+
 
         // Polyfill Element.prototype.closest para WebViews legadas em PDAs
+
         if (!Element.prototype.closest) {
+
             Element.prototype.closest = function(s) {
+
                 var el = this;
+
                 do {
+
                     if (el.matches && el.matches(s)) return el;
+
                     el = el.parentElement || el.parentNode;
+
                 } while (el !== null && el.nodeType === 1);
+
                 return null;
+
             };
+
         }
+
+
 
         // Auto Focus Input Management (Suprime teclado virtual no PDA/Celular a menos que toque no input)
+
         function manterFocoInput(forcarTeclado) {
+
             if (cameraModal.style.display !== 'flex' && sheetPlataforma.style.display !== 'flex') {
+
                 if (!forcarTeclado && barcodeInput.inputMode !== 'none') {
+
                     barcodeInput.inputMode = 'none';
+
                 }
+
                 if (document.activeElement !== barcodeInput) {
+
                     try {
+
                         barcodeInput.focus({ preventScroll: true });
+
                     } catch (_) {
+
                         barcodeInput.focus();
+
                     }
+
                 }
+
             }
+
         }
+
         barcodeInput.addEventListener('click', function(e) {
+
             barcodeInput.inputMode = 'text';
+
             barcodeInput.focus();
-        });
-        barcodeInput.addEventListener('touchend', function(e) {
-            barcodeInput.inputMode = 'text';
+
         });
 
+        barcodeInput.addEventListener('touchend', function(e) {
+
+            barcodeInput.inputMode = 'text';
+
+        });
+
+
+
         document.addEventListener('click', function(e) {
-            if (sheetPlataforma.style.display === 'flex' || cameraModal.style.display === 'flex') return;
+            if ((sheetPlataforma && sheetPlataforma.style.display === 'flex') ||
+                (sheetMotorista && sheetMotorista.style.display === 'flex') ||
+                (cameraModal && cameraModal.style.display === 'flex')) return;
             if (e.target !== barcodeInput) {
                 barcodeInput.inputMode = 'none';
             }
-            var interativo = e.target && e.target.closest ? e.target.closest('button, select, input, a, .btn-control, .sheet-opt, #sheet-plataforma') : null;
+            var interativo = e.target && e.target.closest ? e.target.closest('button, select, input, a, .btn-control, .sheet-opt, .driver-sheet-opt, .driver-select-btn, .sheet-tab-btn, .btn-close-x, #sheet-plataforma, #sheet-motorista') : null;
             if (!interativo && e.target) {
                 var tag = (e.target.tagName || '').toUpperCase();
                 if (['BUTTON', 'SELECT', 'INPUT', 'A'].indexOf(tag) === -1) {
@@ -908,64 +2380,109 @@
             }
         });
 
+
+
         // Toggle Modo Triagem Direta vs Pilha
+
         function toggleModoTriagem(e) {
+
             if (e) {
+
                 e.preventDefault();
+
                 e.stopPropagation();
+
             }
+
             modoTriagemDireta = !modoTriagemDireta;
+
             if (modoTriagemDireta) {
+
                 btnModoTriagem.className = 'btn-control active-triagem';
+
                 btnModoTriagem.innerHTML = '<span>🎯 Triagem Direta</span>';
+
                 driverBar.style.display = 'none';
+
             } else {
+
                 btnModoTriagem.className = 'btn-control';
+
                 btnModoTriagem.innerHTML = '<span>📦 Modo Pilha</span>';
+
                 driverBar.style.display = 'flex';
+
             }
+
             manterFocoInput(false);
+
         }
+
         btnModoTriagem.addEventListener('click', toggleModoTriagem);
-        btnModoTriagem.addEventListener('touchend', toggleModoTriagem);
+
+
+
 
         // Platform Selector Sheet (compatível com Toque e Clique em PDAs)
+
         function abrirSheetPlataforma(e) {
+
             if (e) {
+
                 e.preventDefault();
+
                 e.stopPropagation();
+
             }
+
             sheetPlataforma.style.display = 'flex';
+
         }
+
         btnPlatSelector.addEventListener('click', abrirSheetPlataforma);
-        btnPlatSelector.addEventListener('touchend', abrirSheetPlataforma);
+
+
+
 
         function fecharSheetPlataforma(e) {
+
             if (e) {
+
                 e.preventDefault();
+
                 e.stopPropagation();
+
             }
+
             sheetPlataforma.style.display = 'none';
+
             manterFocoInput(false);
+
         }
+
         btnCloseSheet.addEventListener('click', fecharSheetPlataforma);
-        btnCloseSheet.addEventListener('touchend', fecharSheetPlataforma);
+
+
+
 
         sheetPlataforma.addEventListener('click', function(e) {
+
             if (e.target === sheetPlataforma) {
+
                 fecharSheetPlataforma(e);
+
             }
+
         });
+
+
 
         function tratarAcaoSheetOpt(e) {
             var el = e.target;
-            var opt = el && el.closest ? el.closest('.sheet-opt') : null;
+            var opt = el && el.closest ? el.closest('#container-opcoes-contas .sheet-opt') : null;
             if (opt) {
-                if (e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                }
                 var plat = opt.getAttribute('data-plat');
+                if (!plat) return;
                 var cId = opt.getAttribute('data-conta') || 'padrao';
                 var elNome = opt.querySelector('strong, span');
                 var nome = (elNome && elNome.innerText) ? elNome.innerText.trim() : plat;
@@ -974,706 +2491,1664 @@
                 selecionarContaEPlataforma(plat, cId, nome, icone);
             }
         }
-        document.addEventListener('click', tratarAcaoSheetOpt);
-        document.addEventListener('touchend', tratarAcaoSheetOpt);
+        if (sheetPlataforma) {
+            sheetPlataforma.addEventListener('click', tratarAcaoSheetOpt);
+        }
+
+
 
         function renderizarOpcoesContas(opcoes) {
+
             const container = document.getElementById('container-opcoes-contas');
+
             if (!container || !Array.isArray(opcoes)) return;
+
             // Se o menu estiver aberto na tela sendo tocado pelo operador, não limpa para não abortar o clique
+
             if (sheetPlataforma && sheetPlataforma.style.display === 'flex') return;
+
             container.innerHTML = '';
+
             opcoes.forEach(opt => {
+
                 const isSel = (opt.plataforma === plataformaAtiva) && 
+
                               (opt.conta_id === contaAtiva || (!contaAtiva && opt.conta_id === 'padrao') || (contaAtiva === 'padrao' && !opt.conta_id));
+
                 const div = document.createElement('div');
+
                 div.className = 'sheet-opt' + (isSel ? ' selected' : '');
+
                 div.setAttribute('data-plat', opt.plataforma);
+
                 div.setAttribute('data-conta', opt.conta_id || 'padrao');
+
                 div.setAttribute('role', 'button');
+
                 div.style.touchAction = 'manipulation';
+
                 div.style.cursor = 'pointer';
+
                 div.innerHTML = `
+
                     <div style="display: flex; align-items: center; gap: 10px; pointer-events: none;">
+
                         <span style="font-size: 1.25rem;">${opt.icone || '📦'}</span>
+
                         <div style="text-align: left;">
+
                             <strong style="display: block; font-size: 0.92rem; color: #f8fafc;">${opt.nome}</strong>
+
                             ${opt.apelido && opt.apelido !== opt.nome ? `<span style="font-size: 0.74rem; color: #94a3b8;">${opt.apelido}</span>` : ''}
+
                         </div>
+
                     </div>
+
                     <span class="check-mark" style="font-weight: 900; color: #38bdf8; font-size: 1.1rem; pointer-events: none;">${isSel ? '✓' : ''}</span>
+
                 `;
+
                 function tocarOpcao(e) {
+
                     if (e) {
+
                         e.preventDefault();
+
                         e.stopPropagation();
+
                     }
+
                     selecionarContaEPlataforma(opt.plataforma, opt.conta_id, opt.nome, opt.icone);
+
                 }
+
                 div.addEventListener('click', tocarOpcao);
+
                 div.addEventListener('touchend', tocarOpcao);
+
                 container.appendChild(div);
+
             });
+
         }
+
+
 
         function selecionarContaEPlataforma(plat, contaId, nomeExibicao, icone) {
+
             plataformaAtiva = plat;
+
             contaAtiva = contaId || 'padrao';
+
             nomeContaExibicao = nomeExibicao;
+
             if (driverSelect) {
+
                 driverSelect.innerHTML = '<option value="">Carregando...</option>';
+
                 driverSelect.value = '';
+
             }
+
             motoristaAtivo = '';
 
+
+
             try {
+
                 localStorage.setItem('turboscan_coletor_plat', plat);
+
                 localStorage.setItem('turboscan_coletor_conta', contaId || 'padrao');
+
                 localStorage.setItem('turboscan_coletor_nome', nomeExibicao);
+
             } catch (_) {}
+
+
 
             if (platLabel) platLabel.innerText = nomeExibicao;
+
             if (platIcon) platIcon.innerText = icone || (plat === 'anjun' ? '🚚' : (plat === 'imile' ? '📦' : '⚡'));
 
+
+
             document.querySelectorAll('.sheet-opt').forEach(el => {
+
                 const p = el.getAttribute('data-plat');
+
                 const c = el.getAttribute('data-conta') || 'padrao';
+
                 const sel = (p === plat) && (c === contaAtiva || (!contaAtiva && c === 'padrao'));
+
                 el.className = 'sheet-opt' + (sel ? ' selected' : '');
+
                 const ck = el.querySelector('.check-mark');
+
                 if (ck) ck.innerText = sel ? '✓' : '';
+
             });
 
+
+
             if (sheetPlataforma) sheetPlataforma.style.display = 'none';
+
             falarTexto(nomeExibicao);
+
             try {
+
                 fetch('/api/coletor/trocar-plataforma', {
+
                     method: 'POST',
+
                     headers: { 'Content-Type': 'application/json' },
+
                     body: JSON.stringify({ plataforma: plat, conta_id: contaId || 'padrao' })
+
                 }).catch(() => {});
+
             } catch (_) {}
-            carregarStatus();
+
+            renderizarBotaoVoz();
+        carregarStatus();
+
         recuperarFilaColetor();
+
             manterFocoInput(false);
+
         }
 
+
+
         // Driver / Grupo Selection Change
+
         driverSelect.addEventListener('change', async () => {
+
             const val = driverSelect.value;
+
             motoristaAtivo = val;
+
             if (plataformaAtiva === 'loggi') {
+
                 if (val.startsWith('grp:')) {
+
                     const partes = val.substring(4).split('|');
+
                     const plate = partes[0];
+
                     const tag = partes[1] || partes[0];
+
                     try {
+
                         await fetch('/loggi/definir-grupo', {
+
                             method: 'POST',
+
                             headers: { 'Content-Type': 'application/json' },
+
                             body: JSON.stringify({ modo: 'existente', licensePlate: plate, tags: [tag], cidade: tag })
+
                         });
+
                         await fetch('/api/coletor/trocar-motorista', {
+
                             method: 'POST',
+
                             headers: { 'Content-Type': 'application/json' },
+
                             body: JSON.stringify({ motorista: tag })
+
                         });
+
                     } catch (_) {}
+
                 } else if (val.startsWith('cid:')) {
+
                     const cid = val.substring(4);
+
                     try {
+
                         await fetch('/loggi/definir-grupo', {
+
                             method: 'POST',
+
                             headers: { 'Content-Type': 'application/json' },
+
                             body: JSON.stringify({ modo: 'novo', cidade: cid })
+
                         });
+
                         await fetch('/api/coletor/trocar-motorista', {
+
                             method: 'POST',
+
                             headers: { 'Content-Type': 'application/json' },
+
                             body: JSON.stringify({ motorista: cid })
+
                         });
+
                     } catch (_) {}
+
                 } else if (val) {
+
                     const mot = val.startsWith('mot:') ? val.substring(4) : val;
+
                     try {
+
                         await fetch('/loggi/definir-grupo', {
+
                             method: 'POST',
+
                             headers: { 'Content-Type': 'application/json' },
+
                             body: JSON.stringify({ modo: 'novo', motorista: mot })
+
                         });
+
                         await fetch('/api/coletor/trocar-motorista', {
+
                             method: 'POST',
+
                             headers: { 'Content-Type': 'application/json' },
+
                             body: JSON.stringify({ motorista: mot })
+
                         });
+
                     } catch (_) {}
+
                 }
+
             } else {
+
                 try {
+
                     await fetch('/api/coletor/trocar-motorista', {
+
                         method: 'POST',
+
                         headers: { 'Content-Type': 'application/json' },
+
                         body: JSON.stringify({ motorista: val })
+
                     });
+
                 } catch (_) {}
+
             }
+
             manterFocoInput(false);
+
         });
 
+
+
+        // --- FUNÇÕES DA SHEET DE SELEÇÃO RÁPIDA DE MOTORISTA / DESTINO (PDA) ---
+
+        function normalizarTexto(txt) {
+
+            return (txt || '').toString().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+
+        }
+
+
+
+        function abrirSheetMotorista(e) {
+            if (e) { e.preventDefault(); e.stopPropagation(); }
+            sheetMotoristaAberta = true;
+            if (sheetMotorista) sheetMotorista.style.display = 'flex';
+            if (filtroMotoristaInput) {
+                filtroMotoristaInput.value = '';
+                if (btnLimparFiltroMot) btnLimparFiltroMot.style.display = 'none';
+            }
+            abaAtivaMotorista = 'todos';
+            atualizarAbasAtivas();
+            if (!listaOpcoesMotorista || listaOpcoesMotorista.length === 0) {
+                if (containerOpcoesMotoristas) {
+                    containerOpcoesMotoristas.innerHTML = '<div style="text-align: center; color: #94a3b8; padding: 24px 10px; font-size: 0.9rem;">Carregando opções...</div>';
+                }
+                carregarStatus(true);
+            } else {
+                renderizarOpcoesSheetMotorista();
+                carregarStatus(true);
+            }
+
+        }
+
+        function fecharSheetMotorista(e) {
+
+            if (e) { e.preventDefault(); e.stopPropagation(); }
+
+            sheetMotoristaAberta = false;
+
+            if (sheetMotorista) sheetMotorista.style.display = 'none';
+
+            manterFocoInput(false);
+
+        }
+
+
+
+        function atualizarAbasAtivas() {
+
+            if (sheetMotoristaTabs) {
+
+                sheetMotoristaTabs.style.display = (plataformaAtiva === 'loggi') ? 'flex' : 'none';
+
+                sheetMotoristaTabs.querySelectorAll('.sheet-tab-btn').forEach(btn => {
+
+                    const tab = btn.getAttribute('data-tab');
+
+                    btn.classList.toggle('active', tab === abaAtivaMotorista);
+
+                });
+
+            }
+
+        }
+
+
+
+        function renderizarOpcoesSheetMotorista() {
+            try {
+                if (!containerOpcoesMotoristas) return;
+                const termo = normalizarTexto(filtroMotoristaInput ? filtroMotoristaInput.value : '');
+                const selVal = driverSelect ? driverSelect.value : (motoristaAtivo || '');
+                const lista = Array.isArray(listaOpcoesMotorista) ? listaOpcoesMotorista : [];
+
+                let itensFiltrados = lista.filter(item => {
+                    if (abaAtivaMotorista !== 'todos' && item.tipo !== abaAtivaMotorista) {
+                        return false;
+                    }
+                    if (termo) {
+                        const textoNorm = normalizarTexto(item.texto);
+                        return textoNorm.includes(termo);
+                    }
+                    return true;
+                });
+
+                if (itensFiltrados.length === 0) {
+                    let msgVazio = `Nenhum item encontrado ${termo ? `para "<strong>${termo}</strong>"` : ''}.`;
+                    if (!termo) {
+                        if (abaAtivaMotorista === 'grupos') {
+                            msgVazio = `📂 Nenhum grupo aberto no momento na Loggi.<br><button type="button" class="btn-recarregar-pda" onclick="carregarStatus(true)">🔄 Recarregar Grupos</button>`;
+                        } else if (abaAtivaMotorista === 'motoristas') {
+                            msgVazio = `👤 Nenhum motorista cadastrado.`;
+                        } else if (abaAtivaMotorista === 'cidades') {
+                            msgVazio = `🏙️ Nenhuma cidade cadastrada.<br><button type="button" class="btn-recarregar-pda" onclick="carregarStatus(true)">🔄 Recarregar Cidades</button>`;
+                        }
+                    }
+                    containerOpcoesMotoristas.innerHTML = `
+                        <div style="text-align: center; color: #94a3b8; padding: 24px 10px; font-size: 0.9rem; line-height: 1.5;">
+                            ${msgVazio}
+                        </div>
+                    `;
+                    return;
+                }
+
+                let html = '';
+                let tipoAnterior = null;
+
+                itensFiltrados.forEach(item => {
+                    if (plataformaAtiva === 'loggi' && abaAtivaMotorista === 'todos' && item.tipo !== tipoAnterior) {
+                        let rotuloTipo = "🏙️ CIDADES DA BASE";
+                        if (item.tipo === 'grupos') rotuloTipo = "📂 GRUPOS EXISTENTES (ABERTOS)";
+                        else if (item.tipo === 'motoristas') rotuloTipo = "👤 MOTORISTAS";
+                        html += `<div class="sheet-opt-group-header">${rotuloTipo}</div>`;
+                        tipoAnterior = item.tipo;
+                    }
+
+                    const isSelected = (item.val === selVal) || (selVal && item.val && (selVal.includes(item.val) || item.val.includes(selVal)));
+                    html += `
+                        <div class="sheet-opt ${isSelected ? 'selected' : ''}" data-val="${item.val}">
+                            <div style="display: flex; align-items: center; gap: 8px; flex: 1; overflow: hidden; pointer-events: none;">
+                                <span style="font-size: 1.05rem;">${item.icone}</span>
+                                <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 0.95rem;">${item.texto}</span>
+                            </div>
+                            <span class="check-mark" style="pointer-events: none;">${isSelected ? '✓' : ''}</span>
+                        </div>
+                    `;
+                });
+
+                containerOpcoesMotoristas.innerHTML = html;
+
+                containerOpcoesMotoristas.querySelectorAll('.sheet-opt').forEach(optEl => {
+                    optEl.addEventListener('click', (e) => {
+                        if (e) { e.preventDefault(); e.stopPropagation(); }
+                        const val = optEl.getAttribute('data-val');
+                        selecionarOpcaoMotorista(val);
+                    });
+                });
+            } catch (err) {
+                console.error("Erro ao renderizar opções do motorista:", err);
+                if (containerOpcoesMotoristas) {
+                    containerOpcoesMotoristas.innerHTML = `<div style="text-align: center; color: #ef4444; padding: 20px; font-size: 0.85rem;">Erro ao exibir opções: ${err.message || err}</div>`;
+                }
+            }
+        }
+
+        function selecionarOpcaoMotorista(val) {
+            if (driverSelect) {
+                let opt = Array.from(driverSelect.options).find(o => o.value === val);
+                if (!opt) {
+                    opt = document.createElement('option');
+                    opt.value = val;
+                    const achado = listaOpcoesMotorista.find(it => it.val === val);
+                    opt.innerText = achado ? achado.texto : val;
+                    driverSelect.appendChild(opt);
+                }
+                driverSelect.value = val;
+                driverSelect.dispatchEvent(new Event('change'));
+            }
+            motoristaAtivo = val;
+            atualizarBotaoMotoristaSelecionado();
+            fecharSheetMotorista();
+        }
+
+        function atualizarBotaoMotoristaSelecionado() {
+
+            if (!txtMotoristaSelecionado) return;
+
+            const selVal = driverSelect ? driverSelect.value : '';
+
+            if (!selVal) {
+
+                txtMotoristaSelecionado.innerText = (plataformaAtiva === 'loggi') ? 'Selecione Grupo ou Cidade...' : 'Selecione o motorista...';
+
+                return;
+
+            }
+
+            const achado = listaOpcoesMotorista.find(it => it.val === selVal);
+
+            if (achado) {
+
+                txtMotoristaSelecionado.innerText = `${achado.icone} ${achado.texto}`;
+
+            } else if (driverSelect && driverSelect.selectedOptions && driverSelect.selectedOptions[0]) {
+
+                txtMotoristaSelecionado.innerText = driverSelect.selectedOptions[0].innerText || selVal;
+
+            } else {
+
+                txtMotoristaSelecionado.innerText = selVal;
+
+            }
+
+        }
+
+
+
+        if (btnAbrirSheetMotorista) {
+
+            btnAbrirSheetMotorista.addEventListener('click', abrirSheetMotorista);
+
+
+        }
+
+        if (btnCloseSheetMotorista) {
+
+            btnCloseSheetMotorista.addEventListener('click', fecharSheetMotorista);
+
+
+        }
+
+        if (sheetMotorista) {
+
+            sheetMotorista.addEventListener('click', (e) => {
+
+                if (e.target === sheetMotorista) fecharSheetMotorista();
+
+            });
+
+        }
+
+        if (sheetMotoristaTabs) {
+
+            sheetMotoristaTabs.addEventListener('click', (e) => {
+
+                const btn = e.target.closest('.sheet-tab-btn');
+
+                if (!btn) return;
+
+                abaAtivaMotorista = btn.getAttribute('data-tab') || 'todos';
+
+                atualizarAbasAtivas();
+
+                renderizarOpcoesSheetMotorista();
+
+            });
+
+        }
+
+        if (filtroMotoristaInput) {
+
+            filtroMotoristaInput.addEventListener('input', () => {
+
+                const termo = filtroMotoristaInput.value.trim();
+
+                if (btnLimparFiltroMot) {
+
+                    btnLimparFiltroMot.style.display = termo ? 'block' : 'none';
+
+                }
+
+                renderizarOpcoesSheetMotorista();
+
+            });
+
+        }
+
+        if (btnLimparFiltroMot) {
+
+            btnLimparFiltroMot.addEventListener('click', () => {
+
+                filtroMotoristaInput.value = '';
+
+                btnLimparFiltroMot.style.display = 'none';
+
+                renderizarOpcoesSheetMotorista();
+
+                filtroMotoristaInput.focus();
+
+            });
+
+        }
+
+
+
         // Load Status from Server
-        async function carregarStatus() {
+
+        let falhasConsecutivasStatus = 0;
+
+        async function carregarStatus(forcarRenderSheet = false) {
+            let data = null;
             try {
                 const res = await fetch(`/api/coletor/status?plataforma=${plataformaAtiva}&conta=${contaAtiva}&_=${Date.now()}`);
                 if (res.ok) {
-                    const data = await res.json();
+                    data = await res.json();
+                    falhasConsecutivasStatus = 0;
                     statusDot.className = 'status-dot';
                     statusText.innerText = 'Online';
-
-                    if (data.opcoes_contas && Array.isArray(data.opcoes_contas)) {
-                        renderizarOpcoesContas(data.opcoes_contas);
+                } else {
+                    falhasConsecutivasStatus++;
+                    if (falhasConsecutivasStatus >= 2) {
+                        statusDot.className = 'status-dot offline';
+                        statusText.innerText = 'Offline';
                     }
+                    return;
+                }
+            } catch (netErr) {
+                falhasConsecutivasStatus++;
+                if (falhasConsecutivasStatus >= 2) {
+                    statusDot.className = 'status-dot offline';
+                    statusText.innerText = 'Desconectado';
+                }
+                return;
+            }
 
-                    statMotorista.innerText = data.contagem || 0;
-                    statTotal.innerText = data.contagem_total_hoje || 0;
+            if (!data) return;
 
-                    // Atualiza opções de motoristas da base selecionada
-                    if (driverBar) {
-                        const lbl = driverBar.querySelector('span');
-                        if (lbl) lbl.innerText = (plataformaAtiva === 'loggi' ? 'Grupo / Cidade:' : 'Motorista:');
-                    }
-                    const selVal = driverSelect.value;
-                    
-                    if (plataformaAtiva === 'loggi') {
-                        let gruposLoggi = data.grupos_loggi || [];
-                        let cidadesLoggi = data.cidades || [];
+            try {
+                if (data.opcoes_contas && Array.isArray(data.opcoes_contas)) {
+                    renderizarOpcoesContas(data.opcoes_contas);
+                }
 
-                        // Fallback se a API de status não trouxe ainda
-                        if (!cidadesLoggi || cidadesLoggi.length === 0) {
-                            try {
-                                const rCid = await fetch('/configuracoes?plataforma=loggi');
-                                if (rCid.ok) {
-                                    const dCid = await rCid.json();
-                                    cidadesLoggi = dCid.cidades || [];
+                statMotorista.innerText = data.contagem || 0;
+                statTotal.innerText = data.contagem_total_hoje || 0;
+
+                // Atualiza opções de motoristas da base selecionada
+                if (driverBar) {
+                    const lbl = driverBarLabel || driverBar.querySelector('span');
+                    if (lbl) lbl.innerText = (plataformaAtiva === 'loggi' ? 'Grupo / Cidade:' : 'Motorista:');
+                }
+                const selVal = driverSelect ? driverSelect.value : (motoristaAtivo || '');
+
+                // Se o operador está com a sheet aberta E já temos opções carregadas, não reconstrói driverSelect para não resetar rolagem/foco
+                if (sheetMotoristaAberta && listaOpcoesMotorista && listaOpcoesMotorista.length > 0 && !forcarRenderSheet) {
+                    return;
+                }
+
+                let novasOpcoes = [];
+
+                if (plataformaAtiva === 'loggi') {
+                    let gruposLoggi = data.grupos_loggi || [];
+                    let cidadesLoggi = data.cidades || [];
+
+                    // Fallback se a rota principal não trouxe grupos ainda
+                    if (!gruposLoggi || gruposLoggi.length === 0) {
+                        try {
+                            const rGrp = await fetch('/loggi/grupos');
+                            if (rGrp.ok) {
+                                const dGrp = await rGrp.json();
+                                if (dGrp && Array.isArray(dGrp.grupos)) {
+                                    gruposLoggi = dGrp.grupos;
                                 }
-                            } catch (_) {}
-                        }
-                        if (!gruposLoggi || gruposLoggi.length === 0) {
-                            try {
-                                const rGrp = await fetch('/loggi/grupos');
-                                if (rGrp.ok) {
-                                    const dGrp = await rGrp.json();
-                                    gruposLoggi = dGrp.grupos || [];
-                                }
-                            } catch (_) {}
-                        }
-
-                        driverSelect.innerHTML = `<option value="">Selecione o Grupo ou Cidade...</option>`;
-
-                        if (gruposLoggi && gruposLoggi.length > 0) {
-                            const grpGroup = document.createElement('optgroup');
-                            grpGroup.label = "📂 GRUPOS EXISTENTES (ABERTOS)";
-                            gruposLoggi.forEach(g => {
-                                const opt = document.createElement('option');
-                                const tagTxt = g.tag_display || g.licensePlate;
-                                const val = `grp:${g.licensePlate}|${tagTxt}`;
-                                opt.value = val;
-                                opt.innerText = `📂 ${tagTxt} (${g.quantity || 0} pcts)`;
-                                if (val === selVal || (selVal && (selVal.includes(g.licensePlate) || selVal.includes(tagTxt)))) {
-                                    opt.selected = true;
-                                }
-                                grpGroup.appendChild(opt);
-                            });
-                            driverSelect.appendChild(grpGroup);
-                        }
-
-                        if (cidadesLoggi && cidadesLoggi.length > 0) {
-                            const cidGroup = document.createElement('optgroup');
-                            cidGroup.label = "🏙️ CIDADES DA BASE";
-                            cidadesLoggi.forEach(c => {
-                                const opt = document.createElement('option');
-                                const val = `cid:${c}`;
-                                opt.value = val;
-                                opt.innerText = `🏙️ ${c}`;
-                                if (val === selVal || selVal === c) {
-                                    opt.selected = true;
-                                }
-                                cidGroup.appendChild(opt);
-                            });
-                            driverSelect.appendChild(cidGroup);
-                        }
-
-                        const motoristasPuros = (data.motoristas || []).filter(m => !cidadesLoggi.includes(m));
-                        if (motoristasPuros.length > 0) {
-                            const motGroup = document.createElement('optgroup');
-                            motGroup.label = "👤 MOTORISTAS";
-                            motoristasPuros.forEach(m => {
-                                const opt = document.createElement('option');
-                                const val = `mot:${m}`;
-                                opt.value = val;
-                                opt.innerText = `👤 ${m}`;
-                                if (val === selVal || selVal === m) {
-                                    opt.selected = true;
-                                }
-                                motGroup.appendChild(opt);
-                            });
-                            driverSelect.appendChild(motGroup);
-                        }
-                    } else {
-                        // Anjun ou iMile
-                        driverSelect.innerHTML = `<option value="">Selecione o motorista...</option>`;
-                        (data.motoristas || []).forEach(m => {
-                            const opt = document.createElement('option');
-                            opt.value = m;
-                            opt.innerText = m;
-                            if (m === selVal || m === data.motorista_ativo) {
-                                opt.selected = true;
                             }
-                            driverSelect.appendChild(opt);
+                        } catch (_) {}
+                    }
+
+                    // Fallback se a rota principal não trouxe cidades ainda
+                    if (!cidadesLoggi || cidadesLoggi.length === 0) {
+                        try {
+                            const rCid = await fetch('/configuracoes?plataforma=loggi');
+                            if (rCid.ok) {
+                                const dCid = await rCid.json();
+                                if (dCid && Array.isArray(dCid.cidades)) {
+                                    cidadesLoggi = dCid.cidades;
+                                }
+                            }
+                        } catch (_) {}
+                    }
+
+                    if (gruposLoggi && gruposLoggi.length > 0) {
+                        gruposLoggi.forEach(g => {
+                            const tagTxt = g.tag_display || g.licensePlate;
+                            novasOpcoes.push({
+                                tipo: 'grupos',
+                                val: `grp:${g.licensePlate}|${tagTxt}`,
+                                texto: `${tagTxt} (${g.quantity || 0} pcts)`,
+                                icone: '📂'
+                            });
+                        });
+                    }
+
+                    if (cidadesLoggi && cidadesLoggi.length > 0) {
+                        cidadesLoggi.forEach(c => {
+                            novasOpcoes.push({
+                                tipo: 'cidades',
+                                val: `cid:${c}`,
+                                texto: c,
+                                icone: '🏙️'
+                            });
+                        });
+                    }
+
+                    const motoristasPuros = (data.motoristas || []).filter(m => !cidadesLoggi.includes(m));
+                    if (motoristasPuros.length > 0) {
+                        motoristasPuros.forEach(m => {
+                            novasOpcoes.push({
+                                tipo: 'motoristas',
+                                val: `mot:${m}`,
+                                texto: m,
+                                icone: '👤'
+                            });
                         });
                     }
                 } else {
-                    statusDot.className = 'status-dot offline';
-                    statusText.innerText = 'Offline';
+                    // Anjun ou iMile
+                    (data.motoristas || []).forEach(m => {
+                        novasOpcoes.push({
+                            tipo: 'motoristas',
+                            val: m,
+                            texto: m,
+                            icone: '👤'
+                        });
+                    });
                 }
-            } catch (e) {
-                statusDot.className = 'status-dot offline';
-                statusText.innerText = 'Desconectado';
+
+                // Prevenção de loop/reset: só mexe no DOM se a lista realmente tiver sofrido alguma alteração!
+                const hashAtual = JSON.stringify({
+                    plat: plataformaAtiva,
+                    conta: contaAtiva,
+                    opcoes: novasOpcoes.map(o => o.val + '|' + o.texto)
+                });
+
+                if (hashAtual !== ultimoHashOpcoesMotoristas || (driverSelect && driverSelect.options.length <= 1) || forcarRenderSheet) {
+                    ultimoHashOpcoesMotoristas = hashAtual;
+                    listaOpcoesMotorista = novasOpcoes;
+
+                    if (driverSelect) {
+                        driverSelect.innerHTML = `<option value="">${plataformaAtiva === 'loggi' ? 'Selecione o Grupo ou Cidade...' : 'Selecione o motorista...'}</option>`;
+
+                        if (plataformaAtiva === 'loggi') {
+                            const grpOpts = novasOpcoes.filter(o => o.tipo === 'grupos');
+                            if (grpOpts.length > 0) {
+                                const grpGroup = document.createElement('optgroup');
+                                grpGroup.label = "📂 GRUPOS EXISTENTES (ABERTOS)";
+                                grpOpts.forEach(it => {
+                                    const opt = document.createElement('option');
+                                    opt.value = it.val;
+                                    opt.innerText = `${it.icone} ${it.texto}`;
+                                    if (it.val === selVal || (selVal && (it.val.includes(selVal) || selVal.includes(it.val)))) opt.selected = true;
+                                    grpGroup.appendChild(opt);
+                                });
+                                driverSelect.appendChild(grpGroup);
+                            }
+
+                            const cidOpts = novasOpcoes.filter(o => o.tipo === 'cidades');
+                            if (cidOpts.length > 0) {
+                                const cidGroup = document.createElement('optgroup');
+                                cidGroup.label = "🏙️ CIDADES DA BASE";
+                                cidOpts.forEach(it => {
+                                    const opt = document.createElement('option');
+                                    opt.value = it.val;
+                                    opt.innerText = `${it.icone} ${it.texto}`;
+                                    if (it.val === selVal || selVal === it.texto) opt.selected = true;
+                                    cidGroup.appendChild(opt);
+                                });
+                                driverSelect.appendChild(cidGroup);
+                            }
+
+                            const motOpts = novasOpcoes.filter(o => o.tipo === 'motoristas');
+                            if (motOpts.length > 0) {
+                                const motGroup = document.createElement('optgroup');
+                                motGroup.label = "👤 MOTORISTAS";
+                                motOpts.forEach(it => {
+                                    const opt = document.createElement('option');
+                                    opt.value = it.val;
+                                    opt.innerText = `${it.icone} ${it.texto}`;
+                                    if (it.val === selVal || selVal === it.texto) opt.selected = true;
+                                    motGroup.appendChild(opt);
+                                });
+                                driverSelect.appendChild(motGroup);
+                            }
+                        } else {
+                            novasOpcoes.forEach(it => {
+                                const opt = document.createElement('option');
+                                opt.value = it.val;
+                                opt.innerText = it.texto;
+                                if (it.val === selVal || it.val === data.motorista_ativo) opt.selected = true;
+                                driverSelect.appendChild(opt);
+                            });
+                        }
+                    }
+
+                    atualizarBotaoMotoristaSelecionado();
+
+                    if (sheetMotoristaAberta || (sheetMotorista && sheetMotorista.style.display === 'flex') || forcarRenderSheet) {
+                        renderizarOpcoesSheetMotorista();
+                    }
+                }
+            } catch (errProcess) {
+                console.error("Erro ao processar status/opções do coletor:", errProcess);
             }
         }
 
         // Fila de Bipagem Assíncrona do Coletor Mobile (Zero Perda de Bipes)
+
         const filaColetor = [];
+
         let processandoFilaColetor = false;
 
+
+
         function salvarFilaColetor() {
+
             try {
+
                 localStorage.setItem('turboscan_coletor_fila', JSON.stringify(filaColetor));
+
             } catch (_) {}
+
         }
+
+
 
         function recuperarFilaColetor() {
+
             try {
+
                 const salva = JSON.parse(localStorage.getItem('turboscan_coletor_fila') || '[]');
+
                 if (Array.isArray(salva) && salva.length > 0) {
+
                     filaColetor.length = 0;
+
                     filaColetor.push(...salva);
+
                     atualizarIndicadorFila();
+
                     if (!processandoFilaColetor) {
+
                         processarProximoFilaColetor();
+
                     }
+
                 }
+
             } catch (_) {}
+
         }
+
+
 
         function atualizarIndicadorFila() {
+
             const ind = document.getElementById('fila-indicator');
+
             const cnt = document.getElementById('fila-count');
+
             const total = filaColetor.length;
+
             if (ind && cnt) {
+
                 if (total > 0) {
+
                     ind.style.display = 'block';
+
                     cnt.innerText = total;
+
                 } else {
+
                     ind.style.display = 'none';
+
                 }
+
             }
+
         }
+
+
 
         function enfileirarCodigo(codigo) {
+
             const codLimpo = String(codigo || '').trim();
+
             if (!codLimpo) return;
 
+
+
             // Suporta bipes sequenciais ou múltiplas linhas
+
             const partes = codLimpo.split(/[\r\n]+/).map(p => p.trim()).filter(Boolean);
+
             if (partes.length === 0) return;
 
+
+
             for (const p of partes) {
+
                 filaColetor.push(p);
+
             }
+
             salvarFilaColetor();
+
             atualizarIndicadorFila();
+
+
 
             // Vibrate curto de confirmação imediata da captura
+
             vibrar([40]);
 
+
+
             if (!processandoFilaColetor) {
+
                 processarProximoFilaColetor();
+
             } else {
+
                 if (resCidade && filaColetor.length > 1) {
+
                     resCidade.innerText = `⚡ Fila: +${filaColetor.length - 1} pacote(s) pendente(s)`;
+
                 }
+
             }
+
         }
+
+
 
         function processarCodigo(codigo) {
+
             enfileirarCodigo(codigo);
+
         }
+
+
 
         async function processarProximoFilaColetor() {
+
             if (filaColetor.length === 0) {
+
                 processandoFilaColetor = false;
+
                 salvarFilaColetor();
+
                 atualizarIndicadorFila();
+
                 return;
+
             }
+
+
 
             processandoFilaColetor = true;
+
             const codAtual = filaColetor[0];
+
             atualizarIndicadorFila();
 
+
+
             // Feedback visual no visor do PDA
+
             resultCard.className = 'result-card';
+
             resTag.innerText = 'PROCESSANDO...';
+
             resMot.innerText = codAtual;
+
             resCidade.innerText = filaColetor.length > 1 ? `⚡ Na fila: ${filaColetor.length - 1} restante(s)` : 'Consultando transportadora...';
+
             resDetail.innerText = '';
+
             resMsg.innerText = '';
 
+
+
             try {
+
                 let motEnvio = null;
+
                 let cidsEnvio = [];
+
                 if (!modoTriagemDireta && driverSelect.value) {
+
                     const rawVal = driverSelect.value;
+
                     if (rawVal.startsWith('grp:')) {
+
                         const partes = rawVal.substring(4).split('|');
+
                         motEnvio = partes[1] || partes[0];
+
                     } else if (rawVal.startsWith('cid:')) {
+
                         const cid = rawVal.substring(4);
+
                         motEnvio = cid;
+
                         cidsEnvio = [cid];
+
                     } else if (rawVal.startsWith('mot:')) {
+
                         motEnvio = rawVal.substring(4);
+
                     } else {
+
                         motEnvio = rawVal;
+
                     }
+
                 }
+
+
 
                 const payload = {
+
                     codigo: codAtual,
+
                     plataforma: plataformaAtiva,
+
                     conta_id: contaAtiva,
+
                     motorista: motEnvio,
+
                     cidades_selecionadas: cidsEnvio,
+
                     triagem_direta: Boolean(modoTriagemDireta),
+
                     origem: 'coletor'
+
                 };
 
+
+
                 const res = await fetch('/bip', {
+
                     method: 'POST',
+
                     headers: { 'Content-Type': 'application/json' },
+
                     body: JSON.stringify(payload)
+
                 });
+
+
 
                 const data = await res.json();
+
                 exibirResultado(codAtual, data);
+
             } catch (e) {
+
                 resultCard.className = 'result-card divergente';
+
                 resTag.innerText = 'ERRO DE CONEXÃO';
+
                 resMot.innerText = 'FALHA DE REDE';
+
                 resCidade.innerText = 'Verifique o Wi-Fi do galpão';
+
                 resMsg.innerText = e.message;
 
+
+
                 const camPill = document.getElementById('cam-result-pill');
+
                 const camPillMot = document.getElementById('cam-pill-mot');
+
                 const camPillDet = document.getElementById('cam-pill-det');
+
                 if (camPill && camPillMot && camPillDet) {
+
                     camPill.style.display = 'block';
+
                     camPill.style.background = '#7f1d1d';
+
                     camPill.style.border = '2px solid #ef4444';
+
                     camPill.style.color = '#fee2e2';
+
                     camPillMot.innerText = '❌ FALHA DE REDE';
+
                     camPillDet.innerText = 'Verifique a conexão Wi-Fi';
+
                 }
 
+
+
                 playBeep('divergente');
+
                 vibrar([200, 100, 200]);
+
             } finally {
+
                 // Remove o item processado da fila
+
                 filaColetor.shift();
+
                 salvarFilaColetor();
+
                 atualizarIndicadorFila();
 
+
+
                 // Garante que o input continue limpo e pronto para o próximo bipe instantâneo
+
                 if (barcodeInput.value === codAtual) {
+
                     barcodeInput.value = '';
+
                 }
+
                 manterFocoInput(false);
+
+
 
                 // Continua para o próximo da fila recursivamente
+
                 if (filaColetor.length > 0) {
+
                     setTimeout(processarProximoFilaColetor, 15);
+
                 } else {
+
                     processandoFilaColetor = false;
+
                 }
+
             }
+
         }
+
+
 
         function exibirResultado(codigo, data) {
+
             contagemSessao++;
+
             statSessao.innerText = contagemSessao;
 
+
+
             const st = (data.status || '').toLowerCase();
+
             const mot = data.motorista || 'Sem Motorista';
+
             const cid = data.cidade || '';
+
             const msg = data.mensagem || '';
+
             const bairro = data.bairro ? ` • Bairro: ${data.bairro}` : '';
+
             const cep = data.cep ? ` • CEP: ${data.cep}` : '';
 
+
+
             // Atualização do Pill Flutuante na Câmera (Modo Contínuo)
+
             const camPill = document.getElementById('cam-result-pill');
+
             const camPillMot = document.getElementById('cam-pill-mot');
+
             const camPillDet = document.getElementById('cam-pill-det');
 
+
+
             if (st === 'sucesso' || st === 'ok') {
+
                 resultCard.className = 'result-card ok';
+
                 resTag.innerText = 'SUCESSO';
+
                 resMot.innerText = mot;
+
                 resCidade.innerText = (cid ? '📍 ' + cid : '') + bairro;
+
                 resDetail.innerText = `Pacote: ${codigo}`;
+
                 resMsg.innerText = '';
 
+
+
                 if (camPill && camPillMot && camPillDet) {
+
                     camPill.style.display = 'block';
+
                     camPill.style.background = '#065f46';
+
                     camPill.style.border = '2px solid #10b981';
+
                     camPill.style.color = '#ecfdf5';
+
                     camPillMot.innerText = '✅ ' + mot;
+
                     camPillDet.innerText = (cid ? '📍 ' + cid : '') + ' • ' + codigo;
+
                 }
+
+
 
                 playBeep('ok');
+
                 vibrar([90]);
-                falarTexto(mot + (cid ? ' - ' + cid : ''));
+
+                const falaOk = cid || mot || 'Sucesso';
+                falarTexto(falaOk, false);
+
                 adicionarHistorico(codigo, mot, cid, 'ok');
 
+
+
                 if (data.contagem !== undefined) {
+
                     statMotorista.innerText = data.contagem;
+
                 }
+
             } else if (st === 'duplicado') {
+
                 resultCard.className = 'result-card duplicado';
+
                 resTag.innerText = 'DUPLICADO (JÁ BIPADO)';
+
                 resMot.innerText = mot;
+
                 resCidade.innerText = (cid ? '📍 ' + cid : '') + bairro;
+
                 resDetail.innerText = `Pacote: ${codigo}`;
+
                 resMsg.innerText = msg || 'Pacote já registrado no lote!';
 
+
+
                 if (camPill && camPillMot && camPillDet) {
+
                     camPill.style.display = 'block';
+
                     camPill.style.background = '#78350f';
+
                     camPill.style.border = '2px solid #f59e0b';
+
                     camPill.style.color = '#fef3c7';
+
                     camPillMot.innerText = '⚠️ JÁ BIPADO: ' + mot;
+
                     camPillDet.innerText = (cid ? '📍 ' + cid : '') + ' • ' + codigo;
+
                 }
+
+
 
                 playBeep('duplicado');
+
                 vibrar([120, 80, 120]);
-                falarTexto("Duplicado! " + mot);
+
+                falarTexto("Duplicado! " + (cid || mot || ""), true);
+
                 adicionarHistorico(codigo, mot, cid, 'duplicado');
+
             } else if (st === 'divergente') {
+
                 resultCard.className = 'result-card divergente';
+
                 resTag.innerText = 'DIVERGÊNCIA!';
+
                 resMot.innerText = mot !== 'Sem Motorista' ? mot : 'ATENÇÃO!';
+
                 resCidade.innerText = (cid ? 'Destino: ' + cid : 'Cidade Não Autorizada') + bairro;
+
                 resDetail.innerText = `Pacote: ${codigo}`;
+
                 resMsg.innerText = msg;
 
+
+
                 if (camPill && camPillMot && camPillDet) {
+
                     camPill.style.display = 'block';
+
                     camPill.style.background = '#7f1d1d';
+
                     camPill.style.border = '2px solid #ef4444';
+
                     camPill.style.color = '#fee2e2';
+
                     camPillMot.innerText = '🚨 DIVERGÊNCIA: ' + (mot !== 'Sem Motorista' ? mot : 'ATENÇÃO');
+
                     camPillDet.innerText = (cid ? '📍 ' + cid : msg || 'Não Autorizada') + ' • ' + codigo;
+
                 }
+
+
 
                 if (data.atribuido && data.contagem !== undefined) {
+
                     statMotorista.innerText = data.contagem;
+
                     statTotal.innerText = parseInt(statTotal.innerText || 0) + 1;
+
                 }
 
+
+
                 playBeep('divergente');
+
                 vibrar([250, 100, 250, 100, 250]);
-                falarTexto("Divergência! " + (cid || msg));
+
+                falarTexto("Divergência! " + (cid || msg || "pacote não autorizado"), true);
+
                 adicionarHistorico(codigo, mot || 'Divergente', cid, 'divergente');
+
             } else {
+
                 resultCard.className = 'result-card divergente';
+
                 resTag.innerText = 'AVISO / FALHA';
+
                 resMot.innerText = 'VERIFICAR PACOTE';
+
                 resCidade.innerText = cid || '---';
+
                 resDetail.innerText = `Pacote: ${codigo}`;
+
                 resMsg.innerText = msg || 'Verifique o status no computador central';
 
+
+
                 if (camPill && camPillMot && camPillDet) {
+
                     camPill.style.display = 'block';
+
                     camPill.style.background = '#7f1d1d';
+
                     camPill.style.border = '2px solid #ef4444';
+
                     camPill.style.color = '#fee2e2';
+
                     camPillMot.innerText = '❌ FALHA / VERIFICAR';
+
                     camPillDet.innerText = (msg || 'Verificar pacote') + ' • ' + codigo;
+
                 }
+
+
 
                 playBeep('divergente');
+
                 vibrar([200]);
+
                 adicionarHistorico(codigo, 'Falha', cid, 'divergente');
+
             }
+
         }
+
+
 
         function adicionarHistorico(codigo, motorista, cidade, status) {
+
             const li = document.createElement('li');
+
             li.className = 'history-item ' + status;
+
             const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
             li.innerHTML = `
+
                 <div>
+
                     <strong style="color: #f8fafc;">${motorista}</strong>
+
                     <span style="color: #94a3b8; font-size: 0.72rem; margin-left: 4px;">${cidade || ''}</span>
+
                     <div style="color: #64748b; font-size: 0.7rem;">${codigo}</div>
+
                 </div>
+
                 <span style="color: #64748b; font-size: 0.72rem;">${hora}</span>
+
             `;
+
             historyList.insertBefore(li, historyList.firstChild);
 
+
+
             // Mantém no máximo 15 itens
+
             while (historyList.children.length > 15) {
+
                 historyList.removeChild(historyList.lastChild);
+
             }
+
         }
+
+
 
         clearHistBtn.addEventListener('click', () => {
+
             historyList.innerHTML = '';
+
         });
+
+
 
         // Barcode Input Handler (Limpeza Instantânea do Visor + Enfileiramento Rápido)
+
         barcodeInput.addEventListener('keydown', (e) => {
+
             if (e.key === 'Enter' || e.keyCode === 13) {
+
                 e.preventDefault();
+
                 const val = barcodeInput.value;
+
                 // LIMPA O VISOR IMEDIATAMENTE (0ms) - Não trava o operador esperando o servidor
+
                 barcodeInput.value = '';
+
                 barcodeInput.inputMode = 'none';
+
                 manterFocoInput(false);
+
                 if (val && val.trim()) {
+
                     enfileirarCodigo(val);
+
                 }
+
             }
+
         });
+
+
 
         // Camera Scanner Feature (Modo Contínuo)
+
         let ultimoCodigoLido = '';
+
         let tempoUltimoBipe = 0;
+
         let processandoFrame = false;
 
+
+
         btnOpenCam.addEventListener('click', async () => {
+
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+
                 if (modalAjudaCamera) {
+
                     modalAjudaCamera.style.display = 'flex';
+
                 } else {
+
                     alert("Para usar a câmera no celular via Wi-Fi:\n1. Acesse chrome://flags no Chrome do celular\n2. Pesquise por 'insecure'\n3. Adicione " + window.location.origin + " em 'Insecure origins treated as secure'\n4. Marque Enabled e clique em Relaunch.");
+
                 }
+
                 return;
+
             }
+
             ultimoCodigoLido = '';
+
             tempoUltimoBipe = 0;
+
             processandoFrame = false;
+
             const camPill = document.getElementById('cam-result-pill');
+
             if (camPill) camPill.style.display = 'none';
+
+
 
             cameraModal.style.display = 'flex';
+
             await iniciarCamera();
+
         });
+
+
 
         btnCloseCam.addEventListener('click', () => {
+
             pararCamera();
+
             cameraModal.style.display = 'none';
+
             ultimoCodigoLido = '';
+
             processandoFrame = false;
+
             const camPill = document.getElementById('cam-result-pill');
+
             if (camPill) camPill.style.display = 'none';
+
             manterFocoInput(false);
+
         });
 
+
+
         async function iniciarCamera() {
+
             try {
+
                 if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+
                     cameraModal.style.display = 'none';
+
                     if (modalAjudaCamera) modalAjudaCamera.style.display = 'flex';
+
                     return;
+
                 }
+
+
 
                 if ('BarcodeDetector' in window) {
+
                     barcodeDetector = new BarcodeDetector({ formats: ['code_128', 'code_39', 'qr_code', 'ean_13', 'itf'] });
+
                 }
+
+
 
                 cameraStream = await navigator.mediaDevices.getUserMedia({
+
                     video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+
                 });
+
                 cameraVideo.srcObject = cameraStream;
+
                 await cameraVideo.play();
 
+
+
                 if (barcodeDetector) {
+
                     cameraLoopId = requestAnimationFrame(scanVideoFrame);
+
                 }
+
             } catch (err) {
+
                 cameraModal.style.display = 'none';
+
                 if (modalAjudaCamera) {
+
                     modalAjudaCamera.style.display = 'flex';
+
                 } else {
+
                     alert("Não foi possível acessar a câmera do aparelho: " + err.message);
+
                 }
+
             }
+
         }
 
+
+
         async function scanVideoFrame() {
+
             if (cameraModal.style.display === 'flex' && barcodeDetector && cameraVideo.readyState >= 2) {
+
                 if (!processandoFrame) {
+
                     try {
+
                         const barcodes = await barcodeDetector.detect(cameraVideo);
+
                         if (barcodes.length > 0) {
+
                             const raw = (barcodes[0].rawValue || '').trim();
+
                             const agora = Date.now();
-                            // Debounce anti-duplicação acidental na câmera: só lê se for novo código ou após 1.8 segundos
-                            if (raw && (raw !== ultimoCodigoLido || (agora - tempoUltimoBipe > 1800))) {
+
+                            // Debounce e trava anti-releitura inteligente na câmera
+                            const intervaloMesmoCodigo = agora - tempoUltimoBipe;
+                            if (raw && (raw !== ultimoCodigoLido || intervaloMesmoCodigo > 2500)) {
                                 ultimoCodigoLido = raw;
                                 tempoUltimoBipe = agora;
                                 processandoFrame = true;
 
-                                // Feedback visual verde de leitura imediata
-                                cameraVideo.style.borderColor = '#10b981';
-                                setTimeout(() => {
-                                    if (cameraVideo) cameraVideo.style.borderColor = '#38bdf8';
-                                }, 350);
+                                // 1. BIPE SONORO IMEDIATO (Feedback instantâneo ao ler)
+                                playBeep('ok');
 
+                                // 2. VIBRAÇÃO TÁTIL NO CELULAR (80ms nítido)
+                                vibrar([80]);
+
+                                // 3. FLASH VERDE VISUAL NA TELA DA CÂMERA
+                                const flash = document.getElementById('cam-flash-overlay');
+                                if (flash) {
+                                    flash.style.opacity = '1';
+                                    setTimeout(() => { if (flash) flash.style.opacity = '0'; }, 250);
+                                }
+                                const wrapper = document.querySelector('.camera-scanner-wrapper');
+                                if (wrapper) {
+                                    wrapper.style.borderColor = '#10b981';
+                                    setTimeout(() => { if (wrapper) wrapper.style.borderColor = '#38bdf8'; }, 400);
+                                }
+
+                                // 4. AVISO IMEDIATO NA TELA (Sem esperar o retorno do servidor)
+                                const camPill = document.getElementById('cam-result-pill');
+                                const camPillMot = document.getElementById('cam-pill-mot');
+                                const camPillDet = document.getElementById('cam-pill-det');
+                                if (camPill && camPillMot && camPillDet) {
+                                    camPill.style.display = 'block';
+                                    camPill.style.background = '#065f46';
+                                    camPill.style.border = '2px solid #10b981';
+                                    camPill.style.color = '#ecfdf5';
+                                    camPillMot.innerText = '⚡ LIDO: ' + raw;
+                                    camPillDet.innerText = 'Processando pacote...';
+                                }
+
+                                // 5. ENFILEIRA O CÓDIGO PARA ENVIO AO SERVIDOR
                                 enfileirarCodigo(raw);
+
+                                // 6. TRAVA DE 1.5 SEGUNDOS (Evita ler múltiplos códigos acidentalmente no mesmo pacote)
                                 setTimeout(() => {
                                     processandoFrame = false;
-                                }, 400);
+                                }, 1500);
                             }
+
                         }
+
                     } catch (_) {}
+
                 }
+
                 cameraLoopId = requestAnimationFrame(scanVideoFrame);
+
             }
+
         }
+
+
 
         function pararCamera() {
+
             if (cameraLoopId) {
+
                 cancelAnimationFrame(cameraLoopId);
+
                 cameraLoopId = null;
+
             }
+
             if (cameraStream) {
+
                 cameraStream.getTracks().forEach(t => t.stop());
+
                 cameraStream = null;
+
             }
+
         }
 
+
+
         // Init
+
         if (nomeContaExibicao) {
+
             platLabel.innerText = nomeContaExibicao;
+
             platIcon.innerText = (plataformaAtiva === 'anjun' ? '🚚' : (plataformaAtiva === 'imile' ? '📦' : '⚡'));
+
         }
+
         carregarStatus();
+
         setInterval(carregarStatus, 5000);
+
         manterFocoInput(false);
+
     </script>
+
 </body>
+
 </html>
+

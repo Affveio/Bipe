@@ -275,7 +275,7 @@ let cidadesLoggiSelecionadas = [];
 
 
 
-let modoGrupoLoggi = 'motorista';
+let modoGrupoLoggi = 'novo';
 
 
 
@@ -28703,3 +28703,74 @@ if (btnAbrirColetorNavegador) {
     });
 }
 
+
+
+// Sincronização em tempo real master (Notebook reflete bipes do PDA / Celular na hora)
+let sincronizandoHistoricoRemoto = false;
+let totalBipesRemotosConhecidos = -1;
+
+async function sincronizarHistoricoComServidor() {
+    if (sincronizandoHistoricoRemoto) return;
+    sincronizandoHistoricoRemoto = true;
+    try {
+        const res = await fetch(`${API_URL}/historico?_=${Date.now()}`);
+        if (!res.ok) return;
+        const histData = await res.json();
+        const hojeStr = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`;
+        const bipsHoje = histData.filter(item => {
+            const dataBip = item.timestamp ? item.timestamp.substring(0, 10) : "";
+            return dataBip === hojeStr;
+        });
+
+        if (totalBipesRemotosConhecidos === -1) {
+            totalBipesRemotosConhecidos = bipsHoje.length;
+            return;
+        }
+
+        // Se o total de bipes hoje mudou (ex: bipado pelo PDA), atualiza o notebook imediatamente
+        if (bipsHoje.length !== totalBipesRemotosConhecidos) {
+            totalBipesRemotosConhecidos = bipsHoje.length;
+
+            const bipsOkHoje = bipsHoje.filter(item => item.status === "OK");
+            contagemSucesso = bipsOkHoje.length;
+            if (totalContador) totalContador.innerText = contagemSucesso;
+            recalcularContagemEmpresas(bipsOkHoje);
+            reconstruirDuplicadosDoHistorico(bipsHoje, true);
+
+            if (historyLog) {
+                historyLog.innerHTML = "";
+                const bipsExibidos = bipsHoje.slice(-150).reverse();
+                if (bipsExibidos.length > 0) {
+                    const ult = bipsExibidos[0];
+                    atualizarCardUltimoPacote(ult.codigo, ult.cidade, ult.motorista || ult.recebedor, ult.status, ult.status === "OK" ? "badge-ok" : "badge-err");
+                }
+                bipsExibidos.forEach(bip => {
+                    const badgeClass = bip.status === "OK" ? "badge-ok" : "badge-err";
+                    const statusText = bip.status;
+                    const dataHora = new Date(bip.timestamp).toLocaleTimeString('pt-BR');
+                    const codEscaped = String(bip.codigo || '').replace(/'/g, "\\'");
+                    const novaLinha = document.createElement('tr');
+                    novaLinha.innerHTML = `
+                        <td style="color: #64748b;">${dataHora}</td>
+                        <td style="font-family: monospace; white-space: nowrap;">
+                            <span class="copyable-code" style="cursor: pointer; transition: all 0.2s;" title="Clique para copiar (${bip.codigo})">${bip.codigo}</span>
+                            <span class="btn-filtrar-pacote" onclick="filtrarPorCodigoHistorico('${codEscaped}')" title="🔍 Filtrar todas as movimentações deste pacote (${bip.codigo})" style="cursor: pointer; opacity: 0.6; padding: 1px 4px; border-radius: 3px; font-size: 0.72rem; margin-left: 6px;">🔍</span>
+                        </td>
+                        <td title="${bip.cidade}">${bip.cidade}</td>
+                        <td style="text-align: center;"><span class="status-badge ${badgeClass}">${statusText}</span></td>
+                    `;
+                    historyLog.appendChild(novaLinha);
+                });
+            }
+
+            // Atualiza ranking dos motoristas à direita
+            if (typeof carregarLotesFinalizados === 'function') {
+                await carregarLotesFinalizados();
+            }
+        }
+    } catch (_) {}
+    finally {
+        sincronizandoHistoricoRemoto = false;
+    }
+}
+setInterval(sincronizarHistoricoComServidor, 2000);
