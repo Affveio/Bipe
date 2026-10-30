@@ -1491,6 +1491,7 @@
             <span style="font-size: 0.75rem; opacity: 0.8;">🔍 ▾</span>
 
         </button>
+        <button id="btn-limpar-motorista-bar" type="button" onclick="limparSelecaoMotorista(event)" style="display: none; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; border-radius: 6px; padding: 6px 10px; font-size: 0.76rem; font-weight: 800; cursor: pointer; white-space: nowrap;" title="Limpar cidades ou motorista">✕ Limpar</button>
 
         <!-- Select nativo oculto para manter 100% de retrocompatibilidade com eventos -->
 
@@ -1815,10 +1816,95 @@
 
 
     <script>
+
+        // ==========================================
+        // CONTROLE E LICENCIAMENTO DE DISPOSITIVOS COLETOR
+        // ==========================================
+        function obterDeviceId() {
+            let did = localStorage.getItem('turboscan_coletor_device_id');
+            if (!did) {
+                did = 'pda_' + Math.random().toString(36).substring(2, 9) + '_' + Date.now().toString(36);
+                localStorage.setItem('turboscan_coletor_device_id', did);
+            }
+            return did;
+        }
+
+        function obterDeviceNome() {
+            let nome = localStorage.getItem('turboscan_coletor_device_nome');
+            if (!nome) {
+                const ua = navigator.userAgent || '';
+                let detected = 'Celular/PDA';
+                if (/android/i.test(ua)) detected = 'Android PDA';
+                else if (/iphone|ipad/i.test(ua)) detected = 'iPhone';
+                const did = obterDeviceId();
+                nome = `${detected} (${did.slice(-4).toUpperCase()})`;
+                localStorage.setItem('turboscan_coletor_device_nome', nome);
+            }
+            return nome;
+        }
+
+        let coletorAutorizadoAtivo = true;
+
+        function mostrarBloqueioColetor(msg, titulo = 'LIMITE DE COLETORES') {
+            coletorAutorizadoAtivo = false;
+            const modal = document.getElementById('modal-bloqueio-coletor');
+            const elMsg = document.getElementById('bloqueio-coletor-msg');
+            const elTit = document.getElementById('bloqueio-coletor-titulo');
+            const elNom = document.getElementById('bloqueio-device-nome');
+            const elId = document.getElementById('bloqueio-device-id');
+            if (modal) modal.style.display = 'flex';
+            if (elMsg) elMsg.innerText = msg || 'Limite de coletores atingido para esta licença.';
+            if (elTit) elTit.innerText = titulo;
+            if (elNom) elNom.innerText = obterDeviceNome();
+            if (elId) elId.innerText = `ID: ${obterDeviceId()}`;
+            if (input) input.blur();
+        }
+
+        function esconderBloqueioColetor() {
+            coletorAutorizadoAtivo = true;
+            const modal = document.getElementById('modal-bloqueio-coletor');
+            if (modal) modal.style.display = 'none';
+        }
+
+        async function autenticarDispositivoColetor() {
+            try {
+                const res = await fetch('/api/coletor/autenticar', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        device_id: obterDeviceId(),
+                        nome_dispositivo: obterDeviceNome()
+                    })
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || data.autorizado === false) {
+                    mostrarBloqueioColetor(data.motivo || 'Limite de coletores atingido para esta licença.', data.codigo === 'DISPOSITIVO_BLOQUEADO' ? 'APARELHO BLOQUEADO' : 'LIMITE DE COLETORES');
+                    return false;
+                } else {
+                    esconderBloqueioColetor();
+                    return true;
+                }
+            } catch (_) {
+                return true; // Se offline temporário, não trava na inicialização
+            }
+        }
+
+        async function tentarReconectarColetor() {
+            const btn = event ? event.target : null;
+            if (btn) btn.innerText = 'Verificando licença...';
+            const ok = await autenticarDispositivoColetor();
+            if (ok) {
+                esconderBloqueioColetor();
+                carregarStatus(true);
+            }
+            if (btn) btn.innerText = '🔄 Tentar Novamente';
+        }
+
         // State Globals
         let sheetMotoristaAberta = false;
         let abaAtivaMotorista = 'todos';
         let listaOpcoesMotorista = [];
+        let cidadesSelecionadasColetor = [];
         let ultimoHashOpcoesMotoristas = '';
         let falarCidadeAtivo = (localStorage.getItem('turboscan_coletor_falar') !== 'false');
 
@@ -2899,9 +2985,16 @@
                         tipoAnterior = item.tipo;
                     }
 
-                    const isSelected = (item.val === selVal) || (selVal && item.val && (selVal.includes(item.val) || item.val.includes(selVal)));
+                    let isSelected = false;
+                    if (item.tipo === 'cidades') {
+                        const nomeCid = item.val.startsWith('cid:') ? item.val.substring(4) : item.val;
+                        isSelected = cidadesSelecionadasColetor.includes(nomeCid) || (selVal === item.val);
+                    } else {
+                        isSelected = (item.val === selVal);
+                    }
+
                     html += `
-                        <div class="sheet-opt ${isSelected ? 'selected' : ''}" data-val="${item.val}">
+                        <div class="sheet-opt ${isSelected ? 'selected' : ''}" data-val="${item.val}" data-tipo="${item.tipo || ''}">
                             <div style="display: flex; align-items: center; gap: 8px; flex: 1; overflow: hidden; pointer-events: none;">
                                 <span style="font-size: 1.05rem;">${item.icone}</span>
                                 <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 0.95rem;">${item.texto}</span>
@@ -2911,13 +3004,30 @@
                     `;
                 });
 
-                containerOpcoesMotoristas.innerHTML = html;
+                const temAlgumaSelecao = (cidadesSelecionadasColetor.length > 0) || (selVal && selVal !== '');
+                const optLimparHtml = temAlgumaSelecao ? `
+                    <div class="sheet-opt sheet-opt-clear" data-val="" onclick="limparSelecaoMotorista(event)" style="border-left: 3px solid #ef4444; background: rgba(239, 68, 68, 0.08); margin-bottom: 6px;">
+                        <div style="display: flex; align-items: center; gap: 8px; flex: 1; color: #f87171; font-weight: 700; pointer-events: none;">
+                            <span style="font-size: 1.05rem;">✕</span>
+                            <span>Limpar Seleção (Sem Destino / Entrada Livre)</span>
+                        </div>
+                    </div>
+                ` : '';
+
+                containerOpcoesMotoristas.innerHTML = optLimparHtml + html;
 
                 containerOpcoesMotoristas.querySelectorAll('.sheet-opt').forEach(optEl => {
                     optEl.addEventListener('click', (e) => {
                         if (e) { e.preventDefault(); e.stopPropagation(); }
                         const val = optEl.getAttribute('data-val');
-                        selecionarOpcaoMotorista(val);
+                        const tipo = optEl.getAttribute('data-tipo') || '';
+                        if (!val) {
+                            limparSelecaoMotorista(e);
+                        } else if (tipo === 'cidades' || (val && val.startsWith('cid:'))) {
+                            alternarCidadeColetor(val);
+                        } else {
+                            selecionarOpcaoMotorista(val);
+                        }
                     });
                 });
             } catch (err) {
@@ -2928,7 +3038,106 @@
             }
         }
 
+        function limparSelecaoMotorista(e) {
+            if (e) { e.preventDefault(); e.stopPropagation(); }
+            cidadesSelecionadasColetor = [];
+            motoristaAtivo = '';
+            if (driverSelect) {
+                driverSelect.value = '';
+                driverSelect.dispatchEvent(new Event('change'));
+            }
+            atualizarBotaoMotoristaSelecionado();
+            if (plataformaAtiva === 'loggi') {
+                fetch('/loggi/definir-grupo', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ modo: 'novo', cidade: null, reset: true })
+                }).catch(() => {});
+            }
+            fetch('/api/coletor/trocar-motorista', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ motorista: '' })
+            }).catch(() => {});
+            if (sheetMotoristaAberta) {
+                renderizarOpcoesSheetMotorista();
+                fecharSheetMotorista();
+            }
+            manterFocoInput(false);
+        }
+
+        function alternarCidadeColetor(val) {
+            const nomeCid = val.startsWith('cid:') ? val.substring(4) : val;
+            const idx = cidadesSelecionadasColetor.indexOf(nomeCid);
+            if (idx >= 0) {
+                cidadesSelecionadasColetor.splice(idx, 1);
+            } else {
+                cidadesSelecionadasColetor.push(nomeCid);
+            }
+
+            if (cidadesSelecionadasColetor.length === 0) {
+                limparSelecaoMotorista();
+                return;
+            }
+
+            if (cidadesSelecionadasColetor.length === 1) {
+                const uCid = cidadesSelecionadasColetor[0];
+                let opt = Array.from(driverSelect.options).find(o => o.value === `cid:${uCid}`);
+                if (!opt) {
+                    opt = document.createElement('option');
+                    opt.value = `cid:${uCid}`;
+                    opt.innerText = `🏙️ ${uCid}`;
+                    driverSelect.appendChild(opt);
+                }
+                driverSelect.value = `cid:${uCid}`;
+                motoristaAtivo = `cid:${uCid}`;
+                if (plataformaAtiva === 'loggi') {
+                    fetch('/loggi/definir-grupo', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ modo: 'novo', cidade: uCid, tags: [uCid] })
+                    }).catch(() => {});
+                }
+                fetch('/api/coletor/trocar-motorista', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ motorista: uCid })
+                }).catch(() => {});
+            } else {
+                const valMulti = `cids:${cidadesSelecionadasColetor.join(',')}`;
+                let opt = Array.from(driverSelect.options).find(o => o.value === valMulti);
+                if (!opt) {
+                    opt = document.createElement('option');
+                    opt.value = valMulti;
+                    opt.innerText = `🏙️ ${cidadesSelecionadasColetor.join(', ')}`;
+                    driverSelect.appendChild(opt);
+                }
+                driverSelect.value = valMulti;
+                motoristaAtivo = valMulti;
+                if (plataformaAtiva === 'loggi') {
+                    fetch('/loggi/definir-grupo', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ modo: 'novo', cidade: cidadesSelecionadasColetor[0], tags: cidadesSelecionadasColetor })
+                    }).catch(() => {});
+                }
+                fetch('/api/coletor/trocar-motorista', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ motorista: cidadesSelecionadasColetor.join(' + ') })
+                }).catch(() => {});
+            }
+
+            atualizarBotaoMotoristaSelecionado();
+            renderizarOpcoesSheetMotorista();
+        }
+
         function selecionarOpcaoMotorista(val) {
+            if (!val || (driverSelect && driverSelect.value === val)) {
+                limparSelecaoMotorista();
+                return;
+            }
+            cidadesSelecionadasColetor = [];
             if (driverSelect) {
                 let opt = Array.from(driverSelect.options).find(o => o.value === val);
                 if (!opt) {
@@ -2949,16 +3158,32 @@
         function atualizarBotaoMotoristaSelecionado() {
 
             if (!txtMotoristaSelecionado) return;
+            const btnLimparBar = document.getElementById('btn-limpar-motorista-bar');
+            const btnLimparHdr = document.getElementById('btn-limpar-sheet-header');
+
+            if (cidadesSelecionadasColetor.length > 1) {
+                txtMotoristaSelecionado.innerText = `🏙️ ${cidadesSelecionadasColetor.join(', ')} (${cidadesSelecionadasColetor.length} cidades)`;
+                if (btnLimparBar) btnLimparBar.style.display = 'block';
+                if (btnLimparHdr) btnLimparHdr.style.display = 'block';
+                return;
+            } else if (cidadesSelecionadasColetor.length === 1) {
+                txtMotoristaSelecionado.innerText = `🏙️ ${cidadesSelecionadasColetor[0]}`;
+                if (btnLimparBar) btnLimparBar.style.display = 'block';
+                if (btnLimparHdr) btnLimparHdr.style.display = 'block';
+                return;
+            }
 
             const selVal = driverSelect ? driverSelect.value : '';
 
             if (!selVal) {
-
                 txtMotoristaSelecionado.innerText = (plataformaAtiva === 'loggi') ? 'Selecione Grupo ou Cidade...' : 'Selecione o motorista...';
-
+                if (btnLimparBar) btnLimparBar.style.display = 'none';
+                if (btnLimparHdr) btnLimparHdr.style.display = 'none';
                 return;
-
             }
+
+            if (btnLimparBar) btnLimparBar.style.display = 'block';
+            if (btnLimparHdr) btnLimparHdr.style.display = 'block';
 
             const achado = listaOpcoesMotorista.find(it => it.val === selVal);
 
@@ -3065,7 +3290,12 @@
         async function carregarStatus(forcarRenderSheet = false) {
             let data = null;
             try {
-                const res = await fetch(`/api/coletor/status?plataforma=${plataformaAtiva}&conta=${contaAtiva}&_=${Date.now()}`);
+                const res = await fetch(`/api/coletor/status?plataforma=${plataformaAtiva}&conta=${contaAtiva}&device_id=${encodeURIComponent(obterDeviceId())}&_=${Date.now()}`);
+                if (res.status === 403) {
+                    const errData = await res.json().catch(() => ({}));
+                    mostrarBloqueioColetor(errData.mensagem || 'Limite de coletores móveis atingido para esta licença.');
+                    return;
+                }
                 if (res.ok) {
                     data = await res.json();
                     falhasConsecutivasStatus = 0;
@@ -3448,25 +3678,24 @@
 
                 let cidsEnvio = [];
 
-                if (!modoTriagemDireta && driverSelect.value) {
-
-                    const rawVal = driverSelect.value;
-
-                    if (rawVal.startsWith('grp:')) {
-
-                        const partes = rawVal.substring(4).split('|');
-
-                        motEnvio = partes[1] || partes[0];
-
-                    } else if (rawVal.startsWith('cid:')) {
-
-                        const cid = rawVal.substring(4);
-
-                        motEnvio = cid;
-
-                        cidsEnvio = [cid];
-
-                    } else if (rawVal.startsWith('mot:')) {
+                if (!modoTriagemDireta) {
+                    if (cidadesSelecionadasColetor.length > 0) {
+                        motEnvio = cidadesSelecionadasColetor.join(' + ');
+                        cidsEnvio = [...cidadesSelecionadasColetor];
+                    } else if (driverSelect.value) {
+                        const rawVal = driverSelect.value;
+                        if (rawVal.startsWith('grp:')) {
+                            const partes = rawVal.substring(4).split('|');
+                            motEnvio = partes[1] || partes[0];
+                        } else if (rawVal.startsWith('cid:')) {
+                            const cid = rawVal.substring(4);
+                            motEnvio = cid;
+                            cidsEnvio = [cid];
+                        } else if (rawVal.startsWith('cids:')) {
+                            const cids = rawVal.substring(5).split(',').filter(Boolean);
+                            motEnvio = cids.join(' + ');
+                            cidsEnvio = cids;
+                        } else if (rawVal.startsWith('mot:')) {
 
                         motEnvio = rawVal.substring(4);
 
@@ -3494,7 +3723,11 @@
 
                     triagem_direta: Boolean(modoTriagemDireta),
 
-                    origem: 'coletor'
+                    origem: 'coletor',
+
+                    device_id: obterDeviceId(),
+
+                    nome_dispositivo: obterDeviceNome()
 
                 };
 
@@ -3513,7 +3746,10 @@
 
 
                 const data = await res.json();
-
+                if (res.status === 403) {
+                    mostrarBloqueioColetor(data.mensagem || 'Coletor não autorizado ou limite de licenças excedido.');
+                    return;
+                }
                 exibirResultado(codAtual, data);
 
             } catch (e) {
@@ -4140,6 +4376,8 @@
 
         }
 
+        autenticarDispositivoColetor();
+
         carregarStatus();
 
         setInterval(carregarStatus, 5000);
@@ -4147,6 +4385,33 @@
         manterFocoInput(false);
 
     </script>
+
+
+    <!-- Modal de Bloqueio por Limite de Coletores na Licença -->
+    <div id="modal-bloqueio-coletor" style="display: none; position: fixed; inset: 0; background: rgba(9, 13, 22, 0.97); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); z-index: 99999999; flex-direction: column; align-items: center; justify-content: center; padding: 20px; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+        <div style="background: #111827; border: 2px solid #ef4444; border-radius: 18px; padding: 28px 22px; max-width: 380px; width: 100%; box-shadow: 0 20px 50px rgba(239, 68, 68, 0.35); display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center;">
+            <div style="width: 68px; height: 68px; border-radius: 50%; background: rgba(239, 68, 68, 0.15); border: 2px solid #ef4444; display: flex; align-items: center; justify-content: center; font-size: 2.2rem;">
+                🚫
+            </div>
+            <h2 id="bloqueio-coletor-titulo" style="margin: 0; color: #f87171; font-size: 1.25rem; font-weight: 800; letter-spacing: 0.5px;">
+                COLETOR BLOQUEADO
+            </h2>
+            <p id="bloqueio-coletor-msg" style="margin: 0; color: #cbd5e1; font-size: 0.88rem; line-height: 1.5;">
+                Limite de coletores móveis atingido para esta licença.
+            </p>
+            <div style="background: #090d16; border: 1px solid #1e293b; border-radius: 10px; padding: 10px 14px; width: 100%; box-sizing: border-box; text-align: left;">
+                <div style="font-size: 0.72rem; color: #64748b; font-weight: 700; text-transform: uppercase;">Identificação deste Aparelho:</div>
+                <div id="bloqueio-device-nome" style="font-size: 0.88rem; color: #38bdf8; font-weight: 700; margin-top: 2px; word-break: break-all;">---</div>
+                <div id="bloqueio-device-id" style="font-size: 0.68rem; color: #475569; font-family: monospace; margin-top: 2px;">---</div>
+            </div>
+            <p style="margin: 0; font-size: 0.76rem; color: #94a3b8; line-height: 1.4;">
+                Para conectar este aparelho, acesse o <strong>TurboScan no computador</strong>, clique em <strong>Coletor</strong> e libere uma vaga ou contate o suporte da sua licença.
+            </p>
+            <button type="button" onclick="tentarReconectarColetor()" style="background: linear-gradient(135deg, #ef4444, #dc2626); color: #fff; border: none; border-radius: 10px; padding: 12px 20px; font-size: 0.88rem; font-weight: 800; width: 100%; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;">
+                <span>🔄</span> Tentar Novamente
+            </button>
+        </div>
+    </div>
 
 </body>
 

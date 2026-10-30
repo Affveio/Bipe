@@ -7843,7 +7843,9 @@ async function processarProximoDaFila() {
 
 
 
-            adicionarAoHistorico(codigo, resultado.recebedor, resultado.cidade, "OK", "badge-ok");
+            const statusTextoLim = isDupLim ? "DUPLICADO" : "OK";
+            const badgeLim = isDupLim ? "badge-err" : "badge-ok";
+            adicionarAoHistorico(codigo, isDupLim ? "DUPLICADO" : resultado.recebedor, resultado.cidade, statusTextoLim, badgeLim);
 
 
 
@@ -7940,7 +7942,8 @@ async function processarProximoDaFila() {
 
 
             } else if (plataformaAtiva === 'loggi') {
-                if (resultado.mensagem && resultado.mensagem.includes('Divergência')) {
+                const msgNorm = (resultado.mensagem || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+                if (msgNorm.includes('divergencia')) {
                     subStatusLabel.innerText = `⚠️ ${resultado.mensagem}${textoFila}`;
                     textoVoz = `Divergente! Pacote de ${cidadePacote || 'outra cidade'}`;
                 } else {
@@ -13603,74 +13606,30 @@ let _transferContext = {
 
 
 function popularSelectDestinoTransferencia(termoFiltro = '') {
-
-
-
     const sel = document.getElementById('transfer-destino-select');
-
-
-
     if (!sel) return;
 
-
-
     const norm = normalizarBuscaSidebar(termoFiltro || '');
+    const motOrigemNorm = (_transferContext.motoristaOrigem || '').toLowerCase();
 
-
-
+    // Permite inclusive o mesmo motorista de origem para fins de relançamento / retentativa no site oficial
     const filtrados = (_transferContext.listaMotoristasCandidatos || []).filter(m => {
-
-
-
         if (!m) return false;
-
-
-
-        if (m.toLowerCase() === (_transferContext.motoristaOrigem || '').toLowerCase()) return false;
-
-
-
         if (!norm) return true;
-
-
-
         return normalizarBuscaSidebar(m).includes(norm);
-
-
-
     });
 
-
-
-
-
-
-
     if (filtrados.length === 0) {
-
-
-
         sel.innerHTML = `<option value="">Nenhum motorista encontrado para "${termoFiltro}"</option>`;
-
-
-
         return;
-
-
-
     }
 
-
-
-
-
-
-
-    sel.innerHTML = `<option value="">-- Selecione o Novo Motorista (${filtrados.length}) --</option>` +
-
-
-
-        filtrados.map(m => `<option value="${m}">${m}</option>`).join('');
+    sel.innerHTML = `<option value="">-- Selecione o Motorista (${filtrados.length}) --</option>` +
+        filtrados.map(m => {
+            const isMesmo = (m.toLowerCase() === motOrigemNorm);
+            const label = isMesmo ? `🔄 ${m} (Mesmo motorista - Relançar no site)` : m;
+            return `<option value="${m}">${label}</option>`;
+        }).join('');
 
 
 
@@ -14310,7 +14269,9 @@ async function abrirModalTransferenciaMotorista(motoristaOrigem, plataformaItem,
 
 
 
-    try {
+        if (motoristaOrigem && motoristaOrigem !== "Sem Motorista") setNomes.add(motoristaOrigem.trim());
+
+try {
 
 
 
@@ -14694,35 +14655,16 @@ if (btnConfirmarTransferir) {
 
 
 
-        btnConfirmarTransferir.innerText = '⏳ TRANSFERINDO E LANÇANDO NO SITE...';
-
-
-
-
-
-
-
+        const isMesmoMotorista = (motoristaDestino.toLowerCase() === (_transferContext.motoristaOrigem || "").toLowerCase());
+        btnConfirmarTransferir.innerText = isMesmoMotorista ? "⏳ RELANÇANDO NO SITE..." : "⏳ TRANSFERINDO E LANÇANDO NO SITE...";
         if (feedbackEl) {
-
-
-
-            feedbackEl.style.display = 'block';
-
-
-
-            feedbackEl.style.background = 'rgba(2, 132, 199, 0.15)';
-
-
-
-            feedbackEl.style.border = '1px solid rgba(56, 189, 248, 0.4)';
-
-
-
-            feedbackEl.style.color = '#38bdf8';
-
-
-
-            feedbackEl.innerText = `⏳ Transferindo ${codigosMarcados.length || ''} pacote(s) de ${_transferContext.motoristaOrigem} para ${motoristaDestino}... Aguarde...`;
+            feedbackEl.style.display = "block";
+            feedbackEl.style.background = "rgba(2, 132, 199, 0.15)";
+            feedbackEl.style.border = "1px solid rgba(56, 189, 248, 0.4)";
+            feedbackEl.style.color = "#38bdf8";
+            feedbackEl.innerText = isMesmoMotorista
+                ? `⏳ Relançando ${codigosMarcados.length || ""} pacote(s) para ${_transferContext.motoristaOrigem} no site... Aguarde...`
+                : `⏳ Transferindo ${codigosMarcados.length || ""} pacote(s) de ${_transferContext.motoristaOrigem} para ${motoristaDestino}... Aguarde...`;
 
 
 
@@ -28604,6 +28546,8 @@ async function abrirModalColetorMobile() {
 
     modalColetorMobile.style.display = 'flex';
 
+    carregarListaColetoresPC();
+
     if (linkColetorUrl) linkColetorUrl.innerText = "Carregando endereço na rede Wi-Fi...";
 
     try {
@@ -28662,6 +28606,83 @@ if (btnFecharModalColetor) {
 
     btnFecharModalColetor.addEventListener('click', fecharModalColetorMobile);
 
+}
+
+// ==============================================================================
+// GESTÃO DE COLETORES AUTORIZADOS E LIMITE DE LICENÇA (PC)
+// ==============================================================================
+const lblColetoresLicencaContagem = document.getElementById('lbl-coletores-licenca-contagem');
+const btnAtualizarColetoresPC = document.getElementById('btn-atualizar-coletores-pc');
+const containerListaColetores = document.getElementById('container-lista-coletores');
+
+async function carregarListaColetoresPC() {
+    if (!containerListaColetores) return;
+    try {
+        const res = await fetch(`${API_URL}/api/coletor/dispositivos?_=${Date.now()}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        
+        const maxC = data.max_coletores || 2;
+        const total = data.total_ativos || 0;
+        
+        if (lblColetoresLicencaContagem) {
+            const cor = total >= maxC ? '#f87171' : '#38bdf8';
+            lblColetoresLicencaContagem.innerHTML = `<span style="color: ${cor}; font-weight: 800;">${total}/${maxC} em uso</span>`;
+        }
+
+        const dispList = data.dispositivos || [];
+        if (dispList.length === 0) {
+            containerListaColetores.innerHTML = '<span style="color: #64748b; font-size: 0.74rem;">Nenhum aparelho conectado ainda.</span>';
+            return;
+        }
+
+        containerListaColetores.innerHTML = dispList.map(d => {
+            const dataHora = d.ultimo_acesso ? d.ultimo_acesso.replace('T', ' ').substring(0, 16) : '---';
+            const escapedId = (d.device_id || '').replace(/'/g, "\\'");
+            return `
+                <div style="background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 8px 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+                    <div style="display: flex; flex-direction: column; overflow: hidden; min-width: 0;">
+                        <span style="font-size: 0.8rem; font-weight: 700; color: #f8fafc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                            📱 ${d.nome_dispositivo || 'Coletor'}
+                        </span>
+                        <span style="font-size: 0.68rem; color: #94a3b8; font-family: monospace;">
+                            IP: ${d.ip || '---'} • Último: ${dataHora}
+                        </span>
+                    </div>
+                    <button type="button" onclick="desconectarColetorPC('${escapedId}')" style="background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.35); color: #f87171; font-size: 0.68rem; font-weight: 800; padding: 4px 8px; border-radius: 5px; cursor: pointer; white-space: nowrap;">
+                        ✕ Liberar Vaga
+                    </button>
+                </div>
+            `;
+        }).join('');
+    } catch (e) {
+        if (containerListaColetores) {
+            containerListaColetores.innerHTML = `<span style="color: #ef4444; font-size: 0.72rem;">Erro ao carregar lista: ${e.message}</span>`;
+        }
+    }
+}
+
+window.desconectarColetorPC = async function(deviceId) {
+    if (!confirm("Deseja realmente desconectar este aparelho e liberar a vaga para outro coletor?")) return;
+    try {
+        const res = await fetch(`${API_URL}/api/coletor/dispositivos/remover`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ device_id: deviceId })
+        });
+        if (res.ok) {
+            await carregarListaColetoresPC();
+        } else {
+            const d = await res.json().catch(() => ({}));
+            alert(d.mensagem || "Erro ao remover aparelho.");
+        }
+    } catch (e) {
+        alert("Falha de conexão ao remover aparelho: " + e.message);
+    }
+};
+
+if (btnAtualizarColetoresPC) {
+    btnAtualizarColetoresPC.addEventListener('click', carregarListaColetoresPC);
 }
 
 if (modalColetorMobile) {
